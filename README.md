@@ -16,8 +16,15 @@ A paper trading simulator that runs 24/7 on simulated market data.
 ## Run
 
 ```bash
-./dev.sh            # then open http://localhost:5173
+./server.sh on        # start backend + frontend in the background, then open http://localhost:5173
+./server.sh off       # stop both
+./server.sh restart   # stop, then start
+./server.sh status    # show what's running
+./server.sh logs      # follow the logs (Ctrl+C stops following, not the servers)
 ```
+
+The servers keep running after you close the terminal. Logs are in `.run/`.
+To run in the foreground with logs in the terminal instead, use `./dev.sh`.
 
 ## Test
 

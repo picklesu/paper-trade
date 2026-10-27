@@ -1,6 +1,8 @@
 import asyncio
 from datetime import UTC, datetime
 
+import pytest
+
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
@@ -56,3 +58,55 @@ def test_failed_tick_does_not_stop_the_loop(monkeypatch) -> None:
 
     asyncio.run(run())
     assert calls > 1
+
+
+def test_goto_forward_rewind_and_reset() -> None:
+    svc, _ = make_service()
+    q = svc.subscribe()
+
+    async def run() -> None:
+        action, target = await svc.goto(datetime(2026, 3, 2, 15, 0, tzinfo=UTC))
+        assert action == "forward"
+        assert svc.engine.time == target == svc.clock.now()
+        progress = [m for m in drain(q) if m["type"] == "progress"]
+        assert progress and progress[-1]["total"] == 40
+
+        action, _ = await svc.goto(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), new_future=True)
+        assert action == "rewind"
+        assert svc.engine.time == svc.clock.now()
+
+        action, target = await svc.goto(datetime(2025, 12, 1, 15, 0, tzinfo=UTC))
+        assert action == "reset"
+        assert svc.engine.origin == target
+
+    asyncio.run(run())
+
+
+def test_goto_snaps_to_market_hours() -> None:
+    svc, _ = make_service()
+    saturday = datetime(2026, 1, 10, 17, 0, tzinfo=UTC)
+    action, target = svc.preview_goto(saturday)
+    assert action == "forward"
+    assert target == datetime(2026, 1, 12, 14, 30, tzinfo=UTC)  # Monday 9:30 ET
+
+
+def test_goto_rejects_huge_jumps() -> None:
+    svc, _ = make_service()
+    with pytest.raises(ValueError):
+        asyncio.run(svc.goto(datetime(2040, 1, 2, 15, 0, tzinfo=UTC)))
+
+
+def test_no_ticks_while_jumping() -> None:
+    svc, real = make_service()
+    svc._jumping = True
+    q = svc.subscribe()
+    real.t = 5
+    svc.tick()
+    assert q.empty()
+
+
+def drain(q: asyncio.Queue) -> list[dict]:
+    out = []
+    while not q.empty():
+        out.append(q.get_nowait())
+    return out

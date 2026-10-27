@@ -18,6 +18,8 @@ export interface ClockState {
   speed: number
   paused: boolean
   speeds: number[]
+  /** Earliest market time with price history; going before it starts a new market. */
+  origin: string
 }
 
 export type Regime = 'calm' | 'normal' | 'volatile'
@@ -29,5 +31,14 @@ export interface TickMessage {
   quotes: Quote[]
 }
 
+/** Sent while fast-forwarding, every few sessions generated. */
+export interface ProgressMessage {
+  type: 'progress'
+  done: number
+  total: number
+}
+
 // Messages pushed by the backend. Later phases add fill and account types.
-export type StreamMessage = TickMessage
+export type StreamMessage = TickMessage | ProgressMessage
+
+export type GotoAction = 'forward' | 'rewind' | 'reset' | 'none'

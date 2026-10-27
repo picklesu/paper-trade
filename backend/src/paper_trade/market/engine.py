@@ -1,32 +1,57 @@
 """Synthetic price engine.
 
-Each symbol follows geometric Brownian motion driven by a shared market shock
-(so symbols move together, like a real market) plus its own noise. The market
-switches between calm, normal and volatile regimes. Everything is driven by a
-seeded RNG, so the same seed and the same sequence of time steps always give
-the same prices.
+Prices exist only during trading sessions (see `calendar`). Each session's
+path is generated in one go, second by second, from random draws seeded by
+(seed, date). That makes every moment reproducible: the engine can jump to any
+time, forward or back, and get exactly the same prices as if it had run there
+tick by tick.
+
+Model, per symbol: geometric Brownian motion driven by a shared market shock
+(so symbols move together) plus its own noise, scaled by a market regime
+(calm / normal / volatile) that switches minute by minute. Part of each day's
+variance arrives as an overnight gap at the open.
+
+Going back in time either replays the same future or starts a new one. A new
+future is a new "epoch": random draws after its start time come from a new
+seed, while everything before it is unchanged.
 """
 
 import math
-import random
+from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
+import numpy as np
+
+from paper_trade.market.calendar import (
+    SESSION_MINUTES,
+    SESSION_SECONDS,
+    market_day,
+    next_trading_day,
+    session_close,
+    session_open,
+    session_seconds,
+    snap,
+)
 from paper_trade.market.symbols import SYMBOLS, SymbolSpec
 
-# The market runs 24/7, so a year is every second of it.
-SECONDS_PER_YEAR = 365 * 24 * 3600
-SECONDS_PER_DAY = 24 * 3600
+TRADING_DAYS_PER_YEAR = 252
 
-# A "trading day" rolls over at midnight New York time.
-MARKET_TZ = ZoneInfo("America/New_York")
+# Share of a day's price variance that arrives as the overnight gap.
+GAP_SHARE = 0.2
 
-# (name, volatility multiplier, average sim-hours spent in the regime)
+# (name, volatility multiplier, average market-hours spent in the regime)
 REGIMES = (("calm", 0.6, 12.0), ("normal", 1.0, 24.0), ("volatile", 2.0, 4.0))
 
+VOLUME_NOISE = 0.5  # lognormal sigma of per-minute volume
+PATH_CACHE_DAYS = 4
 
-@dataclass
+_S = SESSION_SECONDS
+_M = SESSION_MINUTES
+
+
+@dataclass(frozen=True)
 class Quote:
     symbol: str
     name: str
@@ -38,14 +63,6 @@ class Quote:
     low: float
     prev_close: float
     volume: int
-
-    @property
-    def change(self) -> float:
-        return self.last - self.prev_close
-
-    @property
-    def change_pct(self) -> float:
-        return self.change / self.prev_close * 100
 
     def to_dict(self) -> dict:
         # Change is computed from the rounded prices so the numbers the UI
@@ -80,75 +97,210 @@ def bid_ask(price: float) -> tuple[float, float]:
     return bid, ask
 
 
+@dataclass
+class _DayStart:
+    prev_close: np.ndarray  # (N,) previous session's closing prices
+    regime: int  # regime at the end of the previous session
+
+
+@dataclass
+class _DayPath:
+    prices: np.ndarray  # (S+1, N): row s is the price s seconds after the open; row S is the close
+    high: np.ndarray  # (S+1, N) running max of prices
+    low: np.ndarray  # (S+1, N) running min of prices
+    minute_volume: np.ndarray  # (M, N)
+    volume: np.ndarray  # (M+1, N) cumulative volume at each minute boundary
+    regimes: np.ndarray  # (M,) regime index for each minute
+
+
 class MarketEngine:
-    def __init__(
-        self,
-        start: datetime,
-        seed: int = 42,
-        specs: tuple[SymbolSpec, ...] = SYMBOLS,
-    ) -> None:
-        self._rng = random.Random(seed)
-        self._specs = {s.symbol: s for s in specs}
-        self._time = start
-        self._day = start.astimezone(MARKET_TZ).date()
-        self.regime = "normal"
-        self.quotes: dict[str, Quote] = {}
-        for s in specs:
-            bid, ask = bid_ask(s.price)
-            self.quotes[s.symbol] = Quote(
-                symbol=s.symbol,
-                name=s.name,
-                last=s.price,
-                bid=bid,
-                ask=ask,
-                open=s.price,
-                high=s.price,
-                low=s.price,
-                prev_close=s.price,
-                volume=0,
-            )
+    def __init__(self, start: datetime, seed: int = 42, specs: tuple[SymbolSpec, ...] = SYMBOLS) -> None:
+        self.specs = specs
+        self._vol = np.array([s.vol for s in specs])
+        self._drift = np.array([s.drift for s in specs])
+        self._rho = np.array([s.market_corr for s in specs])
+        self._daily_volume = np.array([s.daily_volume for s in specs], dtype=float)
+        self._p_switch = [1 - math.exp(-1 / (hours * 60)) for _, _, hours in REGIMES]
+        self._mults = np.array([m for _, m, _ in REGIMES])
+        self._seed = seed
+        self._seeds_used = 0
+        self._reset(start, seed)
+
+    # ----- time travel -------------------------------------------------------
 
     @property
     def time(self) -> datetime:
         return self._time
 
-    def step(self, now: datetime) -> None:
-        """Advance every price from the engine's current time to `now`."""
-        dt = (now - self._time).total_seconds()
-        if dt <= 0:
-            return
-        self._time = now
+    def advance(self, t: datetime) -> None:
+        for _ in self.advance_iter(t):
+            pass
 
-        day = now.astimezone(MARKET_TZ).date()
-        if day != self._day:
-            self._day = day
-            self._roll_day()
+    def advance_iter(self, t: datetime) -> Iterator[date]:
+        """Move forward to `t`, yielding after each session is generated."""
+        t = snap(t)
+        if t < self._time:
+            raise ValueError("advance() only moves forward; use rewind()")
+        target_day = market_day(t)
+        last = max(self._starts)
+        while last < target_day:
+            path = self._path(last)
+            nxt = next_trading_day(last)
+            self._starts[nxt] = _DayStart(path.prices[-1].copy(), int(path.regimes[-1]))
+            last = nxt
+            yield last
+        self._time = t
 
-        self._maybe_switch_regime(dt)
-        vol_mult = next(m for name, m, _ in REGIMES if name == self.regime)
+    def rewind(self, t: datetime, new_future: bool) -> None:
+        """Go back to `t`. Prices up to `t` are unchanged; after it they either
+        replay exactly or, with `new_future`, are generated from a new seed."""
+        t = snap(t)
+        if not self.origin <= t <= self._time:
+            raise ValueError("rewind target must be between origin and now")
+        if new_future:
+            day = market_day(t)
+            first = self._epochs[0]
+            self._epochs = [first] + [e for e in self._epochs[1:] if e[0] < t]
+            self._epochs.append((t, self._new_seed()))
+            self._starts = {d: s for d, s in self._starts.items() if d <= day}
+            for d in [d for d in self._paths if d >= day]:
+                del self._paths[d]
+        self._time = t
 
-        dt_years = dt / SECONDS_PER_YEAR
-        market_shock = self._rng.gauss(0, 1)
-        for symbol, q in self.quotes.items():
-            s = self._specs[symbol]
-            rho = s.market_corr
-            z = rho * market_shock + math.sqrt(1 - rho * rho) * self._rng.gauss(0, 1)
-            sigma = s.vol * vol_mult
-            q.last *= math.exp((s.drift - sigma * sigma / 2) * dt_years + sigma * math.sqrt(dt_years) * z)
-            q.bid, q.ask = bid_ask(q.last)
-            q.high = max(q.high, q.last)
-            q.low = min(q.low, q.last)
-            expected_volume = s.daily_volume * dt / SECONDS_PER_DAY * vol_mult
-            q.volume += int(expected_volume * self._rng.lognormvariate(0, 0.5))
+    def reset(self, t: datetime) -> None:
+        """Start a brand-new market at `t`, with fresh prices and no history."""
+        self._reset(t, self._new_seed())
 
-    def _roll_day(self) -> None:
-        for q in self.quotes.values():
-            q.prev_close = q.open = q.high = q.low = q.last
-            q.volume = 0
+    # ----- current state -----------------------------------------------------
 
-    def _maybe_switch_regime(self, dt: float) -> None:
-        avg_hours = next(h for name, _, h in REGIMES if name == self.regime)
-        p_switch = 1 - math.exp(-dt / (avg_hours * 3600))
-        if self._rng.random() < p_switch:
-            others = [name for name, _, _ in REGIMES if name != self.regime]
-            self.regime = self._rng.choice(others)
+    @property
+    def quotes(self) -> dict[str, Quote]:
+        day = market_day(self._time)
+        path = self._path(day)
+        s = min(int(session_seconds(self._time)), _S - 1)
+        m, sec = divmod(s, 60)
+        volume = path.volume[m] + path.minute_volume[m] * sec / 60
+        prev_close = self._starts[day].prev_close
+        quotes = {}
+        for i, spec in enumerate(self.specs):
+            last = float(path.prices[s, i])
+            bid, ask = bid_ask(last)
+            quotes[spec.symbol] = Quote(
+                symbol=spec.symbol,
+                name=spec.name,
+                last=last,
+                bid=bid,
+                ask=ask,
+                open=float(path.prices[0, i]),
+                high=float(path.high[s, i]),
+                low=float(path.low[s, i]),
+                prev_close=float(prev_close[i]),
+                volume=int(volume[i]),
+            )
+        return quotes
+
+    @property
+    def regime(self) -> str:
+        path = self._path(market_day(self._time))
+        m = min(int(session_seconds(self._time)) // 60, _M - 1)
+        return REGIMES[path.regimes[m]][0]
+
+    # ----- internals ---------------------------------------------------------
+
+    def _reset(self, start: datetime, seed: int) -> None:
+        self.origin = snap(start)
+        self._time = self.origin
+        self._epochs: list[tuple[datetime, int]] = [(self.origin, seed)]
+        normal = next(i for i, (name, _, _) in enumerate(REGIMES) if name == "normal")
+        self._starts: dict[date, _DayStart] = {
+            market_day(self.origin): _DayStart(np.array([s.price for s in self.specs]), normal)
+        }
+        self._paths: OrderedDict[date, _DayPath] = OrderedDict()
+
+    def _new_seed(self) -> int:
+        self._seeds_used += 1
+        return (self._seed * 1_000_003 + self._seeds_used) % 2**63
+
+    def _random(self, seed: int, day: date) -> tuple[np.ndarray, ...]:
+        n = len(self.specs)
+        rng = np.random.default_rng([seed, day.toordinal()])
+        z_market = rng.standard_normal(_S + 1)
+        z_own = rng.standard_normal((_S + 1, n))
+        u = rng.random((_M, 2))
+        volume_noise = rng.lognormal(0.0, VOLUME_NOISE, (_M, n))
+        return z_market, z_own, u, volume_noise
+
+    def _draws(self, day: date) -> tuple[np.ndarray, ...]:
+        """The day's random draws, honoring any epochs that start during it.
+
+        Row s of the shocks is the move that ends s seconds after the open (row 0
+        is the overnight gap). A new epoch starting at second c replaces rows
+        after c, and minutes that start at or after c.
+        """
+        open_, close = session_open(day), session_close(day)
+        before = [e for e in self._epochs if e[0] < open_]
+        base = before[-1] if before else self._epochs[0]
+        z_market, z_own, u, volume_noise = self._random(base[1], day)
+        for epoch in self._epochs:
+            start, seed = epoch
+            if epoch is base or not open_ <= start < close:
+                continue
+            cut = session_seconds(start)
+            row = math.floor(cut) + 1
+            minute = math.ceil(cut / 60)
+            new = self._random(seed, day)
+            z_market[row:] = new[0][row:]
+            z_own[row:] = new[1][row:]
+            u[minute:] = new[2][minute:]
+            volume_noise[minute:] = new[3][minute:]
+        return z_market, z_own, u, volume_noise
+
+    def _path(self, day: date) -> _DayPath:
+        if day in self._paths:
+            self._paths.move_to_end(day)
+            return self._paths[day]
+
+        start = self._starts[day]
+        z_market, z_own, u, volume_noise = self._draws(day)
+
+        regimes = np.empty(_M, dtype=np.int8)
+        r = start.regime
+        for m in range(_M):
+            if u[m, 0] < self._p_switch[r]:
+                others = [i for i in range(len(REGIMES)) if i != r]
+                r = others[int(u[m, 1] * len(others))]
+            regimes[m] = r
+        mult = self._mults[regimes]
+
+        # Split each day's variance between the overnight gap and the session.
+        day_var = self._vol**2 / TRADING_DAYS_PER_YEAR
+        sd = np.empty((_S + 1, len(self.specs)))
+        sd[0] = np.sqrt(day_var * GAP_SHARE) * self._mults[start.regime]
+        sd[1:] = np.sqrt(day_var * (1 - GAP_SHARE) / _S) * np.repeat(mult, 60)[:, None]
+
+        z = self._rho * z_market[:, None] + np.sqrt(1 - self._rho**2) * z_own
+        log_returns = z * sd - 0.5 * sd**2
+        log_returns[1:] += self._drift / (TRADING_DAYS_PER_YEAR * _S)
+        prices = start.prev_close * np.exp(np.cumsum(log_returns, axis=0))
+
+        # U-shaped intraday volume: busiest at the open and the close.
+        x = (np.arange(_M) + 0.5) / _M
+        shape = 1 + 2 * (2 * x - 1) ** 2
+        shape /= shape.mean()
+        noise = volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
+        minute_volume = np.floor(self._daily_volume / _M * shape[:, None] * mult[:, None] * noise)
+        volume = np.zeros((_M + 1, len(self.specs)))
+        volume[1:] = np.cumsum(minute_volume, axis=0)
+
+        path = _DayPath(
+            prices=prices,
+            high=np.maximum.accumulate(prices, axis=0),
+            low=np.minimum.accumulate(prices, axis=0),
+            minute_volume=minute_volume,
+            volume=volume,
+            regimes=regimes,
+        )
+        self._paths[day] = path
+        if len(self._paths) > PATH_CACHE_DAYS:
+            self._paths.popitem(last=False)
+        return path

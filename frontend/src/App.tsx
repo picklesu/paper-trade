@@ -7,14 +7,14 @@ import { Watchlist } from './components/Watchlist'
 import { useStream } from './lib/stream'
 
 export default function App() {
-  const { status, tick } = useStream()
+  const { status, tick, progress } = useStream()
   const [selected, setSelected] = useState('SPY')
   const quotes = tick?.quotes ?? []
   const quote = quotes.find((q) => q.symbol === selected)
 
   return (
     <div className="app">
-      <TopBar status={status} clock={tick?.clock ?? null} regime={tick?.regime ?? null} />
+      <TopBar status={status} clock={tick?.clock ?? null} regime={tick?.regime ?? null} progress={progress} />
       <main className="workspace">
         <Panel title="Watchlist" className="watchlist">
           {quotes.length ? (

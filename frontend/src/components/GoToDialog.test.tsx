@@ -1,0 +1,117 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ClockState } from '../lib/types'
+import { GoToDialog } from './GoToDialog'
+
+const clock: ClockState = {
+  time: '2026-01-07T15:30:00Z', // Wed 10:30 ET
+  speed: 1,
+  paused: false,
+  speeds: [1, 10, 60, 600],
+  origin: '2026-01-05T14:30:00Z',
+}
+
+/** fetch stub: GET preview returns `action`; POST goto succeeds. */
+function mockFetch(action: string, target = '2026-01-06T15:30:00Z') {
+  const fn = vi.fn(async (_url: string, init?: RequestInit) => ({
+    ok: true,
+    json: async () => (init?.method === 'POST' ? { action, target, clock } : { action, target }),
+  }))
+  vi.stubGlobal('fetch', fn)
+  return fn
+}
+
+function postedBody(fetchMock: ReturnType<typeof mockFetch>) {
+  const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+  return call ? JSON.parse(call[1]!.body as string) : null
+}
+
+describe('GoToDialog', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('starts at the current market time in New York', () => {
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    expect(screen.getByLabelText('Market date and time')).toHaveValue('2026-01-07T10:30')
+  })
+
+  it('shortcuts shift the date', () => {
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '+1 week' }))
+    expect(screen.getByLabelText('Market date and time')).toHaveValue('2026-01-14T10:30')
+  })
+
+  it('goes forward without asking', async () => {
+    const fetchMock = mockFetch('forward', '2026-01-14T15:30:00Z')
+    const onClose = vi.fn()
+    render(<GoToDialog clock={clock} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: '+1 week' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(postedBody(fetchMock)).toEqual({ time: '2026-01-14T10:30', future: 'replay' })
+  })
+
+  it('going back asks to replay or generate a new future', async () => {
+    const fetchMock = mockFetch('rewind')
+    const onClose = vi.fn()
+    render(<GoToDialog clock={clock} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: '−1 day' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+
+    expect(await screen.findByText(/Go back to Tue, Jan 6, 2026, 10:30 AM ET/)).toBeInTheDocument()
+    expect(screen.getByText(/will be erased, and their money refunded/)).toBeInTheDocument()
+    expect(postedBody(fetchMock)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate a new future' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(postedBody(fetchMock)).toEqual({ time: '2026-01-06T10:30', future: 'new' })
+  })
+
+  it('replay sends future=replay', async () => {
+    const fetchMock = mockFetch('rewind')
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Replay the same prices' }))
+    await waitFor(() => expect(postedBody(fetchMock)).toEqual({ time: '2026-01-07T10:30', future: 'replay' }))
+  })
+
+  it('before the market history warns about starting over', async () => {
+    const fetchMock = mockFetch('reset', '2025-06-02T13:30:00Z')
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.change(screen.getByLabelText('Market date and time'), { target: { value: '2025-06-02T09:30' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+
+    expect(await screen.findByText(/Start a new market on/)).toBeInTheDocument()
+    expect(screen.getByText(/all price history and trades are erased/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start new market' }))
+    await waitFor(() => expect(postedBody(fetchMock)).toEqual({ time: '2025-06-02T09:30', future: 'replay' }))
+  })
+
+  it('cancel closes without jumping', async () => {
+    const fetchMock = mockFetch('rewind')
+    const onClose = vi.fn()
+    render(<GoToDialog clock={clock} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    await screen.findByText(/Go back to/)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onClose).toHaveBeenCalled()
+    expect(postedBody(fetchMock)).toBeNull()
+  })
+
+  it('shows server errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) =>
+        init?.method === 'POST'
+          ? { ok: false, status: 422, json: async () => ({ detail: 'can jump at most 1260 trading days ahead' }) }
+          : { ok: true, json: async () => ({ action: 'forward', target: '2040-01-02T14:30:00Z' }) },
+      ),
+    )
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('at most 1260 trading days')
+  })
+})

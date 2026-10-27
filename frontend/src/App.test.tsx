@@ -37,7 +37,7 @@ function quote(symbol: string, last: number, prev_close: number): Quote {
 function tick(overrides: Partial<TickMessage> = {}): TickMessage {
   return {
     type: 'tick',
-    clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600] },
+    clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z' },
     regime: 'normal',
     quotes: [quote('SPY', 582, 580), quote('AAPL', 228, 230)],
     ...overrides,
@@ -113,8 +113,24 @@ describe('App', () => {
 
   it('shows the resume button while paused', () => {
     render(<App />)
-    push(tick({ clock: { time: '2026-01-05T15:30:00Z', speed: 10, paused: true, speeds: [1, 10, 60, 600] } }))
+    push(tick({ clock: { time: '2026-01-05T15:30:00Z', speed: 10, paused: true, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z' } }))
     expect(screen.getByRole('button', { name: 'Resume market' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '10×' })).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+describe('fast-forward progress', () => {
+  it('shows progress and disables controls until the next tick', () => {
+    render(<App />)
+    push(tick())
+    act(() => {
+      FakeWebSocket.last!.onmessage?.({ data: JSON.stringify({ type: 'progress', done: 10, total: 40 }) })
+    })
+    expect(screen.getByRole('progressbar')).toHaveTextContent('25%')
+    expect(screen.getByRole('button', { name: '60×' })).toBeDisabled()
+
+    push(tick())
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '60×' })).toBeEnabled()
   })
 })

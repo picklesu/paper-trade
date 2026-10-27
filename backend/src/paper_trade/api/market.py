@@ -1,8 +1,12 @@
+from datetime import datetime
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.market.clock import SPEEDS
-from paper_trade.market.service import MarketService
+from paper_trade.market.service import BusyError, MarketService
 
 router = APIRouter()
 
@@ -44,3 +48,37 @@ async def update_clock(update: ClockUpdate, request: Request) -> dict:
     # Push the new clock state right away instead of waiting for the next tick.
     svc.publish(svc.snapshot())
     return svc.clock_state()
+
+
+def parse_market_time(value: str) -> datetime:
+    """ISO date/time; without a UTC offset it is New York wall-clock time."""
+    try:
+        t = datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(422, f"not an ISO date/time: {value!r}") from None
+    return t if t.tzinfo else t.replace(tzinfo=MARKET_TZ)
+
+
+@router.get("/clock/goto")
+async def preview_goto(time: str, request: Request) -> dict:
+    """What going to `time` would do, so the UI can confirm first."""
+    action, target = market(request).preview_goto(parse_market_time(time))
+    return {"action": action, "target": target.isoformat()}
+
+
+class Goto(BaseModel):
+    time: str
+    # Only used when going back: replay the same prices or generate a new future.
+    future: Literal["replay", "new"] = "replay"
+
+
+@router.post("/clock/goto")
+async def goto(body: Goto, request: Request) -> dict:
+    svc = market(request)
+    try:
+        action, target = await svc.goto(parse_market_time(body.time), new_future=body.future == "new")
+    except BusyError:
+        raise HTTPException(409, "a time jump is already in progress") from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"action": action, "target": target.isoformat(), "clock": svc.clock_state()}

@@ -43,3 +43,30 @@ export function marketDate(iso: string): string {
 export function marketTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-US', { timeZone: MARKET_TZ, hour12: false })
 }
+
+export function marketDateTime(iso: string): string {
+  const d = new Date(iso)
+  const day = d.toLocaleDateString('en-US', {
+    timeZone: MARKET_TZ,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  const time = d.toLocaleTimeString('en-US', { timeZone: MARKET_TZ, hour: 'numeric', minute: '2-digit' })
+  return `${day}, ${time} ET`
+}
+
+/** "YYYY-MM-DDTHH:mm" in New York time, the format of <input type="datetime-local">. */
+export function toMarketInput(iso: string): string {
+  // The sv-SE locale formats as "YYYY-MM-DD HH:mm:ss".
+  return new Date(iso).toLocaleString('sv-SE', { timeZone: MARKET_TZ }).replace(' ', 'T').slice(0, 16)
+}
+
+/** Shift a "YYYY-MM-DDTHH:mm" wall-clock value by whole days, keeping the time of day. */
+export function shiftInputDays(value: string, days: number): string {
+  const [datePart, timePart] = value.split('T')
+  const [y, m, d] = datePart.split('-').map(Number)
+  const shifted = new Date(Date.UTC(y, m - 1, d + days))
+  return `${shifted.toISOString().slice(0, 10)}T${timePart}`
+}

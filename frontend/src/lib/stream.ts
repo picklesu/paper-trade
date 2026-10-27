@@ -1,15 +1,7 @@
 import { useEffect, useState } from 'react'
+import type { StreamMessage, TickMessage } from './types'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
-
-export interface Heartbeat {
-  type: 'heartbeat'
-  seq: number
-  server_time: string
-}
-
-// Messages pushed by the backend. Later phases add quote, fill and account types.
-export type StreamMessage = Heartbeat
 
 const RECONNECT_MS = 2000
 
@@ -21,7 +13,7 @@ function streamUrl(): string {
 /** Single WebSocket to the backend, reconnecting automatically when it drops. */
 export function useStream() {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
-  const [heartbeat, setHeartbeat] = useState<Heartbeat | null>(null)
+  const [tick, setTick] = useState<TickMessage | null>(null)
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -34,7 +26,7 @@ export function useStream() {
       ws.onopen = () => setStatus('connected')
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data) as StreamMessage
-        if (msg.type === 'heartbeat') setHeartbeat(msg)
+        if (msg.type === 'tick') setTick(msg)
       }
       ws.onclose = () => {
         if (closed) return
@@ -51,5 +43,5 @@ export function useStream() {
     }
   }, [])
 
-  return { status, heartbeat }
+  return { status, tick }
 }

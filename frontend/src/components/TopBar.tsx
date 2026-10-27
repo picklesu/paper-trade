@@ -1,8 +1,11 @@
-import type { ConnectionStatus, Heartbeat } from '../lib/stream'
+import type { ConnectionStatus } from '../lib/stream'
+import type { ClockState, Regime } from '../lib/types'
+import { ClockControls } from './ClockControls'
 
 interface Props {
   status: ConnectionStatus
-  heartbeat: Heartbeat | null
+  clock: ClockState | null
+  regime: Regime | null
 }
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -11,9 +14,7 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
   disconnected: 'Disconnected',
 }
 
-export function TopBar({ status, heartbeat }: Props) {
-  const time = heartbeat ? new Date(heartbeat.server_time).toLocaleTimeString() : '--:--:--'
-
+export function TopBar({ status, clock, regime }: Props) {
   return (
     <header className="topbar">
       <div className="brand">Paper Trade</div>
@@ -22,7 +23,7 @@ export function TopBar({ status, heartbeat }: Props) {
         <Stat label="Buying Power" value="—" />
         <Stat label="Day P&L" value="—" />
       </div>
-      <div className="clock" title="Server time">{time}</div>
+      <ClockControls clock={clock} regime={regime} />
       <div className={`conn conn-${status}`} role="status">
         <span className="dot" />
         {STATUS_LABEL[status]}

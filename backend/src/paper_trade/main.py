@@ -1,12 +1,27 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from paper_trade import __version__
-from paper_trade.api import health, stream
+from paper_trade.api import health, market, stream
+from paper_trade.market.clock import SimClock
+from paper_trade.market.engine import MarketEngine
+from paper_trade.market.service import MarketService
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Paper Trade", version=__version__)
+def create_app(seed: int = 42) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        clock = SimClock()
+        svc = MarketService(clock, MarketEngine(start=clock.now(), seed=seed))
+        app.state.market = svc
+        svc.start()
+        yield
+        await svc.stop()
+
+    app = FastAPI(title="Paper Trade", version=__version__, lifespan=lifespan)
 
     # The Vite dev server proxies /api and /ws, but allow direct access too.
     app.add_middleware(
@@ -17,6 +32,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router, prefix="/api")
+    app.include_router(market.router, prefix="/api")
     app.include_router(stream.router)
     return app
 

@@ -43,14 +43,52 @@ Decided by the user (2026-10-27): **real session hours, without waiting for them
     candlestick charts (Phase 4) have history for the skipped period. Show progress for long
     jumps.
   - A target outside session hours snaps to the next 9:30 AM open.
-  - **Backward (proposal, confirm with the user):** not allowed as a plain jump. Positions and
-    fills can't be un-done. Instead, "Reset account" (2b) lets the user pick a start date and
-    starts a fresh market and account from there. Before 2b exists, going backward can simply
-    restart the market at the chosen date.
+  - **Backward (rewind), decided by the user:** see "Going back in time" below. Phase 2a
+    builds the market side (price history, restoring prices, replay vs new future). Phase 2b
+    adds the account side (erasing later trades).
 - Top bar shows market status: Open (normal session), plus the market date and time.
 - Proposal: ignore exchange holidays for now (weekends only). NYSE holidays can come later.
 - Tests: session boundaries (Friday 4:00 PM jumps to Monday 9:30 AM), gap applied once per open,
   snapping, forward jump equivalent to stepping, realized volatility per trading day.
+
+### Going back in time (decided by the user, 2026-10-27)
+
+Picking a date/time earlier than the current sim time:
+
+1. **Confirmation dialog first.** It lists the trades made after that date that will be erased,
+   says their money will be refunded, and shows how held positions will be repriced. The user
+   must confirm.
+2. **The account is restored to its state at that date**, as if later trades never happened.
+   Erased buys refund their cash. Erased sells give the shares back and remove the sale proceeds.
+   Realized P&L after the date reverses. Orders placed after the date are erased. Orders that
+   were working at the date (including ones that filled later) go back to working.
+3. **Positions held at that date get normal P&L adjustments:** they are valued at the market
+   prices recorded at that date. Day stats (open, high, low, volume) are rebuilt from that
+   day's history up to that time.
+4. **The user chooses what happens next, each time (in the same dialog):**
+   - **Replay the same prices:** the market repeats exactly what happened before (practice a
+     scenario again).
+   - **New future:** prices from that date on are freshly generated (no hindsight).
+   Either way, the old history after that date is discarded and rebuilt as time moves forward.
+5. **Earlier than the market's history** (before it started or was last reset): warn that **all**
+   trades will be erased and cash reset to the starting amount, then start a brand-new market at
+   that date. Any date works.
+
+Implementation notes (suggestions, not decided):
+
+- Exact replay needs reproducible prices. Today the path depends on step sizes, which depend on
+  real-time tick timing. Suggested design: a **counter-based RNG**, where each sim-minute's random
+  shocks come from `hash(seed, minute_index)` (plus the regime switch for that minute). Moves
+  within a minute come from a bridge seeded the same way. Any minute is then reproducible
+  without storing RNG state, and fast-forward can step a minute at a time.
+- Keep a list of seed epochs `[(from_time, seed)]`. "New future" appends a new epoch at the
+  rewind time; "replay" keeps the existing one.
+- Store per-minute bars (OHLCV for each symbol, plus regime). They give the price at any past
+  time for rewinds, and the history for Phase 4 charts. In Phase 2a they can live in memory;
+  Phase 2b moves them into SQLite.
+- Account rewind is simplest if the account is **rebuilt from a time-stamped list of all fills
+  and cash events** (an event log): drop events after the date and recompute. Design the 2b
+  schema that way from the start.
 
 ### Phase 2b: persistence, account and orders
 
@@ -79,6 +117,8 @@ Scope (agreed except the bullets marked **Proposal**):
   new message types (`StreamMessage` in `frontend/src/lib/types.ts` is a union for this).
 - **Proposal:** a "Reset account" action (cash back to the starting amount, positions and
   orders cleared, optional start date), since saved state otherwise never resets.
+- Going back in time erases later trades (see above). Store fills and cash movements as a
+  time-stamped event log so the account can be rebuilt as of any date.
 - Phase 3 (order preview: estimated cost, buying-power impact, order history) builds on this.
 
 ## Architecture

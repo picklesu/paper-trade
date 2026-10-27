@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-27, after Phase 1 and the server script were merged._
+_Last updated: 2026-10-27, after Phase 1 and the server script were merged; Phase 2 decisions recorded._
 
 ## Where things stand
 
@@ -9,21 +9,27 @@ _Last updated: 2026-10-27, after Phase 1 and the server script were merged._
 | 0. Skeleton | Merged (committed directly to `main`) | — |
 | 1. Market engine + live watchlist | Merged, tested by the user on their Mac | #1 |
 | `server.sh` on/off script | Merged | #2 |
-| **2. Account and orders** | **Next. Not started. One open question (below).** | — |
+| **2. Account and orders** | **Next. Not started. Decisions made (below); ready to build.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-1. **Ask the user the open question before building Phase 2:** should the account and its
-   trades be **saved across restarts** (SQLite in `backend/`) or **reset on every restart**?
-   (This was asked at the end of the last session, and the user hadn't answered yet.)
-   Persisting the account probably also means persisting the market state (prices and clock),
-   or positions will be valued against prices that reset to their starting values. Raise that
-   with the user.
-2. Then build Phase 2 on branch `phase-2-orders`, following the workflow in `CLAUDE.md`.
+Build Phase 2 on branch `phase-2-orders`, following the workflow in `CLAUDE.md`.
 
-### Phase 2 proposed scope (not yet agreed with the user)
+### Phase 2 decisions (from the user, 2026-10-27)
+
+- **Save across restarts.** The account, orders, fills and positions persist (SQLite file in
+  `backend/`, git-ignored). Market state must persist too: each symbol's prices and session
+  stats, the regime, the sim clock, and the random generator's state. Otherwise positions
+  would be valued against prices that reset on every restart. On restart, resume from the
+  saved sim time; don't count the time the server was off.
+- **Cash account only.** No margin and no short selling. Buying power = cash minus cash
+  reserved by working buy orders. Reject a sell for more shares than are held.
+
+### Phase 2 scope
+
+Everything below is agreed except the two "decisions" bullets, which are proposals.
 
 - Account: starting cash (e.g. $100,000), cash, buying power, net liquidation value, day P&L
   shown in the top bar (the placeholders already exist in `TopBar.tsx`).
@@ -34,8 +40,9 @@ _Last updated: 2026-10-27, after Phase 1 and the server script were merged._
 - UI: the order ticket in the right panel, and the Positions / Orders / Activity bottom tabs
   (placeholders exist in `BottomTabs.tsx`). Fills are pushed over the existing WebSocket as
   new message types (`StreamMessage` in `frontend/src/lib/types.ts` is a union for this).
-- Decide with the user: cash account only, or allow margin and short selling? Simplest
-  default: a cash account with no shorting, and margin later.
+- Proposal: add a "Reset account" action (cash back to the starting amount, positions and
+  orders cleared), since saved state otherwise never resets.
+- Proposal: Sim-day boundary: "day" orders expire at the midnight ET day rollover.
 - Phase 3 (order preview: estimated cost, buying-power impact, order history) builds on this.
 
 ## Architecture
@@ -76,8 +83,8 @@ _Last updated: 2026-10-27, after Phase 1 and the server script were merged._
 
 ## Known limitations / backlog
 
-- Restarting the backend resets the market to its starting prices (relevant to the Phase 2
-  persistence question).
+- Restarting the backend resets the market to its starting prices. Phase 2 fixes this by
+  persisting the market state.
 - `snapshot()` reports `clock.now()`, while the quotes reflect `engine.time`. These can differ
   by up to one tick; harmless for now.
 - `dev.sh` (foreground) still exists alongside `server.sh` (background). Keep it or remove it.

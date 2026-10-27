@@ -18,7 +18,9 @@ const SHORTCUTS = [
 
 /** Pick a market date/time, then confirm what going there will do. */
 export function GoToDialog({ clock, onClose }: Props) {
-  const [value, setValue] = useState(() => toMarketInput(clock.time))
+  // The input has minute precision, so the starting value is slightly in the past.
+  const [initial] = useState(() => toMarketInput(clock.time))
+  const [value, setValue] = useState(initial)
   const [preview, setPreview] = useState<GotoResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -36,6 +38,12 @@ export function GoToDialog({ clock, onClose }: Props) {
   }
 
   const check = async () => {
+    // Unchanged means "stay here", not "go back to the start of this minute".
+    if (value === initial) {
+      onClose()
+      return
+    }
+    setBusy(true)
     setError(null)
     try {
       const result = await previewGoto(value)
@@ -45,9 +53,11 @@ export function GoToDialog({ clock, onClose }: Props) {
         await run()
       } else {
         setPreview(result)
+        setBusy(false)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      setBusy(false)
     }
   }
 

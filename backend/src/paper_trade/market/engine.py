@@ -105,7 +105,7 @@ class _DayStart:
 
 @dataclass
 class _DayPath:
-    prices: np.ndarray  # (S+1, N): row s is the price s seconds after the open; row S is the close
+    prices: np.ndarray  # (S+1, N): row s is the price s seconds after the open (row S is unused)
     high: np.ndarray  # (S+1, N) running max of prices
     low: np.ndarray  # (S+1, N) running min of prices
     minute_volume: np.ndarray  # (M, N)
@@ -132,6 +132,11 @@ class MarketEngine:
     def time(self) -> datetime:
         return self._time
 
+    @property
+    def generated_through(self) -> date:
+        """The latest session whose starting state is known."""
+        return max(self._starts)
+
     def advance(self, t: datetime) -> None:
         for _ in self.advance_iter(t):
             pass
@@ -142,11 +147,12 @@ class MarketEngine:
         if t < self._time:
             raise ValueError("advance() only moves forward; use rewind()")
         target_day = market_day(t)
-        last = max(self._starts)
+        last = self.generated_through
         while last < target_day:
             path = self._path(last)
             nxt = next_trading_day(last)
-            self._starts[nxt] = _DayStart(path.prices[-1].copy(), int(path.regimes[-1]))
+            # The close is the last price shown in the session (one second before 4:00).
+            self._starts[nxt] = _DayStart(path.prices[_S - 1].copy(), int(path.regimes[-1]))
             last = nxt
             yield last
         self._time = t
@@ -201,9 +207,11 @@ class MarketEngine:
 
     @property
     def regime(self) -> str:
-        path = self._path(market_day(self._time))
-        m = min(int(session_seconds(self._time)) // 60, _M - 1)
-        return REGIMES[path.regimes[m]][0]
+        """The regime that drove the latest price move (the gap's at the open)."""
+        day = market_day(self._time)
+        s = min(int(session_seconds(self._time)), _S - 1)
+        r = self._starts[day].regime if s == 0 else self._path(day).regimes[(s - 1) // 60]
+        return REGIMES[r][0]
 
     # ----- internals ---------------------------------------------------------
 

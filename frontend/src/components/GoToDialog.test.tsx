@@ -72,9 +72,10 @@ describe('GoToDialog', () => {
   it('replay sends future=replay', async () => {
     const fetchMock = mockFetch('rewind')
     render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '−1 day' }))
     fireEvent.click(screen.getByRole('button', { name: 'Go' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Replay the same prices' }))
-    await waitFor(() => expect(postedBody(fetchMock)).toEqual({ time: '2026-01-07T10:30', future: 'replay' }))
+    await waitFor(() => expect(postedBody(fetchMock)).toEqual({ time: '2026-01-06T10:30', future: 'replay' }))
   })
 
   it('before the market history warns about starting over', async () => {
@@ -90,10 +91,31 @@ describe('GoToDialog', () => {
     await waitFor(() => expect(postedBody(fetchMock)).toEqual({ time: '2025-06-02T09:30', future: 'replay' }))
   })
 
+  it('Go with the time unchanged just closes', () => {
+    const fetchMock = mockFetch('rewind')
+    const onClose = vi.fn()
+    render(<GoToDialog clock={clock} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    expect(onClose).toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('disables Go while checking, so a double click jumps once', async () => {
+    const fetchMock = mockFetch('forward', '2026-01-14T15:30:00Z')
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '+1 week' }))
+    const go = screen.getByRole('button', { name: 'Go' })
+    fireEvent.click(go)
+    fireEvent.click(go)
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, i]) => i?.method === 'POST')).toHaveLength(1))
+    expect(fetchMock.mock.calls.filter(([, i]) => i?.method !== 'POST')).toHaveLength(1)
+  })
+
   it('cancel closes without jumping', async () => {
     const fetchMock = mockFetch('rewind')
     const onClose = vi.fn()
     render(<GoToDialog clock={clock} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: '−1 day' }))
     fireEvent.click(screen.getByRole('button', { name: 'Go' }))
     await screen.findByText(/Go back to/)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -111,6 +133,7 @@ describe('GoToDialog', () => {
       ),
     )
     render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.change(screen.getByLabelText('Market date and time'), { target: { value: '2040-01-02T09:30' } })
     fireEvent.click(screen.getByRole('button', { name: 'Go' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('at most 1260 trading days')
   })

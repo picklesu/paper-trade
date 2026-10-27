@@ -41,6 +41,7 @@ describe('market time inputs', () => {
   it('shifts by whole days across month ends', () => {
     expect(shiftInputDays('2026-01-30T10:30', 7)).toBe('2026-02-06T10:30')
     expect(shiftInputDays('2026-03-01T09:45', -1)).toBe('2026-02-28T09:45')
+    expect(shiftInputDays('', 1)).toBe('')
   })
 
   it('formats a readable market date and time', () => {

@@ -16,7 +16,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
   - **Forward** fast-forwards the market through the skipped sessions.
   - **Back** asks whether to **replay the same prices** or **generate a new future** from that point. Prices are reproducible, so a replay is exact.
   - **Before the market's history** starts a brand-new market on that date.
-- Restarting the backend restarts the market at the next real-world open. (Saving state comes in Phase 2b.)
+- Restarting the backend restarts the market at the current real-world time, or the next open if the real market is closed. (Saving state comes in Phase 2b.)
 
 ## Run
 

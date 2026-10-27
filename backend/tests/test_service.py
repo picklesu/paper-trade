@@ -110,3 +110,29 @@ def drain(q: asyncio.Queue) -> list[dict]:
     while not q.empty():
         out.append(q.get_nowait())
     return out
+
+
+def test_final_snapshot_survives_a_full_queue() -> None:
+    svc, _ = make_service()
+    svc.clock.pause()
+    q = svc.subscribe()
+    asyncio.run(svc.goto(datetime(2026, 6, 1, 15, 0, tzinfo=UTC)))  # many progress messages
+    assert q.full()
+    last = drain(q)[-1]
+    assert last["type"] == "tick"
+    assert last["clock"]["time"].startswith("2026-06-01")
+
+
+def test_progress_counts_only_sessions_left_to_generate() -> None:
+    svc, _ = make_service()
+    q = svc.subscribe()
+
+    async def run() -> None:
+        await svc.goto(datetime(2026, 3, 2, 15, 0, tzinfo=UTC))
+        await svc.goto(datetime(2026, 2, 2, 15, 0, tzinfo=UTC))  # replay rewind
+        drain(q)
+        await svc.goto(datetime(2026, 4, 1, 15, 0, tzinfo=UTC))
+
+    asyncio.run(run())
+    progress = [m for m in drain(q) if m["type"] == "progress"]
+    assert progress[-1]["total"] == 22  # Mar 2 -> Apr 1, not Feb 2 -> Apr 1

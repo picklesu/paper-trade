@@ -77,8 +77,8 @@ def test_new_session_rolls_daily_stats_and_gaps() -> None:
     engine.advance(et(2026, 1, 12, 9, 30))  # Monday open
     monday = engine.quotes
     for symbol, q in monday.items():
-        # prev_close is Friday's 4:00 close: one second after the last quote we saw.
-        assert q.prev_close == pytest.approx(friday[symbol].last, rel=0.01)
+        # prev_close is exactly the last price shown on Friday.
+        assert q.prev_close == friday[symbol].last
         assert q.open == q.last == q.high == q.low
         assert q.volume == 0
     # The open gaps away from the close.
@@ -206,3 +206,21 @@ def test_session_close_is_not_a_market_time() -> None:
 def test_quotes_at_last_second_of_session() -> None:
     engine = at(session_close(date(2026, 1, 5)) - timedelta(milliseconds=1))
     assert all(q.last > 0 for q in engine.quotes.values())
+
+
+def test_new_future_at_minute_boundary_keeps_regime_and_prices(monkeypatch) -> None:
+    # Regimes that switch about every minute, so a replaced draw would show.
+    monkeypatch.setattr(engine_mod, "REGIMES", (("calm", 0.6, 0.01), ("normal", 1.0, 0.01), ("volatile", 2.0, 0.01)))
+    t = et(2026, 1, 6, 10, 30)  # whole minute, as the date picker sends
+    for seed in range(20):
+        engine = at(et(2026, 1, 6, 14, 0), seed=seed)
+        engine.rewind(t, new_future=True)
+        before = at(t, seed=seed)
+        assert prices(engine) == prices(before)
+        assert engine.regime == before.regime
+
+
+def test_generated_through_tracks_furthest_session() -> None:
+    engine = at(et(2026, 1, 9, 10, 0))
+    engine.rewind(et(2026, 1, 6, 10, 0), new_future=False)
+    assert engine.generated_through == date(2026, 1, 9)

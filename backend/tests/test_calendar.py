@@ -70,3 +70,25 @@ def test_trading_days_between() -> None:
     assert trading_days_between(date(2026, 1, 9), date(2026, 1, 12)) == 1
     assert trading_days_between(date(2026, 1, 5), date(2026, 1, 16)) == 9
     assert trading_days_between(date(2026, 1, 5), date(2026, 1, 5)) == 0
+
+
+def test_next_trading_day_from_weekend() -> None:
+    assert next_trading_day(date(2026, 1, 10)) == date(2026, 1, 12)  # Saturday -> Monday
+
+
+def test_add_trading_seconds_far_ahead_is_exact_and_fast() -> None:
+    import time
+
+    began = time.perf_counter()
+    t = add_trading_seconds(et(2026, 1, 6, 10, 0), 252 * 50 * SESSION_SECONDS)
+    assert time.perf_counter() - began < 0.01
+    assert t.astimezone(MARKET_TZ).time().isoformat() == "10:00:00"
+    assert t.weekday() < 5
+
+
+def test_trading_days_between_far_apart_is_fast() -> None:
+    import time
+
+    began = time.perf_counter()
+    assert trading_days_between(date(2026, 1, 2), date(2126, 1, 2)) > 25_000
+    assert time.perf_counter() - began < 0.01

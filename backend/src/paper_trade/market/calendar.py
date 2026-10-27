@@ -8,22 +8,28 @@ Exchange holidays are not modeled yet.
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+import numpy as np
+
 MARKET_TZ = ZoneInfo("America/New_York")
 OPEN = time(9, 30)
 CLOSE = time(16, 0)
 SESSION_SECONDS = 6 * 3600 + 30 * 60
 SESSION_MINUTES = SESSION_SECONDS // 60
+ONE_DAY = np.timedelta64(1, "D")
 
 
 def is_trading_day(d: date) -> bool:
     return d.weekday() < 5
 
 
+def add_trading_days(d: date, n: int) -> date:
+    """The trading day `n` trading days after trading day `d`."""
+    return np.busday_offset(np.datetime64(d, "D"), n).astype(object)
+
+
 def next_trading_day(d: date) -> date:
-    d += timedelta(days=1)
-    while not is_trading_day(d):
-        d += timedelta(days=1)
-    return d
+    """The first trading day after `d` (which need not be a trading day)."""
+    return np.busday_offset(np.datetime64(d, "D") + ONE_DAY, 0, roll="forward").astype(object)
 
 
 def session_open(d: date) -> datetime:
@@ -55,20 +61,18 @@ def session_seconds(t: datetime) -> float:
 
 
 def add_trading_seconds(t: datetime, seconds: float) -> datetime:
-    """Move forward by `seconds` of open-market time, skipping closed periods."""
+    """Move forward by `seconds` of open-market time, skipping closed periods.
+
+    Constant time however far it goes: whole sessions are skipped arithmetically.
+    """
     t = snap(t)
-    while True:
-        left = (session_close(market_day(t)) - t).total_seconds()
-        if seconds < left:
-            return t + timedelta(seconds=seconds)
-        seconds -= left
-        t = session_open(next_trading_day(market_day(t)))
+    sessions, offset = divmod(session_seconds(t) + seconds, SESSION_SECONDS)
+    day = add_trading_days(market_day(t), int(sessions))
+    return session_open(day) + timedelta(seconds=offset)
 
 
 def trading_days_between(a: date, b: date) -> int:
-    """Number of trading days d with a < d <= b."""
-    n = 0
-    while a < b:
-        a = next_trading_day(a)
-        n += a <= b
-    return n
+    """Number of trading days d with a < d <= b (0 if b <= a)."""
+    if b <= a:
+        return 0
+    return int(np.busday_count(np.datetime64(a, "D") + ONE_DAY, np.datetime64(b, "D") + ONE_DAY))

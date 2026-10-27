@@ -31,6 +31,10 @@ class MarketService:
         self._task: asyncio.Task | None = None
         self._jumping = False
 
+    @property
+    def jumping(self) -> bool:
+        return self._jumping
+
     def snapshot(self) -> dict:
         return {
             "type": "tick",
@@ -73,9 +77,10 @@ class MarketService:
         if self._jumping:
             raise BusyError
         action, target = self.preview_goto(target)
-        days = trading_days_between(market_day(self.engine.time), market_day(target))
-        if action == "forward" and days > MAX_JUMP_DAYS:
+        if action == "forward" and trading_days_between(market_day(self.engine.time), market_day(target)) > MAX_JUMP_DAYS:
             raise ValueError(f"can jump at most {MAX_JUMP_DAYS} trading days ahead")
+        # Sessions still to generate (fewer than the distance if a replay already generated some).
+        days = trading_days_between(self.engine.generated_through, market_day(target))
 
         self._jumping = True
         try:
@@ -93,12 +98,18 @@ class MarketService:
             self.clock.set_time(target)
         finally:
             self._jumping = False
-        self.publish(self.snapshot())
+            # Always end with a full snapshot (even after an error) so clients
+            # leave the fast-forward state; never drop it for a full queue.
+            self.publish(self.snapshot(), force=True)
         return action, target
 
-    def publish(self, msg: dict) -> None:
+    def publish(self, msg: dict, force: bool = False) -> None:
+        """Send to every subscriber. A slow client just misses messages, since the
+        next tick carries full state; with `force`, its oldest message is dropped
+        instead, for messages that must arrive."""
         for q in self._subscribers:
-            # A slow client just misses ticks; the next one carries full state.
+            if force and q.full():
+                q.get_nowait()
             with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(msg)
 

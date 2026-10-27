@@ -65,6 +65,7 @@ export function toMarketInput(iso: string): string {
 
 /** Shift a "YYYY-MM-DDTHH:mm" wall-clock value by whole days, keeping the time of day. */
 export function shiftInputDays(value: string, days: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return value
   const [datePart, timePart] = value.split('T')
   const [y, m, d] = datePart.split('-').map(Number)
   const shifted = new Date(Date.UTC(y, m - 1, d + days))

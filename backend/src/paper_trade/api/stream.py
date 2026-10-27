@@ -1,33 +1,40 @@
 """WebSocket stream to the UI.
 
-Phase 0 only sends heartbeats. Later phases push quotes, fills and account
-updates over this same connection, each message tagged with a `type`.
+Every message is tagged with a `type`. Phase 1 sends `tick` messages carrying
+the sim clock and all quotes. Later phases add fills and account updates.
 """
 
 import asyncio
-from datetime import UTC, datetime
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket
+
+from paper_trade.market.service import MarketService
 
 router = APIRouter()
-
-HEARTBEAT_SECONDS = 1.0
 
 
 @router.websocket("/ws")
 async def stream(ws: WebSocket) -> None:
     await ws.accept()
-    seq = 0
-    try:
+    svc: MarketService = ws.app.state.market
+    queue = svc.subscribe()
+
+    async def send() -> None:
+        await ws.send_json(svc.snapshot())
         while True:
-            await ws.send_json(
-                {
-                    "type": "heartbeat",
-                    "seq": seq,
-                    "server_time": datetime.now(UTC).isoformat(),
-                }
-            )
-            seq += 1
-            await asyncio.sleep(HEARTBEAT_SECONDS)
-    except WebSocketDisconnect:
-        pass
+            await ws.send_json(await queue.get())
+
+    async def receive() -> None:
+        # Returns (via WebSocketDisconnect) when the client goes away, even if
+        # no ticks are flowing because the market is paused.
+        while True:
+            await ws.receive_text()
+
+    tasks = [asyncio.create_task(send()), asyncio.create_task(receive())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        svc.unsubscribe(queue)
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

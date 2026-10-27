@@ -61,9 +61,69 @@ body {
 .stat-value {
   font-variant-numeric: tabular-nums;
 }
+
+/* Market clock and speed controls */
+.clock-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .clock {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-right: 4px;
   font-variant-numeric: tabular-nums;
+}
+.clock-date,
+.clock-tz {
   color: var(--muted);
+  font-size: 11px;
+}
+.clock-time {
+  min-width: 64px;
+}
+.speeds {
+  display: flex;
+}
+.ctl {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.speeds .ctl + .ctl {
+  border-left: none;
+}
+.ctl:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.ctl.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ctl:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.regime {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  border: 1px solid currentColor;
+}
+.regime-calm {
+  color: var(--up);
+}
+.regime-normal {
+  color: var(--muted);
+}
+.regime-volatile {
+  color: var(--down);
 }
 .conn {
   display: flex;
@@ -162,4 +222,100 @@ body {
 .tab.active {
   color: var(--text);
   border-bottom-color: var(--accent);
+}
+
+/* Data tables */
+.grid-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.grid-table th {
+  position: sticky;
+  top: 0;
+  padding: 6px 12px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.grid-table td {
+  padding: 5px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.grid-table .num {
+  text-align: right;
+}
+.watchlist-table tbody tr {
+  cursor: pointer;
+}
+.watchlist-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.watchlist-table tbody tr.selected {
+  background: rgba(59, 130, 246, 0.15);
+}
+.sym {
+  font-weight: 600;
+}
+
+.up {
+  color: var(--up);
+}
+.down {
+  color: var(--down);
+}
+.flat,
+.muted {
+  color: var(--muted);
+}
+.flash-up {
+  background: rgba(34, 197, 94, 0.25);
+}
+.flash-down {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+/* Quote detail */
+.quote-detail {
+  padding: 16px 20px;
+}
+.quote-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.quote-symbol {
+  font-size: 20px;
+  font-weight: 700;
+}
+.quote-name {
+  color: var(--muted);
+}
+.quote-price {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 6px 0 16px;
+  font-variant-numeric: tabular-nums;
+}
+.quote-last {
+  font-size: 32px;
+  font-weight: 600;
+}
+.quote-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 12px 24px;
+  margin: 0 0 24px;
+  font-variant-numeric: tabular-nums;
+}
+.quote-stats dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+.quote-stats dd {
+  margin: 2px 0 0;
 }

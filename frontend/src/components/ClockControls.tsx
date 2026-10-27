@@ -1,10 +1,13 @@
+import { useState } from 'react'
 import { updateClock } from '../lib/api'
 import { marketDate, marketTime } from '../lib/format'
-import type { ClockState, Regime } from '../lib/types'
+import type { ClockState, ProgressMessage, Regime } from '../lib/types'
+import { GoToDialog } from './GoToDialog'
 
 interface Props {
   clock: ClockState | null
   regime: Regime | null
+  progress: ProgressMessage | null
 }
 
 const REGIME_LABEL: Record<Regime, string> = {
@@ -13,8 +16,9 @@ const REGIME_LABEL: Record<Regime, string> = {
   volatile: 'Volatile',
 }
 
-export function ClockControls({ clock, regime }: Props) {
-  const disabled = clock === null
+export function ClockControls({ clock, regime, progress }: Props) {
+  const [showGoto, setShowGoto] = useState(false)
+  const disabled = clock === null || progress !== null
   const send = (update: { speed?: number; paused?: boolean }) => {
     updateClock(update).catch((err) => console.error(err))
   }
@@ -26,6 +30,9 @@ export function ClockControls({ clock, regime }: Props) {
         <span className="clock-time">{clock ? marketTime(clock.time) : '--:--:--'}</span>
         <span className="clock-tz">ET</span>
       </div>
+      <button className="ctl" disabled={disabled} onClick={() => setShowGoto(true)}>
+        Go to…
+      </button>
       <button
         className="ctl"
         disabled={disabled}
@@ -47,11 +54,18 @@ export function ClockControls({ clock, regime }: Props) {
           </button>
         ))}
       </div>
-      {regime && (
-        <span className={`regime regime-${regime}`} title="Current market volatility">
-          {REGIME_LABEL[regime]}
+      {progress ? (
+        <span className="regime" role="progressbar" aria-valuenow={progress.done} aria-valuemax={progress.total}>
+          Fast-forwarding… {Math.round((progress.done / progress.total) * 100)}%
         </span>
+      ) : (
+        regime && (
+          <span className={`regime regime-${regime}`} title="Current market volatility">
+            {REGIME_LABEL[regime]}
+          </span>
+        )
       )}
+      {showGoto && clock && <GoToDialog clock={clock} onClose={() => setShowGoto(false)} />}
     </div>
   )
 }

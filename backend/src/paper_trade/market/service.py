@@ -3,13 +3,24 @@
 import asyncio
 import contextlib
 import logging
+from datetime import datetime
+from typing import Literal
 
+from paper_trade.market.calendar import market_day, snap, trading_days_between
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import MarketEngine
 
 TICK_SECONDS = 0.5
+MAX_JUMP_DAYS = 252 * 5
+PROGRESS_EVERY_DAYS = 5
 
 log = logging.getLogger(__name__)
+
+GotoAction = Literal["forward", "rewind", "reset", "none"]
+
+
+class BusyError(Exception):
+    """Another time jump is already running."""
 
 
 class MarketService:
@@ -18,6 +29,11 @@ class MarketService:
         self.engine = engine
         self._subscribers: set[asyncio.Queue[dict]] = set()
         self._task: asyncio.Task | None = None
+        self._jumping = False
+
+    @property
+    def jumping(self) -> bool:
+        return self._jumping
 
     def snapshot(self) -> dict:
         return {
@@ -29,22 +45,71 @@ class MarketService:
 
     def clock_state(self) -> dict:
         return {
-            "time": self.clock.now().isoformat(),
+            "time": self.engine.time.isoformat(),
             "speed": self.clock.speed,
             "paused": self.clock.paused,
             "speeds": SPEEDS,
+            "origin": self.engine.origin.isoformat(),
         }
 
     def tick(self) -> None:
+        if self._jumping:
+            return
         before = self.engine.time
-        self.engine.step(self.clock.now())
+        self.engine.advance(self.clock.now())
         # Nothing changes while paused; clock updates publish on their own.
         if self.engine.time != before:
             self.publish(self.snapshot())
 
-    def publish(self, msg: dict) -> None:
+    def preview_goto(self, target: datetime) -> tuple[GotoAction, datetime]:
+        """What going to `target` would do, and the market time it lands on."""
+        target = snap(target)
+        now = max(self.engine.time, snap(self.clock.now()))
+        if target < self.engine.origin:
+            return "reset", target
+        if target < now:
+            return "rewind", target
+        if target > now:
+            return "forward", target
+        return "none", target
+
+    async def goto(self, target: datetime, new_future: bool = False) -> tuple[GotoAction, datetime]:
+        if self._jumping:
+            raise BusyError
+        action, target = self.preview_goto(target)
+        if action == "forward" and trading_days_between(market_day(self.engine.time), market_day(target)) > MAX_JUMP_DAYS:
+            raise ValueError(f"can jump at most {MAX_JUMP_DAYS} trading days ahead")
+        # Sessions still to generate (fewer than the distance if a replay already generated some).
+        days = trading_days_between(self.engine.generated_through, market_day(target))
+
+        self._jumping = True
+        try:
+            if action == "reset":
+                self.engine.reset(target)
+            elif action == "rewind":
+                self.engine.advance(self.clock.now())
+                self.engine.rewind(target, new_future)
+            elif action == "forward":
+                # Generate session by session, yielding so ticks and progress keep flowing.
+                for i, _ in enumerate(self.engine.advance_iter(target), start=1):
+                    if i % PROGRESS_EVERY_DAYS == 0:
+                        self.publish({"type": "progress", "done": i, "total": days})
+                    await asyncio.sleep(0)
+            self.clock.set_time(target)
+        finally:
+            self._jumping = False
+            # Always end with a full snapshot (even after an error) so clients
+            # leave the fast-forward state; never drop it for a full queue.
+            self.publish(self.snapshot(), force=True)
+        return action, target
+
+    def publish(self, msg: dict, force: bool = False) -> None:
+        """Send to every subscriber. A slow client just misses messages, since the
+        next tick carries full state; with `force`, its oldest message is dropped
+        instead, for messages that must arrive."""
         for q in self._subscribers:
-            # A slow client just misses ticks; the next one carries full state.
+            if force and q.full():
+                q.get_nowait()
             with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(msg)
 

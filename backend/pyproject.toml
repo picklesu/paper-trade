@@ -5,6 +5,7 @@ description = "Paper trading simulator backend"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.162.0",
+    "numpy>=2.5.4",
     "uvicorn[standard]>=0.54.0",
 ]
 

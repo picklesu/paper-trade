@@ -1,11 +1,12 @@
 import type { ConnectionStatus } from '../lib/stream'
-import type { ClockState, Regime } from '../lib/types'
+import type { ClockState, ProgressMessage, Regime } from '../lib/types'
 import { ClockControls } from './ClockControls'
 
 interface Props {
   status: ConnectionStatus
   clock: ClockState | null
   regime: Regime | null
+  progress: ProgressMessage | null
 }
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -14,7 +15,7 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
   disconnected: 'Disconnected',
 }
 
-export function TopBar({ status, clock, regime }: Props) {
+export function TopBar({ status, clock, regime, progress }: Props) {
   return (
     <header className="topbar">
       <div className="brand">Paper Trade</div>
@@ -23,7 +24,7 @@ export function TopBar({ status, clock, regime }: Props) {
         <Stat label="Buying Power" value="—" />
         <Stat label="Day P&L" value="—" />
       </div>
-      <ClockControls clock={clock} regime={regime} />
+      <ClockControls clock={clock} regime={regime} progress={progress} />
       <div className={`conn conn-${status}`} role="status">
         <span className="dot" />
         {STATUS_LABEL[status]}

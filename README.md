@@ -10,8 +10,13 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - Prices are synthetic. Tickers are familiar names, but prices start from fixed values and move by a seeded random model (geometric Brownian motion), so they are not real quotes.
 - Symbols move together through a shared market factor, plus their own noise.
 - The market switches between **Calm**, **Normal** and **Volatile** regimes (shown in the top bar).
-- The market clock runs 24/7 in New York time. Use the top-bar controls to pause or run at 1×, 10×, 60× or 600×. A new trading day (open, high, low, volume reset) starts at midnight ET. (Phase 2a changes this to real session hours.)
-- Restarting the backend restarts the market from the starting prices.
+- **Session hours, without the wait:** the market trades 9:30 AM–4:00 PM ET, Monday–Friday. At the close it continues straight from the next session's open (with an overnight gap), so whenever you use the app the market is open. Exchange holidays are not modeled.
+- Use the top-bar controls to pause or run at 1×, 10×, 60× or 600×.
+- **Go to…** jumps to any date and time:
+  - **Forward** fast-forwards the market through the skipped sessions.
+  - **Back** asks whether to **replay the same prices** or **generate a new future** from that point. Prices are reproducible, so a replay is exact.
+  - **Before the market's history** starts a brand-new market on that date.
+- Restarting the backend restarts the market at the current real-world time, or the next open if the real market is closed. (Saving state comes in Phase 2b.)
 
 ## Run
 
@@ -39,7 +44,7 @@ cd frontend && npm test
 |---|---|---|
 | 0 | Skeleton: backend, frontend, live connection, layout shell | Done |
 | 1 | Market engine: simulated clock, symbols, live quotes, speed control | Done |
-| 2a | Market sessions (9:30–4:00 ET, jump to next open) and date/time control | |
+| 2a | Market sessions (9:30–4:00 ET, jump to next open) and date/time control | Done |
 | 2b | Persistence, account and orders: market/limit/stop, fills, positions, P&L | |
 | 3 | Order ticket preview and order history | |
 | 4 | Candlestick charts | |

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { StreamMessage, TickMessage } from './types'
+import type { ProgressMessage, StreamMessage, TickMessage } from './types'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -14,6 +14,7 @@ function streamUrl(): string {
 export function useStream() {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [tick, setTick] = useState<TickMessage | null>(null)
+  const [progress, setProgress] = useState<ProgressMessage | null>(null)
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -26,7 +27,12 @@ export function useStream() {
       ws.onopen = () => setStatus('connected')
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data) as StreamMessage
-        if (msg.type === 'tick') setTick(msg)
+        if (msg.type === 'tick') {
+          setTick(msg)
+          setProgress(null)
+        } else if (msg.type === 'progress') {
+          setProgress(msg)
+        }
       }
       ws.onclose = () => {
         if (closed) return
@@ -43,5 +49,5 @@ export function useStream() {
     }
   }, [])
 
-  return { status, tick }
+  return { status, tick, progress }
 }

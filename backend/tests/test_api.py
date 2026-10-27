@@ -73,3 +73,38 @@ def test_websocket_ignores_client_messages(client: TestClient) -> None:
         ws.send_bytes(b"\x00")
         ws.send_text("hello")
         assert ws.receive_json()["type"] == "tick"
+
+
+def test_goto_preview_and_jump(client: TestClient) -> None:
+    now = client.get("/api/clock").json()["time"]
+
+    # Naive times are New York wall-clock; Saturday snaps to Monday's open.
+    preview = client.get("/api/clock/goto", params={"time": "2030-01-05T12:00"}).json()
+    assert preview == {"action": "forward", "target": "2030-01-07T14:30:00+00:00"}
+
+    body = client.post("/api/clock/goto", json={"time": "2027-03-03T10:00"}).json()
+    assert body["action"] == "forward"
+    assert body["clock"]["time"] > now
+
+    body = client.post("/api/clock/goto", json={"time": now, "future": "new"}).json()
+    assert body["action"] == "rewind"
+    assert body["clock"]["time"] == now
+
+
+def test_goto_before_history_resets(client: TestClient) -> None:
+    body = client.post("/api/clock/goto", json={"time": "2020-06-01T09:30"}).json()
+    assert body["action"] == "reset"
+    assert body["clock"]["origin"] == "2020-06-01T13:30:00+00:00"
+
+
+def test_goto_rejects_bad_input(client: TestClient) -> None:
+    assert client.get("/api/clock/goto", params={"time": "soon"}).status_code == 422
+    assert client.get("/api/clock/goto", params={"time": "9999-12-31T17:00"}).status_code == 422
+    assert client.post("/api/clock/goto", json={"time": "9999-12-31T17:00"}).status_code == 422
+    assert client.post("/api/clock/goto", json={"time": "2027-01-04T10:00", "future": "maybe"}).status_code == 422
+
+
+def test_clock_changes_rejected_during_a_jump(client: TestClient) -> None:
+    client.app.state.market._jumping = True
+    assert client.post("/api/clock", json={"speed": 60}).status_code == 409
+    client.app.state.market._jumping = False

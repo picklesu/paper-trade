@@ -37,7 +37,7 @@ function quote(symbol: string, last: number, prev_close: number): Quote {
 function tick(overrides: Partial<TickMessage> = {}): TickMessage {
   return {
     type: 'tick',
-    clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false },
+    clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600] },
     regime: 'normal',
     quotes: [quote('SPY', 582, 580), quote('AAPL', 228, 230)],
     ...overrides,
@@ -113,7 +113,7 @@ describe('App', () => {
 
   it('shows the resume button while paused', () => {
     render(<App />)
-    push(tick({ clock: { time: '2026-01-05T15:30:00Z', speed: 10, paused: true } }))
+    push(tick({ clock: { time: '2026-01-05T15:30:00Z', speed: 10, paused: true, speeds: [1, 10, 60, 600] } }))
     expect(screen.getByRole('button', { name: 'Resume market' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '10×' })).toHaveAttribute('aria-pressed', 'true')
   })

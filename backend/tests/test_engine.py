@@ -97,3 +97,13 @@ def test_bid_ask() -> None:
         bid, ask = bid_ask(price)
         assert bid <= price <= ask
         assert ask - bid < 0.25
+
+
+def test_quote_change_matches_displayed_prices() -> None:
+    engine = MarketEngine(START)
+    q = engine.quotes["SPY"]
+    q.last, q.prev_close = 100.004, 99.996
+    d = q.to_dict()
+    assert d["last"] == d["prev_close"] == 100.0
+    assert d["change"] == 0
+    assert d["change_pct"] == 0

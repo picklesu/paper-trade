@@ -1,4 +1,4 @@
-import { SPEEDS, updateClock } from '../lib/api'
+import { updateClock } from '../lib/api'
 import { marketDate, marketTime } from '../lib/format'
 import type { ClockState, Regime } from '../lib/types'
 
@@ -35,7 +35,7 @@ export function ClockControls({ clock, regime }: Props) {
         {clock?.paused ? '▶' : '❚❚'}
       </button>
       <div className="speeds" role="group" aria-label="Market speed">
-        {SPEEDS.map((s) => (
+        {(clock?.speeds ?? []).map((s) => (
           <button
             key={s}
             className={clock?.speed === s ? 'ctl active' : 'ctl'}

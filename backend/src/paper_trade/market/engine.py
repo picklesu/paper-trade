@@ -48,18 +48,23 @@ class Quote:
         return self.change / self.prev_close * 100
 
     def to_dict(self) -> dict:
+        # Change is computed from the rounded prices so the numbers the UI
+        # shows always agree with each other.
+        last = round(self.last, 2)
+        prev_close = round(self.prev_close, 2)
+        change = round(last - prev_close, 2)
         return {
             "symbol": self.symbol,
             "name": self.name,
-            "last": round(self.last, 2),
+            "last": last,
             "bid": self.bid,
             "ask": self.ask,
             "open": round(self.open, 2),
             "high": round(self.high, 2),
             "low": round(self.low, 2),
-            "prev_close": round(self.prev_close, 2),
-            "change": round(self.change, 2),
-            "change_pct": round(self.change_pct, 2),
+            "prev_close": prev_close,
+            "change": change,
+            "change_pct": round(change / prev_close * 100, 2),
             "volume": self.volume,
         }
 

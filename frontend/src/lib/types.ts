@@ -17,6 +17,7 @@ export interface ClockState {
   time: string
   speed: number
   paused: boolean
+  speeds: number[]
 }
 
 export type Regime = 'calm' | 'normal' | 'volatile'

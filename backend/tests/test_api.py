@@ -32,6 +32,7 @@ def test_clock_speed_and_pause(client: TestClient) -> None:
     clock = client.get("/api/clock").json()
     assert clock["speed"] == 1
     assert clock["paused"] is False
+    assert clock["speeds"] == [1, 10, 60, 600]
 
     clock = client.post("/api/clock", json={"speed": 60, "paused": True}).json()
     assert clock["speed"] == 60
@@ -64,3 +65,11 @@ def test_websocket_sees_clock_changes(client: TestClient) -> None:
                 break
         else:
             pytest.fail("speed change never reached the stream")
+
+
+def test_websocket_ignores_client_messages(client: TestClient) -> None:
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_bytes(b"\x00")
+        ws.send_text("hello")
+        assert ws.receive_json()["type"] == "tick"

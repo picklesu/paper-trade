@@ -2,11 +2,14 @@
 
 import asyncio
 import contextlib
+import logging
 
-from paper_trade.market.clock import SimClock
+from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import MarketEngine
 
 TICK_SECONDS = 0.5
+
+log = logging.getLogger(__name__)
 
 
 class MarketService:
@@ -29,11 +32,15 @@ class MarketService:
             "time": self.clock.now().isoformat(),
             "speed": self.clock.speed,
             "paused": self.clock.paused,
+            "speeds": SPEEDS,
         }
 
     def tick(self) -> None:
+        before = self.engine.time
         self.engine.step(self.clock.now())
-        self.publish(self.snapshot())
+        # Nothing changes while paused; clock updates publish on their own.
+        if self.engine.time != before:
+            self.publish(self.snapshot())
 
     def publish(self, msg: dict) -> None:
         for q in self._subscribers:
@@ -51,7 +58,11 @@ class MarketService:
 
     async def _run(self) -> None:
         while True:
-            self.tick()
+            try:
+                self.tick()
+            except Exception:
+                # Keep the market running; one bad tick shouldn't freeze every client.
+                log.exception("market tick failed")
             await asyncio.sleep(TICK_SECONDS)
 
     def start(self) -> None:

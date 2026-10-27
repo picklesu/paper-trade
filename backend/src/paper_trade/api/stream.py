@@ -25,10 +25,10 @@ async def stream(ws: WebSocket) -> None:
             await ws.send_json(await queue.get())
 
     async def receive() -> None:
-        # Returns (via WebSocketDisconnect) when the client goes away, even if
-        # no ticks are flowing because the market is paused.
-        while True:
-            await ws.receive_text()
+        # Returns when the client goes away, even if no ticks are flowing
+        # because the market is paused. Anything the client sends is ignored.
+        while (await ws.receive())["type"] != "websocket.disconnect":
+            pass
 
     tasks = [asyncio.create_task(send()), asyncio.create_task(receive())]
     try:

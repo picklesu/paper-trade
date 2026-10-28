@@ -312,9 +312,27 @@ describe('workspace', () => {
     setOn('Orders', false)
     await waitFor(() => expect(strip('right')).toBeNull())
     expect(hasPanel('Orders')).toBe(false)
+    // The menu still shows where it will come back; choosing another edge only changes that.
+    openMenu()
+    expect(within(screen.getByRole('radiogroup', { name: 'Orders edge' })).getByRole('radio', { checked: true })).toHaveAccessibleName('Right edge')
+    closeMenu()
+    setEdge('Orders', 'Top')
+    expect(hasPanel('Orders')).toBe(false)
     setOn('Orders', true)
-    await waitFor(() => expect(tabsOn('right')).toEqual(['Orders']))
+    await waitFor(() => expect(tabsOn('top')).toEqual(['Orders']))
     expect(isOpen('Orders')).toBe(true)
+  })
+
+  it('moving an open panel to another edge keeps what was typed into it', async () => {
+    render(<App />)
+    push(tick())
+    fireEvent.click(stripTab('Order Entry'))
+    await waitFor(() => expect(isOpen('Order Entry')).toBe(true))
+    const qty = within(panel('Order Entry')).getByLabelText(/Quantity/)
+    fireEvent.change(qty, { target: { value: '250' } })
+    setEdge('Order Entry', 'Right')
+    await waitFor(() => expect(tabsOn('right')).toEqual(['Order Entry']))
+    expect(within(panel('Order Entry')).getByLabelText(/Quantity/)).toHaveValue(250)
   })
 
   it('saves the layout immediately when the page is closing', () => {

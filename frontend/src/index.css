@@ -32,7 +32,7 @@ body {
 
 /* Top bar */
 .topbar {
-  /* Above the workspace, so its menus open over floating windows. */
+  /* Above the workspace, so its menus open over the panels. */
   position: relative;
   z-index: 1;
   display: flex;
@@ -177,7 +177,7 @@ body {
   flex: 1;
   min-height: 0;
   position: relative;
-  /* Keep dockview's floating windows (z-index 999) inside the workspace's layer. */
+  /* Keep dockview's overlays inside the workspace's layer. */
   isolation: isolate;
 }
 .workspace > div {
@@ -296,8 +296,6 @@ body {
   --dv-tabs-and-actions-container-font-size: 12px;
   /* Thinner tab bars than dockview's 35px: more room for the chart. */
   --dv-tabs-and-actions-container-height: 30px;
-  --dv-floating-box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
-  --dv-floating-titlebar-background-color: var(--bg);
 }
 .dock-panel {
   height: 100%;

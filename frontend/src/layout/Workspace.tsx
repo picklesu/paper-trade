@@ -7,7 +7,7 @@ import {
 } from 'dockview-react'
 import 'dockview-react/dist/styles/dockview.css'
 import { memo, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { StripContext } from './collapseContext'
+import { StripContext } from './stripContext'
 import { EdgeStrip } from './EdgeStrip'
 import { type Edge, edgeOf, savedSizes } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
@@ -22,17 +22,20 @@ const samePlaces = (a: Record<PanelId, PanelPlace>, b: Record<PanelId, PanelPlac
 /** Holds the dockview API so the Panels menu, outside the workspace, can drive each panel. */
 export function LayoutProvider({ children }: { children: ReactNode }) {
   const [api, setApi] = useState<DockviewApi | null>(null)
+  // An off panel keeps the edge it was on (or its default), to come back there.
   const [places, setPlaces] = useState<Record<PanelId, PanelPlace>>(NOWHERE)
-  // The edge a panel was on when it was turned off, to bring it back there.
-  const lastEdge = useRef(new Map<PanelId, NonNullable<PanelPlace['edge']>>())
 
   useEffect(() => {
     if (!api) return
     // Only when a place changes: layout changes come in on every divider drag.
     const sync = () => {
-      const next = panelPlaces(api)
-      for (const id of PANEL_IDS) if (next[id].edge) lastEdge.current.set(id, next[id].edge!)
-      setPlaces((current) => (samePlaces(current, next) ? current : next))
+      setPlaces((current) => {
+        const found = panelPlaces(api)
+        const next = Object.fromEntries(
+          PANEL_IDS.map((id) => [id, found[id].edge ? found[id] : { state: 'off', edge: current[id].edge ?? DEFAULT_EDGE[id] ?? null }]),
+        ) as Record<PanelId, PanelPlace>
+        return samePlaces(current, next) ? current : next
+      })
     }
     sync()
     const subs = [api.onDidAddPanel(sync), api.onDidRemovePanel(sync), api.onDidLayoutChange(sync), api.onDidLayoutFromJSON(sync)]
@@ -43,7 +46,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     const place = (id: PanelId, edge: NonNullable<PanelPlace['edge']>, state: 'open' | 'collapsed') => {
       if (api) placePanel(api, id, edge, state)
     }
-    const edgeFor = (id: PanelId) => places[id].edge ?? lastEdge.current.get(id) ?? DEFAULT_EDGE[id] ?? 'left'
+    const edgeFor = (id: PanelId) => places[id].edge ?? DEFAULT_EDGE[id] ?? 'left'
     return {
       places,
       setOn: (id, on) => {
@@ -54,6 +57,11 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       },
       setEdge: (id, edge) => {
         if (!api) return
+        // An off panel only remembers where to come back.
+        if (!api.getPanel(id)) {
+          setPlaces((current) => ({ ...current, [id]: { state: 'off', edge } }))
+          return
+        }
         // Read from the panel: the places above update a moment after a tab is clicked.
         const group = api.getPanel(id)?.group
         place(id, edge, group?.api.isVisible ? 'open' : 'collapsed')
@@ -195,8 +203,6 @@ export const Workspace = memo(function Workspace() {
   )
 })
 
-type Size = { width: number; height: number }
-
 /** dockview shares out any change in space among all the panels, so a side panel balloons
  *  when a neighbour is closed, collapsed or moved to another edge, gives way when one comes
  *  back, and grows with the window or when an edge strip comes or goes. Instead, after any
@@ -212,27 +218,40 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
       .map((g) => `${g.id}:${g.panels[0]?.id}:${g.api.isVisible}`)
       .sort()
       .join(',')
-  const edgesNow = () => panelEdges(api)
-  // Each open side panel's size and edge.
-  const record = () => {
-    const edges = edgesNow()
-    const out = new Map<PanelId, { edge: Edge; size: Size }>()
-    for (const [id, edge] of edges) {
+  // Each side panel's last thickness across its edge (kept while it's collapsed, so it opens
+  // at the size it had), and which panels were open.
+  type Sizes = { thickness: Map<PanelId, { edge: Edge; size: number }>; open: Set<PanelId> }
+  const thicknessOf = (g: { width: number; height: number }, edge: Edge) => (edge === 'left' || edge === 'right' ? g.width : g.height)
+  const record = (prev?: Sizes): Sizes => {
+    const thickness = new Map(prev?.thickness)
+    const open = new Set<PanelId>()
+    for (const [id, edge] of panelEdges(api)) {
       const g = api.getPanel(id)!.group
-      if (g.api.isVisible) out.set(id, { edge, size: { width: g.width, height: g.height } })
+      if (!g.api.isVisible) continue
+      thickness.set(id, { edge, size: thicknessOf(g, edge) })
+      open.add(id)
     }
-    return out
+    return { thickness, open }
   }
   let before = record()
   let shape = structure()
-  const restore = (from: typeof before) => {
-    for (const [id, edge] of edgesNow()) {
-      const g = api.getPanel(id)!.group
-      if (!g.api.isVisible) continue
-      const prev = from.get(id)
-      const column = edge === 'left' || edge === 'right'
-      const size = prev && prev.edge === edge ? (column ? prev.size.width : prev.size.height) : EDGE_SIZE[edge]
-      g.api.setSize(column ? { width: size } : { height: size })
+  /** Panels on one edge share its thickness: that of a panel already open there, else the
+   *  panel's own last size on that edge, else the edge's default. */
+  const restore = (from: Sizes) => {
+    const edges = panelEdges(api)
+    for (const edge of ['left', 'right', 'top', 'bottom'] as const) {
+      const on = [...edges].filter(([, e]) => e === edge).map(([id]) => id)
+      const known = (id: PanelId) => {
+        const t = from.thickness.get(id)
+        return t && t.edge === edge ? t.size : undefined
+      }
+      const shared = on.filter((id) => from.open.has(id)).map(known).find((v) => v !== undefined)
+      for (const id of on) {
+        const g = api.getPanel(id)!.group
+        if (!g.api.isVisible) continue
+        const size = shared ?? known(id) ?? EDGE_SIZE[edge]
+        g.api.setSize(edge === 'left' || edge === 'right' ? { width: size } : { height: size })
+      }
     }
   }
   const sub = api.onDidLayoutChange(() => {
@@ -244,7 +263,7 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
       requestAnimationFrame(() => restore(from))
     }
     shape = now
-    before = record()
+    before = record(before)
   })
   // A resize of the workspace doesn't raise a layout change. Lay dockview out at the new
   // size right away (it would on its own a moment later) and put the side panels back.
@@ -253,7 +272,7 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     if (!width || !height || (width === api.width && height === api.height)) return
     api.layout(width, height)
     restore(before)
-    before = record()
+    before = record(before)
   })
   observer.observe(host)
   // A saved layout is scaled to the workspace's size now; give the side panels back the sizes
@@ -268,7 +287,7 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
       const edge = edgeOf(layout, g.id, chart.id)
       g.api.setSize(edge === 'left' || edge === 'right' ? { width: size.width } : { height: size.height })
     }
-    before = record()
+    before = record(before)
   }
   return () => {
     sub.dispose()

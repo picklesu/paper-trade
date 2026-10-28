@@ -14,8 +14,6 @@ describe('loadLayout', () => {
         orders: { id: 'orders', contentComponent: 'orders' },
       },
       activeGroup: '2',
-      floatingGroups: [{ data: { id: '4', views: ['activity', 'orders'], activeView: 'activity' }, position: {} }],
-      popoutGroups: [{ data: { id: '5', views: ['activity'], activeView: 'activity' } }],
     }
     localStorage.setItem('paper-trade.layout.v3', JSON.stringify(saved))
     const out = loadLayout(new Set(['watchlist', 'chart', 'orders']))!
@@ -23,8 +21,12 @@ describe('loadLayout', () => {
     const column = (out.grid.root.data as { data: { data: { id: string } }[] }[])[0].data
     expect(column.map((n) => n.data.id)).toEqual(['1'])
     expect(out.activeGroup).toBeUndefined()
-    expect(out.floatingGroups).toEqual([{ data: { id: '4', views: ['orders'], activeView: 'orders' }, position: {} }])
-    expect(out.popoutGroups).toEqual([])
+  })
+
+  it('clears layouts saved under older keys', () => {
+    localStorage.setItem('paper-trade.layout.v2', '{}')
+    loadLayout(new Set(['chart']))
+    expect(localStorage.getItem('paper-trade.layout.v2')).toBeNull()
   })
 
   it('leaves a layout with only known panels as it is', () => {

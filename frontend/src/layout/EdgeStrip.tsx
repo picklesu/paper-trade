@@ -1,5 +1,5 @@
 import { useAppData } from './appDataContext'
-import { useStrips } from './collapseContext'
+import { useStrips } from './stripContext'
 import type { Edge } from './edges'
 
 /** The tabs of the panels on one workspace edge. A tab opens its panel, or collapses it. */

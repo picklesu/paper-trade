@@ -144,15 +144,14 @@ export function collapseEmptyEdges(api: DockviewApi): void {
  *  none gets its space back. It acts only on that change, so its own visibility changes
  *  can't set it off again. */
 export function edgeTidier(api: DockviewApi): () => void {
-  const showingEdges = () => {
-    const edges = panelEdges(api)
+  const showingEdges = (edges = panelEdges(api)) => {
     return new Set((['left', 'right', 'top', 'bottom'] as const).filter((e) => groupsOn(api, e, edges).some((g) => g.api.isVisible)))
   }
   let showing = showingEdges()
   return () => {
     const was = showing
-    showing = showingEdges()
     const edges = panelEdges(api)
+    showing = showingEdges(edges)
     for (const edge of was) if (!showing.has(edge)) collapseEdge(groupsOn(api, edge, edges))
   }
 }
@@ -178,13 +177,21 @@ export function panelPlaces(api: DockviewApi): Record<PanelId, PanelPlace> {
 }
 
 /** Put a panel on an edge, open or collapsed: bring it back if it's closed, and move it if
- *  it's on another edge (as a new panel there: dockview can't move a hidden group reliably).
+ *  it's on another edge. An open panel moves as it is (keeping what's typed into it); a
+ *  collapsed one is re-added there, as dockview can't move a hidden group reliably.
  *  Returns its group, collapsed or shown as asked. */
 export function placePanel(api: DockviewApi, id: PanelId, edge: Edge, state: 'open' | 'collapsed'): DockviewGroupPanel {
   let panel = api.getPanel(id)
   if (panel && panelEdges(api).get(id) !== edge) {
-    panel.api.close()
-    panel = undefined
+    if (panel.group.api.isVisible) {
+      const spot = dockSpot(api, id, edge)
+      const toPosition = { left: 'left', right: 'right', above: 'top', below: 'bottom' } as const
+      const target = spot.beside ? api.getPanel(spot.beside)?.group : undefined
+      panel.group.api.moveTo({ group: target, position: toPosition[spot.side] })
+    } else {
+      panel.api.close()
+      panel = undefined
+    }
   }
   if (!panel) {
     panel = addPanel(api, id, edge)

@@ -161,9 +161,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `<div class="dock-panel" data-panel="Title">`. `panels.ts`: the registry,
     `buildDefaultLayout`, `panelEdges` (each docked panel's edge, from `edgeOf`), `dockSpot`
     (beside the nearest panel on the same edge in `SIDE_PANELS` order; the first on an edge
-    goes at the workspace's left/right edge, or above/below the chart), `placePanel` (moving
-    to another edge closes and re-adds the panel: dockview can't move hidden groups
-    reliably), `showGroup` (an edge that was all collapsed comes back at its minimum
+    goes at the workspace's left/right edge, or above/below the chart), `placePanel` (an open
+    panel moves with `moveTo`, keeping its state; a collapsed one is closed and re-added, as
+    dockview can't move hidden groups reliably), `showGroup` (an edge that was all collapsed comes back at its minimum
     thickness, so it gets `EDGE_SIZE`; panels squeezed along an edge share it evenly),
     `edgeTidier`/`collapseEmptyEdges` (an edge whose last shown panel left keeps its space
     in dockview; showing and hiding a collapsed panel there gives it back), `panelPlaces`.
@@ -174,8 +174,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     clear the API ref in effect cleanup: StrictMode's dev double-mount broke saving that way,
     and `App.test` covers it under StrictMode), and `keepSidePanelSizes` (after a structural
     change (a panel added, removed, moved, opened or collapsed) or a workspace resize, each
-    open side panel goes back to its thickness across its edge from just before, or the
-    edge's default if it's new there, and the chart takes the difference. Tracked by panel,
+    open side panel goes back to its edge's thickness: that of a panel already open there
+    (panels on an edge share it), else its own last size there (remembered while collapsed),
+    else the edge's default; the chart takes the difference. Tracked by panel,
     since moving replaces the group; restored on the next animation frame, because restoring
     inside dockview's layout change got overridden by the rest of it; a saved layout gets its
     sizes back on load via `savedSizes`).
@@ -188,7 +189,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `buildDefaultLayout` starts from `fromJSON` of an empty grid, and `onReady` registers
     (before the first load) a relayout at the host's `clientWidth`/`clientHeight` after every
     `fromJSON`.
-  - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `collapseContext.ts`, `edges.ts`): a
+  - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `stripContext.ts`, `edges.ts`): a
     collapsed panel is a hidden grid group (`group.api.setVisible(false)`; dockview saves
     `visible` in the layout JSON, so it survives reloads). `edgeOf` picks the edge from the
     serialized grid (where the group's path and the chart's split). Strips sit in a CSS grid
@@ -241,7 +242,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 165 (pytest), frontend 103 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 165 (pytest), frontend 105 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

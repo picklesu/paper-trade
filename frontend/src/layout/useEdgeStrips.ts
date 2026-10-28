@@ -1,8 +1,7 @@
 import type { DockviewApi } from 'dockview-react'
 import { useEffect, useMemo, useState } from 'react'
-import type { StripControls, StripTab } from './collapseContext'
-import { edgeOf } from './edges'
-import { PANELS, type PanelId, SIDE_PANELS, showGroup } from './panels'
+import type { StripControls, StripTab } from './stripContext'
+import { panelEdges, PANELS, SIDE_PANELS, showGroup } from './panels'
 
 /** The edge strips, like VS Code's side bars: a tab for every panel on an edge, which opens
  *  or collapses it. A collapsed panel is a hidden grid group (dockview saves that with the
@@ -13,13 +12,13 @@ export function useEdgeStrips(api: DockviewApi | null): StripControls {
   useEffect(() => {
     if (!api) return
     const sync = () => {
-      const layout = api.toJSON()
-      const chartId = api.getPanel('chart')?.group.id
+      const edges = panelEdges(api)
       const next: StripTab[] = []
       for (const id of SIDE_PANELS) {
-        const group = api.getPanel(id)?.group
-        if (!group || group.api.location.type !== 'grid') continue
-        next.push({ groupId: group.id, panelId: id, title: PANELS[id as PanelId].title, edge: edgeOf(layout, group.id, chartId), open: group.api.isVisible })
+        const edge = edges.get(id)
+        if (!edge) continue
+        const group = api.getPanel(id)!.group
+        next.push({ groupId: group.id, panelId: id, title: PANELS[id].title, edge, open: group.api.isVisible })
       }
       // Only when something changed: layout changes come in on every divider drag.
       setTabs((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next))

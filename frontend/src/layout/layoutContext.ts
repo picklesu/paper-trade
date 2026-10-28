@@ -4,11 +4,11 @@ import type { Edge } from './edges'
 import type { PanelId, PanelPlace } from './panels'
 
 export interface LayoutControls {
-  /** Where each panel is: open or collapsed on an edge, or off. */
+  /** Where each panel is: open or collapsed on an edge, or off (with the edge it comes back on). */
   places: Record<PanelId, PanelPlace>
   /** Turn a panel on (it opens on its edge) or off. */
   setOn: (id: PanelId, on: boolean) => void
-  /** Move a panel to an edge, keeping it open or collapsed (an off panel comes back collapsed). */
+  /** Move a panel to an edge, keeping it open or collapsed (for an off panel, where it comes back). */
   setEdge: (id: PanelId, edge: Edge) => void
   reset: () => void
 }

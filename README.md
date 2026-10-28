@@ -24,7 +24,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - **Drag a tab** to move a panel: drop it on an edge of a panel or the workspace to dock it there (a blue preview shows where), or onto another panel's tabs to group them. Drag the dividers between panels to resize.
 - **⧉ pops a panel out** as a floating window over everything else; drag it by its top bar (it snaps to the workspace edges and to other floating windows) and resize it from any edge or corner. **⇲ docks it back.** Shift+drag a tab also floats it.
 - **⤢ maximizes** a panel (⤡ restores).
-- **⇤ ⇥ ⤓ collapse** a docked panel to a strip of tabs on the edge it sits on; the chart takes the space. Click a tab to show that panel; a click anywhere else in the workspace tucks it away again, and the **pin** keeps it open. Side panels keep their size when others collapse or the window resizes; the chart grows and shrinks instead.
+- **⇤ ⇥ ⤒ ⤓ collapse** a docked panel to a strip of tabs on the edge it sits on; the chart takes the space. Click a tab to show that panel; a click anywhere else in the workspace tucks it away again, and the **pin** keeps it open. Side panels keep their size when others collapse or the window resizes; the chart grows and shrinks instead.
 - **Panels ▾** (top bar) shows or hides panels and has **Reset layout**. Your layout is saved in this browser.
 
 ## Charts

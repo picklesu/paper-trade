@@ -54,7 +54,7 @@ export function PanelsMenu() {
           </button>
           <p className="menu-hint">
             Drag a tab to move a panel: drop on an edge to dock it there, or onto another panel to tab them together.
-            ⧉ pops a panel out as a floating window; ⤢ maximizes it; ⇤ ⇥ ⤓ collapse it to a strip on that edge.
+            ⧉ pops a panel out as a floating window; ⤢ maximizes it; ⇤ ⇥ ⤒ ⤓ collapse it to a strip on that edge.
           </p>
         </div>
       )}

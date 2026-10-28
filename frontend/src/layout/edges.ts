@@ -40,15 +40,40 @@ export function edgeOf(layout: SerializedDockview, groupId: string, chartGroupId
   return before ? 'top' : 'bottom'
 }
 
+/** Each grid group's saved size along its branch: a width in a row, a height in a column. */
+export function savedSizes(layout: SerializedDockview): Map<string, { width: number } | { height: number }> {
+  const out = new Map<string, { width: number } | { height: number }>()
+  const walk = (node: Node, orientation: Orientation) => {
+    for (const child of node.data as Node[]) {
+      if (child.type === 'leaf') {
+        if (child.size) out.set((child.data as { id: string }).id, orientation === Orientation.HORIZONTAL ? { width: child.size } : { height: child.size })
+      } else walk(child, flip(orientation))
+    }
+  }
+  if (layout.grid.root.type === 'branch') walk(layout.grid.root, layout.grid.orientation)
+  return out
+}
+
+const contains = (node: Node, id: string): boolean =>
+  node.type === 'leaf' ? (node.data as { id: string }).id === id : (node.data as Node[]).some((c) => contains(c, id))
+
 /** A copy of the layout with these groups hidden, so a panel the user is only peeking
- *  at is saved collapsed. */
-export function withHidden(layout: SerializedDockview, ids: ReadonlySet<string>): SerializedDockview {
+ *  at is saved collapsed. The space each one took goes to the chart's side of its branch,
+ *  as it would on collapsing; otherwise a reload shares it out among all its neighbours. */
+export function withHidden(layout: SerializedDockview, ids: ReadonlySet<string>, chartGroupId?: string): SerializedDockview {
   if (!ids.size) return layout
-  const hide = (node: Node): Node =>
-    node.type === 'leaf'
-      ? ids.has((node.data as { id: string }).id)
-        ? { ...node, visible: false }
-        : node
-      : { ...node, data: (node.data as Node[]).map(hide) }
+  const hide = (node: Node): Node => {
+    if (node.type === 'leaf') return node
+    const children = (node.data as Node[]).map(hide)
+    let freed = 0
+    const hidden = children.map((c) => {
+      if (c.type !== 'leaf' || !ids.has((c.data as { id: string }).id) || c.visible === false) return c
+      freed += c.size ?? 0
+      return { ...c, visible: false }
+    })
+    const chart = chartGroupId ? hidden.findIndex((c) => contains(c, chartGroupId)) : -1
+    if (freed && chart >= 0) hidden[chart] = { ...hidden[chart], size: (hidden[chart].size ?? 0) + freed }
+    return { ...node, data: hidden }
+  }
   return { ...layout, grid: { ...layout.grid, root: hide(layout.grid.root) } }
 }

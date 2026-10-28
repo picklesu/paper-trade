@@ -5,6 +5,7 @@ import {
   DockviewReact,
   type FloatingGroupDragContext,
   type IDockviewHeaderActionsProps,
+  type SerializedDockview,
   themeDark,
 } from 'dockview-react'
 import 'dockview-react/dist/styles/dockview.css'
@@ -12,7 +13,7 @@ import { type ReactNode, useContext, useEffect, useMemo, useRef, useState } from
 import { useAppData } from './appDataContext'
 import { CollapseContext, useCollapse } from './collapseContext'
 import { EdgeStrip } from './EdgeStrip'
-import { type Edge, edgeOf, withHidden } from './edges'
+import { type Edge, edgeOf, savedSizes, withHidden } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
 import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
 import { buildDefaultLayout, COMPONENTS, dockGroup, PANEL_IDS, type PanelId, reopenPanel } from './panels'
@@ -86,7 +87,20 @@ export function Workspace() {
   const frame = useRef<HTMLDivElement>(null)
   const host = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<number | undefined>(undefined)
-  const { peekRef, ...collapse } = useEdgeStrips(api, frame)
+  // The group being peeked at, if any: saved as collapsed.
+  const peekRef = useRef<string | null>(null)
+  const disposeSizes = useRef<() => void>(() => {})
+
+  const scheduleSave = (api: DockviewApi) => {
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = undefined
+      saveLayout(snapshot(api, peekRef.current))
+    }, SAVE_DELAY_MS)
+  }
+  const collapse = useEdgeStrips(api, frame, peekRef, () => {
+    if (apiRef.current) scheduleSave(apiRef.current)
+  })
 
   // Save right away when the page is closing: a delayed save would be lost, and dockview
   // reports layout changes a moment later, so there may not even be one pending yet.
@@ -113,24 +127,21 @@ export function Workspace() {
   const onReady = (event: DockviewReadyEvent) => {
     const api = event.api
     apiRef.current = api
-    const saved = loadLayout()
+    let saved = loadLayout()
     try {
       if (saved) api.fromJSON(saved)
       else buildDefaultLayout(api)
     } catch {
       // A saved layout from an older version, or corrupted: start from the default.
+      saved = null
       clearLayout()
       buildDefaultLayout(api)
     }
-    if (host.current) keepSidePanelSizes(api, host.current)
+    // StrictMode's development double-mount readies a second dockview on the same element.
+    disposeSizes.current()
+    if (host.current) disposeSizes.current = keepSidePanelSizes(api, host.current, saved)
     // Save shortly after any change (moves, resizes, floats, closes).
-    api.onDidLayoutChange(() => {
-      window.clearTimeout(saveTimer.current)
-      saveTimer.current = window.setTimeout(() => {
-        saveTimer.current = undefined
-        saveLayout(snapshot(api, peekRef.current))
-      }, SAVE_DELAY_MS)
-    })
+    api.onDidLayoutChange(() => scheduleSave(api))
     setApi(api)
     setLocalApi(api)
   }
@@ -159,7 +170,8 @@ export function Workspace() {
 
 /** The layout to save: a group the user is only peeking at is saved collapsed. */
 function snapshot(api: DockviewApi, peeking: string | null) {
-  return withHidden(api.toJSON(), new Set(peeking ? [peeking] : []))
+  const chart = api.getPanel('chart')?.group
+  return withHidden(api.toJSON(), new Set(peeking ? [peeking] : []), chart?.api.location.type === 'grid' ? chart.id : undefined)
 }
 
 type Size = { width: number; height: number }
@@ -171,7 +183,7 @@ type Size = { width: number; height: number }
  *  just before and let the chart's group take up the difference. (Only while the chart is
  *  docked, and never from a maximized layout, where the hidden groups report collapsed
  *  sizes.) Groups are tracked as objects, not ids: a new layout reuses ids. */
-function keepSidePanelSizes(api: DockviewApi, host: HTMLElement): void {
+function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: SerializedDockview | null): () => void {
   const gridSizes = () =>
     new Map<DockviewGroupPanel, Size>(
       api.groups.filter((g) => g.api.location.type === 'grid' && g.api.isVisible).map((g) => [g, { width: g.width, height: g.height }]),
@@ -188,7 +200,7 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement): void {
       g.api.setSize(edge === 'left' || edge === 'right' ? { width: size.width } : { height: size.height })
     }
   }
-  api.onDidLayoutChange(() => {
+  const sub = api.onDidLayoutChange(() => {
     if (api.hasMaximizedGroup()) return // keep the pre-maximize sizes as the reference
     const now = gridSizes()
     // Those setSize calls raise another (batched) layout change, which records the result.
@@ -205,8 +217,22 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement): void {
     restore(gridSizes())
     before = gridSizes()
   })
-  // Like the subscription, it lasts as long as the workspace's elements.
   observer.observe(host)
+  // A saved layout is scaled to the workspace's size now; give the side panels back the sizes
+  // they were saved with.
+  const chart = api.getPanel('chart')?.group
+  if (saved && chart?.api.location.type === 'grid') {
+    const sizes = savedSizes(saved)
+    for (const g of api.groups) {
+      const size = sizes.get(g.id)
+      if (g !== chart && size && g.api.location.type === 'grid' && g.api.isVisible) g.api.setSize(size)
+    }
+    before = gridSizes()
+  }
+  return () => {
+    sub.dispose()
+    observer.disconnect()
+  }
 }
 
 /** Buttons at the right of each group's tab bar: collapse it to an edge (or pin it open),

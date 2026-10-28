@@ -1,6 +1,6 @@
 import { Orientation, type SerializedDockview } from 'dockview-react'
 import { describe, expect, it } from 'vitest'
-import { edgeOf, withHidden } from './edges'
+import { edgeOf, savedSizes, withHidden } from './edges'
 
 const leaf = (id: string, visible?: boolean) => ({ type: 'leaf' as const, data: { id, views: [id], activeView: id }, size: 100, ...(visible === undefined ? {} : { visible }) })
 const branch = (...data: unknown[]) => ({ type: 'branch' as const, data, size: 100 })
@@ -41,5 +41,28 @@ describe('withHidden', () => {
     const row = (out.grid.root.data as { data: { data: { id: string }; visible?: boolean }[] }[])[0].data
     expect(row.map((n) => n.visible)).toEqual([undefined, undefined, false])
     expect(withHidden(layout, new Set())).toBe(layout)
+  })
+})
+
+describe('withHidden, sizes', () => {
+  it("gives a hidden group's space to the chart's side of its branch", () => {
+    const sized = {
+      ...layout,
+      grid: { ...layout.grid, root: { type: 'branch', size: 1000, data: [branch({ ...leaf('w'), size: 250 }, { ...leaf('c'), size: 450 }, { ...leaf('t'), size: 300 }), leaf('a')] } },
+    } as unknown as SerializedDockview
+    const row = (withHidden(sized, new Set(['w']), 'c').grid.root.data as { data: { size: number; visible?: boolean }[] }[])[0].data
+    expect(row.map((n) => [n.size, n.visible])).toEqual([[250, false], [700, undefined], [300, undefined]])
+  })
+})
+
+describe('savedSizes', () => {
+  it('reads widths in rows and heights in columns', () => {
+    const sized = {
+      ...layout,
+      grid: { ...layout.grid, root: { type: 'branch', size: 1000, data: [branch({ ...leaf('w'), size: 250 }, { ...leaf('c'), size: 450 }), { ...leaf('a'), size: 185 }] } },
+    } as unknown as SerializedDockview
+    const sizes = savedSizes(sized)
+    expect(sizes.get('w')).toEqual({ width: 250 })
+    expect(sizes.get('a')).toEqual({ height: 185 })
   })
 })

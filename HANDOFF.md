@@ -17,6 +17,7 @@ _Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 | Fixes: divider drags snapping back on market ticks; Reset layout showing nothing after floating | Merged | #19 |
 | Fix: with the chart floating, collapsed panels moved to the top/bottom and opened over the whole workspace | Merged | #20 |
 | Activity panel removed (Orders' Filled list covers it); filled sells show their realized P/L | Merged | #21 |
+| Panels on any edge (left, right, top, bottom), no floating windows; edge tabs open/collapse; Panels menu sets edge and On/Off | Merged | #22 |
 | **5.5c. Workspace, next steps** | **Next.** See below. | — |
 | 6. Watchlists and quotes | After 5.5. | — |
 
@@ -25,21 +26,18 @@ _Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 ## Pick up here
 
 **The workspace (Phase 5.5) is being built in small steps, at the user's request.** Their
-requirements (2026-10-28): the chart is the main view; the other views are collapsible or pop
-out; every view is resizable and snaps to edges; floating windows can overlap; the UI/UX should
-be smooth and intuitive. Their decisions: **in-app floating windows first (dockview)**; **no
-multiple copies of a view**; otherwise follow Claude's recommendations (docked panels shrink the
-chart and floating ones cover it; layout saved per browser; laptop/desktop first).
+requirements (2026-10-28): the chart is the main view; the other views collapse to or dock on
+any edge (the user dropped floating windows in favour of this, #22); every view is resizable;
+the UI/UX should be smooth, intuitive and uncluttered (they found panels around the chart
+cluttered, and per-panel tab bars and buttons a waste of space). **No multiple copies of a
+view**; otherwise follow Claude's recommendations (layout saved per browser; laptop/desktop
+first).
 
-Step 1 (#13), step 2 edge strips (#16, #17) and the redesign after the user's review (#18):
-see Architecture → `layout/`. The user found the earlier default (panels around the chart)
-cluttered; keep the chart-first look. Next steps, smallest first:
+See Architecture → `layout/`. Next steps, smallest first:
 1. **Layout presets** in the Panels menu: "Chart" (the default: everything collapsed),
-   "Trading" (Watchlist and Order Entry open), "Review" (Positions and Orders open),
-   plus saving the current layout under a name.
-2. **Separate browser windows** (dockview `addPopoutGroup`), optional, for second monitors.
-   The OS places them; the web page can't snap them to screen edges.
-3. **Narrow screens**: one panel at a time over the chart instead of floating windows.
+   "Trading" (Watchlist and Order Entry open), "Review" (Positions and Orders open), plus
+   saving the current layout under a name.
+2. **Narrow screens**: one panel at a time over the chart.
 Then Phase 6 (watchlists and quotes) adds its views as panels.
 
 **The user is not QA**: verify everything (tests, build, lint with `--deny-warnings`, a
@@ -147,84 +145,65 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     tick loop.
 - **frontend/** (React 19, TypeScript, Vite, Vitest)
   - `layout/`: the workspace (dockview-react **8.5.1, pinned with `overrides` for dockview and
-    dockview-core**). **User's design (2026-10-28): chart first, uncluttered.** No tab bars
-    (`group.header.hidden` on every group, `disableDnd`), so every panel is a group of its
-    own; the **Panels menu** places each one: Open / Collapsed / Float / Off (chart: Open /
-    Float). Default: only the chart; the five side panels are hidden groups stacked in a
-    column left of it, shown as tabs on the left strip. No date axis on the chart; range and
-    bar size along its bottom, Indicators and Latest at the right of the quote line.
+    dockview-core**). **User's design (2026-10-28): chart first, uncluttered; panels on any
+    edge, no floating windows.** The chart is always docked in the middle; Watchlist, Order
+    Entry, Positions and Orders (`SIDE_PANELS`, in their order along an edge) each sit on an
+    edge: left/right columns (stacked top to bottom) or top/bottom rows (side by side, between
+    the columns). Default (`DEFAULT_EDGE`): Watchlist and Order Entry left, Positions and
+    Orders bottom, all collapsed. No tab bars (`group.header.hidden` on every group,
+    `disableDnd`, `disableFloatingGroups`), so every panel is a group of its own. Each edge
+    has a **strip of tabs** for its panels; a tab toggles open/collapsed (it stays as left).
+    The **Panels menu** sets each panel's edge (◀ ▶ ▲ ▼) and On/Off (On opens it; a panel
+    turned back on returns to its last edge). No date axis on the chart; range and bar size
+    along its bottom, Indicators and Latest at the right of the quote line.
     `AppData.tsx`/`appDataContext.ts` hold the stream data and the selected symbol, shared by
     panels. `PanelViews.tsx` has the panel components; each is wrapped in
-    `<div class="dock-panel" data-panel="Title">`. `panels.ts`: the registry, `SIDE_PANELS`
-    (column order), `buildDefaultLayout`, `dockSpot` (side panels below the one before them in
-    the column, or above the one after, or left of the chart; the chart at the right edge),
-    `dockPanel` (bring back / dock / expand), `dockGroup`, `floatGroup` (cascade from the
-    top-right, clear of the chart's top row and price scale), `showGroup` (a column that was
-    all collapsed comes back at its minimum width, so it gets `SIDE_WIDTH`; a panel joining
-    others takes an even share of the height), `tidySideColumn` (when the last shown panel
-    leaves a column whose others are collapsed, dockview keeps the empty width; showing and
-    hiding one collapsed panel gives it back), and `panelState`. `Workspace.tsx`:
-    `LayoutProvider` (dockview API plus the workspace's collapse controls, handed up through
-    `CollapseSetterContext`, for the Panels menu's states and `setState`), `Workspace`
-    (restore from `localStorage` `paper-trade.layout.v2`, falling back to the default when
-    it's bad; save 300ms after changes and immediately on `pagehide`. Don't clear the API ref
-    in effect cleanup: StrictMode's dev double-mount broke saving that way, and `App.test`
-    covers it under StrictMode; floating windows' title bars get the panel name via
-    `data-title`; snapping through `transformFloatingGroupDrag` → `snap.ts`), and
-    `keepSidePanelSizes` (when a group leaves the grid, is collapsed or comes back, or the
-    workspace resizes, the other groups go back to their previous width beside the chart or
-    height above/below it, and the chart takes the difference; groups are tracked as objects
-    because a new layout reuses ids; a ResizeObserver handles resizes, which raise no layout
-    change; a saved layout gets its side widths back on load via `savedSizes`).
-  - **Two dockview traps (#19):** DockviewReact passes any changed *option* prop (such as
-    `transformFloatingGroupDrag`) to `updateOptions`, which lays the grid out again from the
-    sizes saved before a divider drag. A new function on every render (the shell re-renders
-    on each market tick) snapped panels back mid-drag and sometimes undid the resize. Keep
-    option props stable (module-level functions) and `Workspace` memoized; `App.test` checks
-    ticks never call `updateOptions`. And `api.clear()` keeps the old grid's root, and with a
-    floating window open dockview reported width 0 while rebuilding, so Reset built
-    everything 0px wide (dockview's `fromJSON` lays out at 0 when replacing floating windows): `buildDefaultLayout` starts from `fromJSON` of an empty grid, and
-    `onReady` registers (before the first load) a relayout at the host's `clientWidth` and
-    `clientHeight` after every `fromJSON`. Reset also drops any peek first (ids are reused).
-  - **Chart placeholder (#20):** while the chart floats, an empty `chart-space` panel
-    (`CHART_SPACE`, not in the menu) holds its place in the grid; `mainGroup(api)` is the
-    chart's group or the placeholder's, used wherever "the chart's group" is the reference
-    (edges, side sizes, saving). `floatGroup` adds it beside the chart *before* the chart
-    leaves (a grid of only collapsed panels has shrunk to 0px, so anything added after starts
-    at minimum size); `keepChartSpace` (on load, and after each layout change, in a microtask) is
-    the backstop, e.g. for layouts saved before #20: it adds the placeholder, relays the grid
-    out at the host's size and resets the side column (300px, or collapsed to nothing). It
-    removes the placeholder when the chart docks (`dockGroup` moves the chart into its place
-    and resets the column width). The chart floats at
-    about 60% × 70% of the workspace.
-  - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `collapseContext.ts`, `edges.ts`): a
-    collapsed group is a hidden grid group (`group.api.setVisible(false)`; dockview saves
+    `<div class="dock-panel" data-panel="Title">`. `panels.ts`: the registry,
+    `buildDefaultLayout`, `panelEdges` (each docked panel's edge, from `edgeOf`), `dockSpot`
+    (beside the nearest panel on the same edge in `SIDE_PANELS` order; the first on an edge
+    goes at the workspace's left/right edge, or above/below the chart), `placePanel` (an open
+    panel moves with `moveTo`, keeping its state; a collapsed one is closed and re-added, as
+    dockview can't move hidden groups reliably), `showGroup` (an edge that was all collapsed comes back at its minimum
+    thickness, so it gets `EDGE_SIZE`; panels squeezed along an edge share it evenly),
+    `edgeTidier`/`collapseEmptyEdges` (an edge whose last shown panel left keeps its space
+    in dockview; showing and hiding a collapsed panel there gives it back), `panelPlaces`.
+    `Workspace.tsx`: `LayoutProvider` (dockview API for the Panels menu: `places`, `setOn`,
+    `setEdge` reading live visibility, `reset`), `Workspace` (restore from `localStorage`
+    `paper-trade.layout.v3` (`loadLayout` drops panels that no longer exist), falling back to
+    the default when it's bad; save 300ms after changes and immediately on `pagehide`. Don't
+    clear the API ref in effect cleanup: StrictMode's dev double-mount broke saving that way,
+    and `App.test` covers it under StrictMode), and `keepSidePanelSizes` (after a structural
+    change (a panel added, removed, moved, opened or collapsed) or a workspace resize, each
+    open side panel goes back to its edge's thickness: that of a panel already open there
+    (panels on an edge share it), else its own last size there (remembered while collapsed),
+    else the edge's default; the chart takes the difference. Tracked by panel,
+    since moving replaces the group; restored on the next animation frame, because restoring
+    inside dockview's layout change got overridden by the rest of it; a saved layout gets its
+    sizes back on load via `savedSizes`).
+  - **Two dockview traps (#19):** DockviewReact passes any changed *option* prop to
+    `updateOptions`, which lays the grid out again from the sizes saved before a divider
+    drag. A new function on every render (the shell re-renders on each market tick) snapped
+    panels back mid-drag. Keep option props stable and `Workspace` memoized; `App.test`
+    checks ticks and the workspace's own re-renders never call `updateOptions`. And
+    `api.clear()` keeps the old grid's root, and `fromJSON` could lay out at 0 width:
+    `buildDefaultLayout` starts from `fromJSON` of an empty grid, and `onReady` registers
+    (before the first load) a relayout at the host's `clientWidth`/`clientHeight` after every
+    `fromJSON`.
+  - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `stripContext.ts`, `edges.ts`): a
+    collapsed panel is a hidden grid group (`group.api.setVisible(false)`; dockview saves
     `visible` in the layout JSON, so it survives reloads). `edgeOf` picks the edge from the
-    serialized grid (where the group's path and the chart's split). A strip tab **peeks**
-    (outlined via `.peeking::after`, because dockview sets an inline `outline: none`); a
-    pointerdown elsewhere inside the workspace collapses it, clicks outside it (top bar,
-    dialogs) and in dockview's popups (`.dv-popover-anchor`) don't; the same tab again
-    collapses it; Open in the Panels menu pins it. Positions and Orders tabs show counts.
-    Saving uses `withHidden` so a peeked group is saved collapsed (its space going to the
-    chart's side). dockview's `onDidLayoutChange` arrives a moment after `setVisible`, so tests
-    `waitFor` it.
+    serialized grid (where the group's path and the chart's split). Strips sit in a CSS grid
+    around `.dock-host`; Positions and Orders tabs show counts. dockview's
+    `onDidLayoutChange` arrives a moment after `setVisible`, so tests `waitFor` it.
   - **Chart space** (the user wants the chart to be the focus; their OS/browser bars already
     take ~100px): top bar 36px (brand, then the clock's date and the connection wording hide
     on narrower windows), one-line `QuoteDetail` (name and `minor` stats hidden by container
     queries on narrow charts), `FullscreenButton` (F). `PriceChart` takes the quote as
-    `header` and goes compact (range and bar size as drop-downs) under 520px wide.
-  - `floatingResize.ts`: dockview's floating-window resize has no snapping hook and doesn't
-    raise the window. A window-level pointerdown (bubbling, so it runs after the handle's own
-    listener) activates the group (which raises it) and adds a pointermove that runs after
-    dockview's resize step and applies `snapResize` (`snap.ts`) to the inline style, keeping
-    dockview's anchored side.
+    `header` and goes compact (range and bar size as drop-downs) when the buttons don't fit.
   - **Layering:** `.topbar` has z-index 1 over `.workspace` (`isolation: isolate`). Dialogs go
-    through `components/Modal.tsx`, a portal to `<body>` at z-index 100. **dockview 8.5 CSS
-    bug:** `.dv-resize-container { --dv-overlay-z-index: var(--dv-overlay-z-index, 999) }` refers
-    to itself, which makes it invalid, so floating windows and their resize handles lose their
-    z-index (the left handle ended up under the content). `index.css` sets it plainly. The
-    `className` prop doesn't reach an ancestor of the panels, so theme variables are
-    overridden with `.workspace .dockview-theme-dark`.
+    through `components/Modal.tsx`, a portal to `<body>` at z-index 100. The `className` prop
+    doesn't reach an ancestor of the panels, so theme variables are overridden with
+    `.workspace .dockview-theme-dark`.
   - `lib/stream.ts`: one WebSocket with auto-reconnect. `useStream()` returns the latest tick
     (quotes, clock, account), the orders list, and any fast-forward progress (cleared by the
     next tick).
@@ -263,7 +242,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 165 (pytest), frontend 118 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 165 (pytest), frontend 105 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

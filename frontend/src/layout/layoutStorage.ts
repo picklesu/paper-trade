@@ -2,13 +2,15 @@ import type { SerializedDockview } from 'dockview-react'
 
 // Bump when panel ids or the default arrangement change incompatibly: old saved
 // layouts are then ignored instead of half-applied. (v2: no tab bars, one panel per group,
-// side panels collapsed to the left by default.)
-const KEY = 'paper-trade.layout.v2'
+// side panels collapsed to the left by default. v3: no floating windows; panels on any edge.)
+const KEY = 'paper-trade.layout.v3'
 
 /** The saved layout for this browser, if any (storage can be unavailable), without panels
  *  that no longer exist (`known` are the component names; e.g. Activity was removed). */
 export function loadLayout(known: ReadonlySet<string>): SerializedDockview | null {
   try {
+    // Layouts saved under older keys are never read again.
+    for (const old of ['paper-trade.layout.v1', 'paper-trade.layout.v2']) localStorage.removeItem(old)
     const raw = localStorage.getItem(KEY)
     return raw ? dropUnknownPanels(JSON.parse(raw) as SerializedDockview, known) : null
   } catch {
@@ -44,19 +46,7 @@ function dropUnknownPanels(layout: SerializedDockview, known: ReadonlySet<string
   }
   const panels = Object.fromEntries(Object.entries(layout.panels).filter(([id]) => !gone.includes(id)))
   const root = prune(layout.grid.root) ?? { type: 'branch', data: [] }
-  const windows = <T extends { data?: unknown }>(list: T[] | undefined) =>
-    list
-      ?.map((f) => {
-        if (!f.data) return f
-        const data = keep(f.data as Leaf)
-        return data ? { ...f, data: data as T['data'] } : null
-      })
-      .filter((f): f is T => f !== null)
-  const floatingGroups = windows(layout.floatingGroups)
-  const popoutGroups = windows(layout.popoutGroups)
   const out: SerializedDockview = { ...layout, panels, grid: { ...layout.grid, root } }
-  if (floatingGroups) out.floatingGroups = floatingGroups
-  if (popoutGroups) out.popoutGroups = popoutGroups
   if (out.activeGroup && removed.has(out.activeGroup)) delete out.activeGroup
   return out
 }

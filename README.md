@@ -21,10 +21,10 @@ A paper trading simulator that runs 24/7 on simulated market data.
 ## Workspace
 
 - Every view is a panel: **Chart**, **Watchlist**, **Order Entry**, **Positions**, **Orders**. Panels have no tab bars or buttons, so the chart gets the room.
-- **By default only the chart is open.** The other panels wait as tabs on the left edge (Positions and Orders show a count when they have something). Click a tab to look at that panel; a click anywhere else in the workspace tucks it away again, and clicking the tab again does too.
-- **Panels ▾** (top bar) places each panel: **Open** (docked in the column left of the chart; several stack top to bottom), **Collapsed** (a tab on the left edge), **Float** (a window over the chart) or **Off**. **Reset layout** goes back to the default. Your layout is saved in this browser.
-- Drag the dividers to resize docked panels; the chart grows and shrinks, and the side column keeps its width when the window resizes.
-- Floating windows move by their top bar (which shows the panel's name) and resize from any edge or corner. Both snap to the workspace edges and to other floating windows, and the window you're resizing comes to the front.
+- **The chart is always in the middle; every other panel sits on an edge**: left, right, top or bottom. By default Watchlist and Order Entry are on the left and Positions and Orders on the bottom, all collapsed, so the chart has the screen.
+- Each edge has a strip of **tabs**, one per panel on it (Positions and Orders show a count when they have something). A tab **opens** its panel or **collapses** it again; it stays as you left it. Panels open on the same edge stack: top to bottom on the left and right, side by side on the top and bottom.
+- **Panels ▾** (top bar) puts each panel on an edge (◀ ▶ ▲ ▼) and turns it **On** or **Off**. **Reset layout** goes back to the default. Your layout is saved in this browser.
+- Drag the dividers to resize; the chart grows and shrinks, and the panels on the edges keep their size when others open, close or move and when the window resizes.
 - The chart: the quote on one line with **Indicators ▾** and **Latest ⇥** at its right, and the range and bar size along the bottom (as drop-downs when the chart is narrow). There's no date axis: the line above the candles shows the hovered (or latest) bar's date and time.
 - **⛶ Full screen** (top bar, or press **F**) hides the OS and browser bars so the chart gets the whole screen; Esc leaves. Another option: in Chrome, ⋮ → Cast, save, and share → Install page as app (or Create shortcut → Open as window) gives the app its own window without tabs or bookmarks.
 
@@ -77,7 +77,7 @@ cd frontend && npm test
 | 3 | Order ticket preview and order history | Done |
 | 4 | Candlestick charts | Done |
 | 5 | Indicators | Done |
-| 5.5 | Customizable workspace: dockable, floating, resizable panels (step 1), collapse to edge strips (step 2), chart-first layout with the Panels menu (step 2b) | Done |
+| 5.5 | Customizable workspace: dockable, floating, resizable panels (step 1), collapse to edge strips (step 2), chart-first layout with the Panels menu (step 2b), panels on any edge (step 2c) | Done |
 | 6 | Watchlists and quotes | |
 | 7 | Options chain with Greeks | |
 | 8 | Option expiration, exercise, assignment | |

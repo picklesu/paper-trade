@@ -31,6 +31,13 @@ the same folder. Installed dependencies are platform-specific:
 - Stop servers you started by PID. Don't `pkill -f` with a pattern that also appears in your
   own command line; it kills the tool's shell (exit 144).
 - Don't leave servers running in the sandbox after checking.
+- **Always start sandbox backends with `PAPER_TRADE_DB=<scratchpad>/sandbox.db`.** Otherwise
+  they write `backend/paper_trade.db`, which is the user's real account (saved state). Tests
+  use temporary databases.
+- The user's Mac server (`./server.sh on`) runs uvicorn with `--reload` from this shared
+  folder. Whatever branch is checked out here goes live on their machine as you edit, and it
+  may create or modify their `paper_trade.db`. Keep `main` checked out when not working on a
+  phase.
 - For visual checks: install Playwright and Chromium in a scratchpad folder, run the app
   (backend on 8000, mirrored Vite on another port such as 5199), and take a screenshot.
 

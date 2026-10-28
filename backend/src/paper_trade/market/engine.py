@@ -213,6 +213,45 @@ class MarketEngine:
         r = self._starts[day].regime if s == 0 else self._path(day).regimes[(s - 1) // 60]
         return REGIMES[r][0]
 
+    def day_prices(self, day: date) -> np.ndarray:
+        """(S, N) per-second prices for a session already reached; row s is s
+        seconds after the open. Read-only."""
+        return self._path(day).prices[:_S]
+
+    def prices_at(self, t: datetime) -> dict[str, float]:
+        """Last prices at a past market time (between origin and now)."""
+        t = snap(t)
+        row = self.day_prices(market_day(t))[min(int(session_seconds(t)), _S - 1)]
+        return {s.symbol: float(p) for s, p in zip(self.specs, row)}
+
+    def symbol_index(self, symbol: str) -> int:
+        return next(i for i, s in enumerate(self.specs) if s.symbol == symbol)
+
+    # ----- saving --------------------------------------------------------------
+
+    def to_state(self) -> dict:
+        """Everything needed to rebuild the market exactly; prices regenerate from seeds."""
+        return {
+            "origin": self.origin.isoformat(),
+            "time": self._time.isoformat(),
+            "epochs": [[start.isoformat(), seed] for start, seed in self._epochs],
+            "starts": {d.isoformat(): [s.prev_close.tolist(), s.regime] for d, s in self._starts.items()},
+            "seed": self._seed,
+            "seeds_used": self._seeds_used,
+        }
+
+    @classmethod
+    def from_state(cls, state: dict, specs: tuple[SymbolSpec, ...] = SYMBOLS) -> "MarketEngine":
+        engine = cls(datetime.fromisoformat(state["origin"]), seed=state["seed"], specs=specs)
+        engine._seeds_used = state["seeds_used"]
+        engine._time = datetime.fromisoformat(state["time"])
+        engine._epochs = [(datetime.fromisoformat(start), seed) for start, seed in state["epochs"]]
+        engine._starts = {
+            date.fromisoformat(d): _DayStart(np.array(prev_close), regime)
+            for d, (prev_close, regime) in state["starts"].items()
+        }
+        return engine
+
     # ----- internals ---------------------------------------------------------
 
     def _reset(self, start: datetime, seed: int) -> None:

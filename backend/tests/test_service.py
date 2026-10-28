@@ -6,6 +6,7 @@ import pytest
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
+from paper_trade.store import Store
 
 START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
 
@@ -21,7 +22,7 @@ class FakeTime:
 def make_service() -> tuple[MarketService, FakeTime]:
     real = FakeTime()
     clock = SimClock(start=START, real_time=real)
-    return MarketService(clock, MarketEngine(START)), real
+    return MarketService(clock, MarketEngine(START), Store(":memory:")), real
 
 
 def test_tick_publishes_only_when_time_moves() -> None:

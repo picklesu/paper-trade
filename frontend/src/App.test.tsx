@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import type { Quote, TickMessage } from './lib/types'
+import type { Order, Quote, TickMessage } from './lib/types'
 
 // Minimal stand-in so tests can push stream messages without a backend.
 class FakeWebSocket {
@@ -34,12 +34,44 @@ function quote(symbol: string, last: number, prev_close: number): Quote {
   }
 }
 
+function order(overrides: Partial<Order>): Order {
+  return {
+    id: 1,
+    symbol: 'SPY',
+    side: 'buy',
+    qty: 10,
+    type: 'market',
+    tif: 'day',
+    limit_price: null,
+    stop_price: null,
+    created_at: '2026-01-05T15:00:00Z',
+    status: 'working',
+    triggered_at: null,
+    filled_at: null,
+    fill_price: null,
+    closed_at: null,
+    reason: null,
+    ...overrides,
+  }
+}
+
 function tick(overrides: Partial<TickMessage> = {}): TickMessage {
   return {
     type: 'tick',
     clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z' },
     regime: 'normal',
     quotes: [quote('SPY', 582, 580), quote('AAPL', 228, 230)],
+    account: {
+      starting_cash: 100_000,
+      cash: 94_180,
+      buying_power: 94_180,
+      net_liq: 100_000,
+      day_pnl: 20,
+      realized: 0,
+      positions: [
+        { symbol: 'SPY', qty: 10, avg_cost: 580, last: 582, market_value: 5820, unrealized: 20, unrealized_pct: 0.34 },
+      ],
+    },
     ...overrides,
   }
 }
@@ -84,6 +116,45 @@ describe('App', () => {
     // 15:30 UTC is 10:30 in New York in January.
     expect(screen.getByText('10:30:00')).toBeInTheDocument()
     expect(screen.getByText('Volatile')).toBeInTheDocument()
+  })
+
+  it('shows account totals in the top bar and positions in the tab', () => {
+    render(<App />)
+    push(tick())
+    const banner = screen.getByRole('banner')
+    expect(within(banner).getByText('$100,000.00')).toBeInTheDocument()
+    expect(within(banner).getByText('$94,180.00')).toBeInTheDocument()
+    expect(within(banner).getByText('+$20.00')).toHaveClass('up')
+    const positions = screen.getByRole('tabpanel')
+    expect(within(positions).getByText('$5,820.00')).toBeInTheDocument()
+    expect(within(positions).getByText('+$20.00 (+0.34%)')).toHaveClass('up')
+  })
+
+  it('shows orders from the stream with a cancel button for working ones', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    push(tick())
+    act(() => {
+      FakeWebSocket.last!.onmessage?.({
+        data: JSON.stringify({
+          type: 'orders',
+          orders: [
+            order({ id: 2, status: 'working', type: 'limit', limit_price: 570 }),
+            order({ id: 1, status: 'filled', fill_price: 580.03, filled_at: '2026-01-05T15:00:00Z' }),
+          ],
+        }),
+      })
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Orders (1 working)' }))
+    const panel = screen.getByRole('tabpanel')
+    expect(within(panel).getByText('Limit 570.00')).toBeInTheDocument()
+    expect(within(panel).getByText('Filled at 580.03')).toBeInTheDocument()
+    fireEvent.click(within(panel).getByRole('button', { name: 'Cancel order 2' }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/orders/2', expect.objectContaining({ method: 'DELETE' }))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    expect(within(screen.getByRole('tabpanel')).getByText('-$5,800.30')).toBeInTheDocument()
   })
 
   it('selecting a watchlist row shows its quote detail', () => {

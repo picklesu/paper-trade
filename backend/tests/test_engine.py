@@ -224,3 +224,23 @@ def test_generated_through_tracks_furthest_session() -> None:
     engine = at(et(2026, 1, 9, 10, 0))
     engine.rewind(et(2026, 1, 6, 10, 0), new_future=False)
     assert engine.generated_through == date(2026, 1, 9)
+
+
+def test_save_and_restore_is_exact() -> None:
+    import json
+
+    engine = at(et(2026, 1, 8, 14, 0))
+    engine.rewind(et(2026, 1, 6, 10, 0), new_future=True)
+    engine.advance(et(2026, 1, 9, 11, 0))
+    restored = MarketEngine.from_state(json.loads(json.dumps(engine.to_state())))
+    assert restored.time == engine.time
+    assert prices(restored) == prices(engine)
+    restored.advance(et(2026, 1, 14, 12, 0))
+    engine.advance(et(2026, 1, 14, 12, 0))
+    assert prices(restored) == prices(engine)
+
+
+def test_prices_at_past_time() -> None:
+    t = et(2026, 1, 6, 11, 0)
+    engine = at(et(2026, 1, 8, 14, 0))
+    assert engine.prices_at(t) == prices(at(t))

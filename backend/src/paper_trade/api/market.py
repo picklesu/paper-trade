@@ -51,6 +51,7 @@ async def update_clock(update: ClockUpdate, request: Request) -> dict:
     elif update.paused is False:
         svc.clock.resume()
     # Push the new clock state right away instead of waiting for the next tick.
+    svc.save()
     svc.publish(svc.snapshot(), force=True)
     return svc.clock_state()
 
@@ -69,8 +70,9 @@ def parse_market_time(value: str) -> datetime:
 @router.get("/clock/goto")
 async def preview_goto(time: str, request: Request) -> dict:
     """What going to `time` would do, so the UI can confirm first."""
-    action, target = market(request).preview_goto(parse_market_time(time))
-    return {"action": action, "target": target.isoformat()}
+    svc = market(request)
+    action, target = svc.preview_goto(parse_market_time(time))
+    return {"action": action, "target": target.isoformat(), **svc.goto_details(action, target)}
 
 
 class Goto(BaseModel):

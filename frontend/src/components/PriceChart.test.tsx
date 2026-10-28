@@ -66,8 +66,11 @@ describe('PriceChart', () => {
   it('puts range and bar size in drop-downs when the chart is narrow', async () => {
     const fn = serve()
     const loads = () => fn.mock.calls.map(([u]) => new URL(u, 'http://x').searchParams).filter((p) => !p.has('end'))
-    // A ResizeObserver that reports a 400px-wide chart.
+    // A ResizeObserver that reports a 400px-wide chart, with buttons reaching 500px.
     const RO = globalThis.ResizeObserver
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return { left: 0, right: this.classList.contains('seg') ? 500 : 400, top: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON() {} } as DOMRect
+    })
     globalThis.ResizeObserver = class {
       cb: ResizeObserverCallback
       constructor(cb: ResizeObserverCallback) {
@@ -92,6 +95,7 @@ describe('PriceChart', () => {
       expect(loads()[2].get('interval')).toBe('15m')
     } finally {
       globalThis.ResizeObserver = RO
+      rect.mockRestore()
     }
   })
 

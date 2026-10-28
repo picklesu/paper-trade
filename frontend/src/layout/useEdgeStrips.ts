@@ -38,8 +38,6 @@ export function useEdgeStrips(
   useEffect(() => {
     if (!api) return
     sync.current = () => {
-      // While a group is maximized every other group is hidden too; keep the strips as they were.
-      if (api.hasMaximizedGroup()) return
       const layout = api.toJSON()
       const chart = api.getPanel('chart')?.group
       const chartId = chart?.api.location.type === 'grid' ? chart.id : undefined
@@ -61,7 +59,6 @@ export function useEdgeStrips(
       api.onDidRemovePanel(run),
       api.onDidActivePanelChange(run),
       api.onDidLayoutFromJSON(run),
-      api.onDidMaximizedGroupChange(run),
     ]
     return () => subs.forEach((s) => s.dispose())
   }, [api, peekRef, setPeek])
@@ -73,9 +70,8 @@ export function useEdgeStrips(
     const onDown = (e: PointerEvent) => {
       const target = e.target as Element
       const group = groupOf(api, peeking)
-      // Dragging a divider (dockview's sash) resizes the peeked group, and dockview draws the
-      // group's menus (such as the list of tabs that don't fit) outside the group.
-      if (!frame.current?.contains(target) || group?.element.contains(target) || target.closest('.edge-strip, .dv-sash, .dv-popover-anchor')) return
+      // Dragging a divider (dockview's sash) resizes the peeked group.
+      if (!frame.current?.contains(target) || group?.element.contains(target) || target.closest('.edge-strip, .dv-sash')) return
       setPeek(null)
       group?.api.setVisible(false)
       sync.current()

@@ -288,17 +288,6 @@ describe('workspace', () => {
     expect(stateOf('Watchlist')).toBe('Open')
   })
 
-  it("a click in dockview's popups keeps a peeked panel open", () => {
-    render(<App />)
-    const tab = stripTab('Watchlist')
-    fireEvent.click(tab)
-    // dockview draws its popups in an anchor at the top of the workspace, outside the group.
-    const row = document.createElement('div')
-    document.querySelector('.dv-popover-anchor')!.appendChild(row)
-    fireEvent.pointerDown(row)
-    expect(tab).toHaveAttribute('aria-pressed', 'true')
-  })
-
   it('saves collapsed panels as collapsed, even one being peeked at', () => {
     const { unmount } = render(<App />)
     setPanel('Order Entry', 'Open')

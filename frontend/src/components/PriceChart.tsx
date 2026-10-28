@@ -45,9 +45,7 @@ interface Props {
   header?: ReactNode
 }
 
-/** Below this chart width the range and bar size become drop-downs, so the bottom bar
- *  keeps to one row. */
-const COMPACT_WIDTH = 520
+
 
 const UP = '#22c55e'
 const DOWN = '#ef4444'
@@ -144,10 +142,23 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     indicators.current?.setData(next)
   }
 
-  // Compact controls when the chart is narrow.
+  // Range and bar size become drop-downs when every button doesn't fit on the bottom row.
+  // The full row's width is measured whenever it's showing, so switching back needs that much.
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const fullWidth = useRef(0)
   useEffect(() => {
     const el = root.current!
-    const observer = new ResizeObserver(([entry]) => setCompact(entry.contentRect.width > 0 && entry.contentRect.width < COMPACT_WIDTH))
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width
+      if (!width) return
+      const bar = toolbarRef.current
+      if (bar && !bar.querySelector('select') && bar.lastElementChild) {
+        // The buttons' extent (the row itself always spans the chart), plus its padding.
+        const left = bar.getBoundingClientRect().left
+        fullWidth.current = bar.lastElementChild.getBoundingClientRect().right - left + parseFloat(getComputedStyle(bar).paddingLeft)
+      }
+      setCompact(width < fullWidth.current)
+    })
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
@@ -380,7 +391,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
         }))
 
   const toolbar = (
-    <div className="chart-toolbar">
+    <div className="chart-toolbar" ref={toolbarRef}>
       {compact ? (
         <>
           <select

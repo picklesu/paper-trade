@@ -9,15 +9,36 @@ import {
 } from 'dockview-react'
 import 'dockview-react/dist/styles/dockview.css'
 import { type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useAppData } from './appDataContext'
 import { type CollapseControls, CollapseContext, CollapseSetterContext } from './collapseContext'
 import { EdgeStrip } from './EdgeStrip'
 import { type Edge, edgeOf, savedSizes, withHidden } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
 import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
-import { buildDefaultLayout, COMPONENTS, dockPanel, floatGroup, PANEL_IDS, type PanelId, panelState, type PanelState, tidySideColumn } from './panels'
+import { buildDefaultLayout, COMPONENTS, dockPanel, floatGroup, PANEL_IDS, type PanelId, panelState, type PanelState, sideColumnTidier } from './panels'
 import { snapFloatingResizes } from './floatingResize'
 import { snapPosition } from './snap'
 import { useEdgeStrips } from './useEdgeStrips'
+
+/** Panel titles with live counts, like a broker's "Orders (2 working)", shown on floating
+ *  windows' bars. Its own component so only it re-renders on every market tick. */
+function LiveTitles({ api }: { api: DockviewApi }) {
+  const { tick, orders } = useAppData()
+  const positions = tick?.account.positions.length ?? 0
+  const working = orders.filter((o) => o.status === 'working').length
+  useEffect(() => {
+    const update = () => {
+      api.getPanel('positions')?.api.setTitle(positions ? `Positions (${positions})` : 'Positions')
+      api.getPanel('orders')?.api.setTitle(working ? `Orders (${working} working)` : 'Orders')
+      api.groups.forEach(labelFloatingWindow)
+    }
+    update()
+    // A panel brought back starts with its plain title.
+    const sub = api.onDidAddPanel(update)
+    return () => sub.dispose()
+  }, [api, positions, working])
+  return null
+}
 
 function readStates(api: DockviewApi | null, peeking: string | null): Record<PanelId, PanelState> {
   return Object.fromEntries(PANEL_IDS.map((id) => [id, api ? panelState(api, id, peeking) : 'off'])) as Record<PanelId, PanelState>
@@ -33,7 +54,11 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!api) return
-    const sync = () => setStates(readStates(api, peeking))
+    // Only when a state changes: layout changes come in on every divider drag.
+    const sync = () => {
+      const next = readStates(api, peeking)
+      setStates((current) => (PANEL_IDS.every((id) => current[id] === next[id]) ? current : next))
+    }
     sync()
     const subs = [api.onDidAddPanel(sync), api.onDidRemovePanel(sync), api.onDidLayoutChange(sync), api.onDidLayoutFromJSON(sync)]
     return () => subs.forEach((s) => s.dispose())
@@ -50,7 +75,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
           const p = panel ?? dockPanel(api, id)
           if (p.group.api.location.type === 'grid') floatGroup(api, p.group)
         } else {
-          const p = dockPanel(api, id)
+          const p = dockPanel(api, id, state === 'open')
           if (state === 'collapsed') collapse?.collapse(p.group)
           else if (peeking === p.group.id) collapse?.pin()
         }
@@ -68,6 +93,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       <ApiSetterContext.Provider value={setApi}>
         <CollapseSetterContext.Provider value={setCollapse}>{children}</CollapseSetterContext.Provider>
       </ApiSetterContext.Provider>
+      {api && <LiveTitles api={api} />}
     </LayoutContext.Provider>
   )
 }
@@ -88,6 +114,7 @@ export function Workspace() {
   const peekRef = useRef<string | null>(null)
   const disposeSizes = useRef<() => void>(() => {})
   const disposeResizes = useRef<() => void>(() => {})
+  const disposeTidy = useRef<() => void>(() => {})
 
   const scheduleSave = (api: DockviewApi) => {
     window.clearTimeout(saveTimer.current)
@@ -150,11 +177,16 @@ export function Workspace() {
       }
     }
     tidy()
-    api.onDidAddGroup(tidy)
-    api.onDidLayoutChange(() => {
-      tidy()
-      tidySideColumn(api)
-    })
+    const tidyColumn = sideColumnTidier(api)
+    disposeTidy.current()
+    const subs = [
+      api.onDidAddGroup(tidy),
+      api.onDidLayoutChange(() => {
+        tidy()
+        tidyColumn()
+      }),
+    ]
+    disposeTidy.current = () => subs.forEach((s) => s.dispose())
     // Save shortly after any change (moves, resizes, floats, closes).
     api.onDidLayoutChange(() => scheduleSave(api))
     setApi(api)
@@ -164,7 +196,8 @@ export function Workspace() {
   return (
     <CollapseContext.Provider value={collapse}>
       <div className="workspace-frame" ref={frame}>
-        {EDGES.map((edge) => (
+        {/* Only edges with something collapsed: a strip re-renders on every tick for its counts. */}
+        {EDGES.filter((edge) => collapse.collapsed.some((g) => g.edge === edge)).map((edge) => (
           <EdgeStrip key={edge} edge={edge} />
         ))}
         <div className="dock-host" ref={host}>
@@ -198,8 +231,7 @@ type Size = { width: number; height: number }
  *  back, and grows with the window or when an edge strip comes or goes. Instead, put the
  *  other panels back to their width (beside the chart) or height (above or below it) from
  *  just before and let the chart's group take up the difference. (Only while the chart is
- *  docked, and never from a maximized layout, where the hidden groups report collapsed
- *  sizes.) Groups are tracked as objects, not ids: a new layout reuses ids. */
+ *  docked.) Groups are tracked as objects, not ids: a new layout reuses ids. */
 function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: SerializedDockview | null): () => void {
   const gridSizes = () =>
     new Map<DockviewGroupPanel, Size>(
@@ -218,7 +250,6 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     }
   }
   const sub = api.onDidLayoutChange(() => {
-    if (api.hasMaximizedGroup()) return // keep the pre-maximize sizes as the reference
     const now = gridSizes()
     // Those setSize calls raise another (batched) layout change, which records the result.
     if (now.size !== before.size || [...now.keys()].some((g) => !before.has(g))) restore(now)
@@ -230,7 +261,6 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     const { width, height } = entry.contentRect
     if (!width || !height || (width === api.width && height === api.height)) return
     api.layout(width, height)
-    if (api.hasMaximizedGroup()) return
     restore(gridSizes())
     before = gridSizes()
   })

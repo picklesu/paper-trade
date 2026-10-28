@@ -71,13 +71,22 @@ export function dockSpot(api: DockviewApi, id: PanelId): DockSpot {
 
 /** When the last shown panel leaves the side column (floated or closed) while others are
  *  collapsed in it, dockview keeps the column at its width, empty. Hiding a panel is what
- *  makes it give the space back, so show one collapsed panel and hide it again. */
-export function tidySideColumn(api: DockviewApi): void {
-  const docked = SIDE_PANELS.map((p) => api.getPanel(p)?.group).filter((g): g is DockviewGroupPanel => !!g && g.api.location.type === 'grid')
-  const chart = api.getPanel('chart')?.group
-  if (!docked.length || docked.some((g) => g.api.isVisible) || !chart || chart.api.location.type !== 'grid' || chart.width >= api.width - 1) return
-  docked[0].api.setVisible(true)
-  docked[0].api.setVisible(false)
+ *  makes it give the space back, so show one collapsed panel and hide it again. Returns the
+ *  check to run on each layout change; it acts only as the column goes from showing a panel
+ *  to showing none, so its own visibility changes can't set it off again. */
+export function sideColumnTidier(api: DockviewApi): () => void {
+  const docked = () => SIDE_PANELS.map((p) => api.getPanel(p)?.group).filter((g): g is DockviewGroupPanel => !!g && g.api.location.type === 'grid')
+  let showing = docked().some((g) => g.api.isVisible)
+  return () => {
+    const groups = docked()
+    const was = showing
+    showing = groups.some((g) => g.api.isVisible)
+    const chart = api.getPanel('chart')?.group
+    if (!was || showing || !groups.length || chart?.api.location.type !== 'grid' || chart.width >= api.width - 1) return
+    groups[0].api.setVisible(true)
+    groups[0].api.setVisible(false)
+    showing = false
+  }
 }
 
 /** Add a closed panel at its usual spot. */
@@ -88,24 +97,31 @@ function addPanel(api: DockviewApi, id: PanelId): IDockviewPanel {
   return api.addPanel({ id, component: id, title: PANELS[id].title, position, ...size })
 }
 
+/** Below this, a side panel came back squeezed to dockview's minimum, not sized by the user. */
+const SQUEEZED = 120
+
 /** Expand a group collapsed to an edge strip. A side column that was entirely collapsed
- *  comes back at its minimum width, so give it the usual width; a panel joining others in
- *  the column takes an even share of its height (the others shrink to make room). */
+ *  comes back at its minimum width, so give it the usual width; and if a panel in the column
+ *  ends up squeezed to its minimum height, share the height evenly. Sizes the user chose are
+ *  otherwise left alone. */
 export function showGroup(api: DockviewApi, group: DockviewGroupPanel): void {
   if (group.api.location.type !== 'grid' || group.api.isVisible) return
   group.api.setVisible(true)
   if (!SIDE_PANELS.includes(group.panels[0]?.id as PanelId)) return
-  if (group.width < SIDE_WIDTH * 0.75) group.api.setSize({ width: SIDE_WIDTH })
-  const stacked = SIDE_PANELS.map((p) => api.getPanel(p)?.group).filter((g) => g && g.api.location.type === 'grid' && g.api.isVisible).length
-  if (stacked > 1) group.api.setSize({ height: Math.round(api.height / stacked) })
+  if (group.width < SQUEEZED) group.api.setSize({ width: SIDE_WIDTH })
+  const stacked = SIDE_PANELS.map((p) => api.getPanel(p)?.group).filter((g): g is DockviewGroupPanel => !!g && g.api.location.type === 'grid' && g.api.isVisible)
+  if (stacked.length > 1 && stacked.some((g) => g.height < SQUEEZED)) {
+    const share = Math.round(api.height / stacked.length)
+    for (const g of stacked) g.api.setSize({ height: share })
+  }
 }
 
-/** Dock a panel and show it: bring it back if it's closed, out of its floating window, or
- *  out of the edge strip. */
-export function dockPanel(api: DockviewApi, id: PanelId): IDockviewPanel {
+/** Dock a panel: bring it back if it's closed, or out of its floating window; and unless
+ *  it's about to be collapsed, show it (out of the edge strip). */
+export function dockPanel(api: DockviewApi, id: PanelId, show = true): IDockviewPanel {
   const panel = api.getPanel(id) ?? addPanel(api, id)
   if (panel.group.api.location.type !== 'grid') dockGroup(api, panel.group)
-  showGroup(api, panel.group)
+  if (show) showGroup(api, panel.group)
   return panel
 }
 
@@ -133,7 +149,9 @@ const CASCADE = 32
 /** Pop a docked group out as a floating window, cascading from the top-right so a new
  *  window never hides one that's already floating. */
 export function floatGroup(api: DockviewApi, group: DockviewGroupPanel): void {
-  showGroup(api, group)
+  // A collapsed panel floats straight out of the column (showing it first would leave the
+  // column open and empty once it's gone), then shows in its window.
+  const hidden = !group.api.isVisible
   const width = Math.max(FLOAT_MIN.width, Math.min(FLOAT_SIZE.width, api.width - 48))
   const height = Math.max(FLOAT_MIN.height, Math.min(FLOAT_SIZE.height, api.height - 48))
   const n = api.groups.filter((g) => g.api.location.type === 'floating').length % 8
@@ -141,6 +159,7 @@ export function floatGroup(api: DockviewApi, group: DockviewGroupPanel): void {
   const x = Math.max(0, api.width - width - 72 - n * CASCADE)
   const y = Math.min(44 + n * CASCADE, Math.max(0, api.height - height))
   api.addFloatingGroup(group, { x, y, width, height })
+  if (hidden || !group.api.isVisible) group.api.setVisible(true)
 }
 
 /** How a panel is shown: docked and open, collapsed to its edge strip (or only peeked at),

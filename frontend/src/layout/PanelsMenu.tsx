@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLayout } from './layoutContext'
 import { PANEL_IDS, PANELS, type PanelState } from './panels'
 
 const CHOICES: [PanelState, string, string][] = [
@@ -9,7 +10,6 @@ const CHOICES: [PanelState, string, string][] = [
 ]
 // The chart is the main view: always shown, docked or floating.
 const CHART_CHOICES = CHOICES.filter(([state]) => state === 'open' || state === 'floating')
-import { useLayout } from './layoutContext'
 
 /** Top-bar menu that places each panel (open, collapsed, floating or off) and resets the layout. */
 export function PanelsMenu() {

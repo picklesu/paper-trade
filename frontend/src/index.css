@@ -32,6 +32,9 @@ body {
 
 /* Top bar */
 .topbar {
+  /* Above the workspace, so its menus open over floating windows. */
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 24px;
@@ -147,30 +150,136 @@ body {
   background: var(--down);
 }
 
-/* Workspace grid */
+/* Workspace: dockview fills the space under the top bar */
 .workspace {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: 240px 1fr 300px;
-  grid-template-rows: minmax(0, 1fr) 220px;
-  grid-template-areas:
-    'watchlist chart ticket'
-    'bottom bottom bottom';
-  gap: 1px;
+  position: relative;
+  /* Keep dockview's floating windows (z-index 999) inside the workspace's layer. */
+  isolation: isolate;
+}
+.workspace > div {
+  position: absolute;
+  inset: 0;
+}
+/* Match dockview's dark theme to the app's palette (more specific than the theme's own
+   `.dockview-theme-dark` block, which sits on dockview's shell element). */
+.workspace .dockview-theme-dark {
+  --dv-background-color: var(--bg);
+  --dv-group-view-background-color: var(--panel);
+  --dv-tabs-and-actions-container-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--panel);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--panel);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--bg);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--text);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--text);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-separator-border: var(--border);
+  --dv-paneview-header-border-color: var(--border);
+  --dv-active-sash-color: var(--accent);
+  --dv-drag-over-background-color: rgba(59, 130, 246, 0.18);
+  --dv-drag-over-border-color: var(--accent);
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-floating-box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --dv-floating-titlebar-background-color: var(--bg);
+}
+/* dockview 8.5's CSS sets `--dv-overlay-z-index: var(--dv-overlay-z-index, 999)` on floating
+   windows: a self-reference, which browsers treat as invalid, so floating windows and their
+   resize handles lose their stacking order (the left handle ends up under the content).
+   Set it plainly. */
+.workspace .dv-resize-container,
+.workspace .dv-render-overlay {
+  --dv-overlay-z-index: 999;
+}
+/* The bar above a floating window's tabs moves it. */
+.workspace .dv-floating-titlebar {
+  cursor: grab;
+}
+.workspace .dv-floating-titlebar:active {
+  cursor: grabbing;
+}
+.dock-panel {
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+}
+.group-actions {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 4px;
+  gap: 2px;
+}
+.group-action {
+  width: 24px;
+  height: 22px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.group-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+.panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px;
+}
+
+/* Panels menu */
+.panels-menu {
+  position: relative;
+}
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  width: 260px;
+  padding: 6px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.menu-item .check {
+  width: 14px;
+  color: var(--accent);
+}
+.menu-sep {
+  height: 1px;
+  margin: 6px 0;
   background: var(--border);
 }
-.watchlist {
-  grid-area: watchlist;
-}
-.chart {
-  grid-area: chart;
-}
-.ticket {
-  grid-area: ticket;
-}
-.bottom {
-  grid-area: bottom;
+.menu-hint {
+  margin: 6px 12px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .panel {
@@ -381,7 +490,7 @@ body {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 100;
   display: flex;
   align-items: flex-start;
   justify-content: center;

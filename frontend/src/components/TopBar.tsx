@@ -1,6 +1,7 @@
 import type { ConnectionStatus } from '../lib/stream'
 import { direction, dollars, signedDollars } from '../lib/format'
 import type { Account, ClockState, ProgressMessage, Regime } from '../lib/types'
+import { PanelsMenu } from '../layout/PanelsMenu'
 import { ClockControls } from './ClockControls'
 
 interface Props {
@@ -31,6 +32,7 @@ export function TopBar({ status, clock, regime, progress, account }: Props) {
         />
       </div>
       <ClockControls clock={clock} regime={regime} progress={progress} />
+      <PanelsMenu />
       <div className={`conn conn-${status}`} role="status">
         <span className="dot" />
         {STATUS_LABEL[status]}

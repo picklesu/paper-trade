@@ -37,7 +37,8 @@ async def stream(ws: WebSocket) -> None:
             await ws.send_json(svc.snapshot())
             while True:
                 await ws.send_json(await queue.get())
-    except WebSocketDisconnect:
+    except* WebSocketDisconnect:
+        # The client went away (possibly mid-send, which surfaces through the task group).
         pass
     finally:
         svc.unsubscribe(queue)

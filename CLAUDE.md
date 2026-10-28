@@ -44,6 +44,9 @@ the same folder. Installed dependencies are platform-specific:
 - **Adding a frontend package:** run `npm install <pkg>` in the scratchpad mirror, then copy
   `package.json` and `package-lock.json` back into `frontend/`. `server.sh on/restart`
   reinstalls on the Mac when the lockfile is newer than `node_modules/.package-lock.json`.
+- **New dependencies:** pin an exact version at least 2 weeks old (check `npm view <pkg> time`),
+  and pin transitive packages from the same project with `overrides` if a caret range would
+  pull in something newer (dockview does this).
 - CI (`.github/workflows/ci.yml`) must be green before merging: `gh pr checks <N> --watch`.
 
 ## Commands

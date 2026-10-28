@@ -116,8 +116,11 @@ export interface BarsPage {
 }
 
 /** Chart bars, oldest first: the latest `count`, or those before `end` (Unix seconds). */
-export function fetchBars(symbol: string, interval: Interval, end?: number, count = 500): Promise<BarsPage> {
+export async function fetchBars(symbol: string, interval: Interval, end?: number, count = 500): Promise<BarsPage> {
   const params = new URLSearchParams({ symbol, interval, count: String(count) })
   if (end !== undefined) params.set('end', new Date(end * 1000).toISOString())
-  return send(`/api/bars?${params}`, 'GET')
+  const page = await send<Partial<BarsPage>>(`/api/bars?${params}`, 'GET')
+  // Never hand the chart something it can't draw.
+  if (!Array.isArray(page?.bars)) throw new Error('unexpected response from the server')
+  return { bars: page.bars, more: Boolean(page.more) }
 }

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import type { Order, Quote, TickMessage } from './lib/types'
@@ -84,33 +84,47 @@ function push(msg: TickMessage) {
   })
 }
 
+/** A workspace panel's content, by title (inactive tabs aren't rendered until shown). */
+function panel(name: string): HTMLElement {
+  const el = document.querySelector<HTMLElement>(`[data-panel="${name}"]`)
+  if (!el) throw new Error(`panel ${name} is not shown`)
+  return el
+}
+const hasPanel = (name: string) => document.querySelector(`[data-panel="${name}"]`) !== null
+
+/** Click a workspace tab by its title. */
+function openTab(title: string | RegExp) {
+  const tab = screen.getAllByText(title).find((el) => el.closest('.dv-tab'))?.closest('.dv-tab')
+  if (!tab) throw new Error(`no tab ${title}`)
+  // dockview activates a tab on a primary-button pointer press.
+  fireEvent.pointerDown(tab, { button: 0 })
+  fireEvent.click(tab)
+}
+
 describe('App', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('renders the main panels before data arrives', () => {
+  it('lays out the default workspace before data arrives', () => {
     render(<App />)
-    for (const name of ['Watchlist', 'Chart', 'Order Entry']) {
-      expect(screen.getByRole('region', { name })).toBeInTheDocument()
+    for (const name of ['Watchlist', 'Chart', 'Order Entry', 'Positions']) {
+      expect(panel(name)).toBeInTheDocument()
     }
-    expect(screen.getByRole('status')).toHaveTextContent('Connecting')
-    expect(screen.getByRole('region', { name: 'Watchlist' })).toHaveTextContent('Waiting for market data')
-  })
-
-  it('switches bottom tabs', () => {
-    render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: 'Orders' }))
-    expect(screen.getByRole('tab', { name: 'Orders' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('No orders yet')
+    // Orders and Activity are tabs behind Positions.
+    for (const title of ['Orders', 'Activity']) {
+      expect(screen.getAllByText(title).some((el) => el.closest('.dv-tab'))).toBe(true)
+    }
+    expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent('Connecting')
+    expect(panel('Watchlist')).toHaveTextContent('Waiting for market data')
   })
 
   it('shows streamed quotes, clock and regime', () => {
     render(<App />)
     push(tick({ regime: 'volatile' }))
 
-    expect(screen.getByRole('status')).toHaveTextContent('Connected')
-    const watchlist = screen.getByRole('region', { name: 'Watchlist' })
+    expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent('Connected')
+    const watchlist = panel('Watchlist')
     expect(within(watchlist).getByText('SPY')).toBeInTheDocument()
     expect(within(watchlist).getByText('+0.34%')).toHaveClass('up')
     expect(within(watchlist).getByText('-0.87%')).toHaveClass('down')
@@ -119,16 +133,16 @@ describe('App', () => {
     expect(screen.getByText('Volatile')).toBeInTheDocument()
   })
 
-  it('shows account totals in the top bar and positions in the tab', () => {
+  it('shows account totals in the top bar and positions in their panel', () => {
     render(<App />)
     push(tick())
     const banner = screen.getByRole('banner')
     expect(within(banner).getByText('$100,000.00')).toBeInTheDocument()
     expect(within(banner).getByText('$94,180.00')).toBeInTheDocument()
     expect(within(banner).getByText('+$20.00')).toHaveClass('up')
-    const positions = screen.getByRole('tabpanel')
-    expect(within(positions).getByText('$5,820.00')).toBeInTheDocument()
-    expect(within(positions).getByText('+$20.00 (+0.34%)')).toHaveClass('up')
+    expect(within(panel('Positions')).getByText('$5,820.00')).toBeInTheDocument()
+    expect(within(panel('Positions')).getByText('+$20.00 (+0.34%)')).toHaveClass('up')
+    expect(screen.getAllByText('Positions (1)').some((el) => el.closest('.dv-tab'))).toBe(true)
   })
 
   it('shows orders from the stream with a cancel button for working ones', async () => {
@@ -147,31 +161,33 @@ describe('App', () => {
         }),
       })
     })
-    fireEvent.click(screen.getByRole('tab', { name: 'Orders (1 working)' }))
-    const panel = screen.getByRole('tabpanel')
-    expect(within(panel).getByText('Limit 570.00')).toBeInTheDocument()
-    expect(within(panel).getByText('Filled at 580.03')).toBeInTheDocument()
-    fireEvent.click(within(panel).getByRole('button', { name: 'Cancel order 2' }))
+    openTab('Orders (1 working)')
+    await waitFor(() => expect(hasPanel('Orders')).toBe(true))
+    const orders = panel('Orders')
+    expect(within(orders).getByText('Limit 570.00')).toBeInTheDocument()
+    expect(within(orders).getByText('Filled at 580.03')).toBeInTheDocument()
+    fireEvent.click(within(orders).getByRole('button', { name: 'Cancel order 2' }))
     expect(fetchMock).toHaveBeenCalledWith('/api/orders/2', expect.objectContaining({ method: 'DELETE' }))
 
     // Filters narrow the list.
-    fireEvent.click(within(panel).getByRole('button', { name: 'Filled (1)' }))
-    expect(within(panel).queryByText('Limit 570.00')).not.toBeInTheDocument()
-    expect(within(panel).getByText('Filled at 580.03')).toBeInTheDocument()
+    fireEvent.click(within(orders).getByRole('button', { name: 'Filled (1)' }))
+    expect(within(orders).queryByText('Limit 570.00')).not.toBeInTheDocument()
+    expect(within(orders).getByText('Filled at 580.03')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
-    expect(within(screen.getByRole('tabpanel')).getByText('-$5,800.30')).toBeInTheDocument()
+    openTab('Activity')
+    await waitFor(() => expect(hasPanel('Activity')).toBe(true))
+    expect(within(panel('Activity')).getByText('-$5,800.30')).toBeInTheDocument()
   })
 
-  it('selecting a watchlist row shows its quote detail', () => {
+  it('selecting a watchlist row updates the chart and order entry', () => {
     render(<App />)
     push(tick())
-    const chart = screen.getByRole('region', { name: 'Chart' })
-    expect(chart).toHaveTextContent('SPY Inc')
+    expect(panel('Chart')).toHaveTextContent('SPY Inc')
 
-    fireEvent.click(screen.getByText('AAPL'))
-    expect(chart).toHaveTextContent('AAPL Inc')
-    expect(chart).toHaveTextContent('228.00')
+    fireEvent.click(within(panel('Watchlist')).getByText('AAPL'))
+    expect(panel('Chart')).toHaveTextContent('AAPL Inc')
+    expect(panel('Chart')).toHaveTextContent('228.00')
+    expect(panel('Order Entry')).toHaveTextContent('AAPL')
   })
 
   it('speed and pause buttons call the clock API', async () => {
@@ -194,6 +210,67 @@ describe('App', () => {
     push(tick({ clock: { time: '2026-01-05T15:30:00Z', speed: 10, paused: true, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z', session_open: '2026-01-05T14:30:00Z', timeline: 0, building_history: false } }))
     expect(screen.getByRole('button', { name: 'Resume market' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '10×' })).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+describe('workspace', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('the Panels menu hides and restores panels', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    const menu = screen.getByRole('menu', { name: 'Panels' })
+    const watchlist = within(menu).getByRole('menuitemcheckbox', { name: /Watchlist/ })
+    expect(watchlist).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(watchlist)
+    expect(hasPanel('Watchlist')).toBe(false)
+    expect(within(menu).getByRole('menuitemcheckbox', { name: /Watchlist/ })).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Watchlist/ }))
+    expect(panel('Watchlist')).toBeInTheDocument()
+  })
+
+  it('pops a panel out as a floating window and docks it back', () => {
+    render(<App />)
+    const floatButtons = () => screen.getAllByRole('button', { name: 'Float panel' })
+    const before = floatButtons().length
+    fireEvent.click(floatButtons()[0])
+    expect(screen.getAllByRole('button', { name: 'Dock panel' })).toHaveLength(1)
+    expect(document.querySelectorAll('.dv-resize-container')).toHaveLength(1) // dockview's floating window
+    fireEvent.click(screen.getByRole('button', { name: 'Dock panel' }))
+    expect(screen.queryByRole('button', { name: 'Dock panel' })).not.toBeInTheDocument()
+    expect(floatButtons()).toHaveLength(before)
+  })
+
+  it('remembers the layout across reloads, and Reset layout restores the default', async () => {
+    const { unmount } = render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Order Entry/ }))
+    // The layout is saved shortly after it changes.
+    await waitFor(() => {
+      const saved = localStorage.getItem('paper-trade.layout.v1') ?? ''
+      expect(saved).toContain('"watchlist"')
+      expect(saved).not.toContain('"ticket"')
+    })
+    unmount()
+
+    render(<App />)
+    expect(panel('Watchlist')).toBeInTheDocument()
+    expect(hasPanel('Order Entry')).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
+    expect(panel('Order Entry')).toBeInTheDocument()
+  })
+
+  it('ignores a corrupted saved layout', () => {
+    localStorage.setItem('paper-trade.layout.v1', '{"grid": "nonsense"}')
+    render(<App />)
+    expect(panel('Chart')).toBeInTheDocument()
+    expect(panel('Order Entry')).toBeInTheDocument()
   })
 })
 

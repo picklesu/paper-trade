@@ -10,23 +10,36 @@ _Last updated: 2026-10-27, after Phase 2b was merged._
 | CI (GitHub Actions: tests, build, lint on every PR) | Merged | #10 |
 | 4. Interactive charts + 5 years of history | Merged | #11 |
 | 5. Indicators | Merged | #12 |
-| **6. Watchlists and quotes** | **Next. Not started.** | — |
+| 5.5a. Customizable workspace (dockview): docking, floating windows, snapping, resize, maximize, Panels menu, saved layout | Merged | #13 |
+| **5.5b. Workspace, next steps** | **Next.** See below. | — |
+| 6. Watchlists and quotes | After 5.5. | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Phase 6: watchlists and quotes** (README roadmap). Agree the scope with the user first. Ideas:
-editable watchlists (add or remove symbols from those available, several named lists), more
-columns (bid/ask, volume, day range, 52-week range from history), sorting, and a fuller quote
-panel. Adding symbols beyond the fixed 10 would mean extending `market/symbols.py` and the
-engine's symbol arrays. Changing the symbol set changes every price path (the random draws are
-per symbol column), so treat that as a new market or make draws per symbol.
+**The workspace (Phase 5.5) is being built in small steps, at the user's request.** Their
+requirements (2026-10-28): the chart is the main view; the other views are collapsible or pop
+out; every view is resizable and snaps to edges; floating windows can overlap; the UI/UX should
+be smooth and intuitive. Their decisions: **in-app floating windows first (dockview)**; **no
+multiple copies of a view**; otherwise follow Claude's recommendations (docked panels shrink the
+chart and floating ones cover it; layout saved per browser; laptop/desktop first).
 
-User preferences so far: a **fully interactive** chart; ranges from 1 minute to 5 years; a
-standard indicator set. **The user is not QA**: verify everything (tests, build, lint with
-`--deny-warnings`, a headless-browser check that **looks at screenshots**, green CI) before
-merging, and don't ask them to test each phase.
+Step 1 (done, #13): see Architecture → `layout/`. Next steps, smallest first:
+1. **Collapse panels to edge strips**: a thin tab on the left/right/bottom edge that expands
+   on click and can be pinned, like VS Code. dockview's auto-hide edge groups are in its paid
+   enterprise package, so build this ourselves, e.g. hide the group
+   (`group.api.setVisible(false)`) and render our own edge strip of buttons.
+2. **Layout presets**: "Default", "Chart focus" (side panels collapsed), "Trading", plus saving
+   the current layout under a name.
+3. **Separate browser windows** (dockview `addPopoutGroup`), optional, for second monitors.
+   The OS places them; the web page can't snap them to screen edges.
+4. **Narrow screens**: stacked tabs instead of floating windows.
+Then Phase 6 (watchlists and quotes) adds its views as panels.
+
+**The user is not QA**: verify everything (tests, build, lint with `--deny-warnings`, a
+headless-browser check that **looks at screenshots**, green CI) before merging, and don't ask
+them to test each phase.
 
 ## Going back in time (decided by the user; built in 2a + 2b)
 
@@ -126,16 +139,37 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     they run on the event loop's thread; a plain `def` runs in a worker thread and races the
     tick loop.
 - **frontend/** (React 19, TypeScript, Vite, Vitest)
+  - `layout/`: the workspace (dockview-react **8.5.1, pinned with `overrides` for dockview and
+    dockview-core**). `AppData.tsx`/`appDataContext.ts` hold the stream data and the selected
+    symbol, shared by panels. `PanelViews.tsx` has the panel components; each is wrapped in
+    `<div class="dock-panel" data-panel="Title">` (dockview already exposes each group as a
+    region, so no second landmark). `panels.ts` is the registry, `buildDefaultLayout` (chart
+    centre, watchlist left 250px, order entry right 300px, Positions/Orders/Activity tabbed
+    below, 220px) and `reopenPanel`. `Workspace.tsx` contains `LayoutProvider` (the dockview API
+    for the Panels menu; live tab titles "Positions (n)" and "Orders (n working)"),
+    `Workspace` (restore from `localStorage` `paper-trade.layout.v1`, falling back to the
+    default when it's bad; save 300ms after changes; snapping through
+    `transformFloatingGroupDrag` → `snap.ts`), `keepSidePanelSizes` (when a group leaves the
+    grid, the others go back to their previous sizes and the chart takes the space), and
+    `GroupActions` (⤢ maximize, ⧉ float / ⇲ dock). `PanelsMenu.tsx`: show or hide panels, Reset
+    layout.
+  - **Layering:** `.topbar` has z-index 1 over `.workspace` (`isolation: isolate`). Dialogs go
+    through `components/Modal.tsx`, a portal to `<body>` at z-index 100. **dockview 8.5 CSS
+    bug:** `.dv-resize-container { --dv-overlay-z-index: var(--dv-overlay-z-index, 999) }` refers
+    to itself, which makes it invalid, so floating windows and their resize handles lose their
+    z-index (the left handle ended up under the content). `index.css` sets it plainly. The
+    `className` prop doesn't reach an ancestor of the panels, so theme variables are
+    overridden with `.workspace .dockview-theme-dark`.
   - `lib/stream.ts`: one WebSocket with auto-reconnect. `useStream()` returns the latest tick
     (quotes, clock, account), the orders list, and any fast-forward progress (cleared by the
     next tick).
-  - `components/`: `TopBar`, `ClockControls` (Go to…, pause, speeds from `clock.speeds`,
+  - `components/`: `TopBar` (plus the Panels menu), `ClockControls` (Go to…, pause, speeds from `clock.speeds`,
     regime badge or progress), `GoToDialog` (picker with ±day/week shortcuts → preview → forward
     immediately / rewind confirmation with replay or new future / new-market warning),
     `Watchlist` (tick flashes), `QuoteDetail`, `OrderTicket` (form → `OrderReview` from the
     server preview → place; `OrderStatusLine` follows the placed order through the stream,
-    including replacements), `BottomTabs` (Positions / Orders with filters, Modify
-    (`ModifyOrderDialog`) and Cancel / Activity, plus "Reset account…"),
+    including replacements), `AccountViews` (Positions with "Reset account…", Orders with filters, Modify
+    (`ModifyOrderDialog`) and Cancel, Activity),
     `ResetAccountDialog`, `TifSelect`, `Panel`. `lib/orders.ts`: shared status wording
     (`statusText`, `describeOrder`), time-in-force labels, and the replacement lookup.
     Order ids are never reused (`last_order_id` in the store), even after a rewind. The top bar
@@ -162,7 +196,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 83 (Vitest + Testing Library). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 91 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

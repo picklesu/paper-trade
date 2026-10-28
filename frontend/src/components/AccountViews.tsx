@@ -1,3 +1,4 @@
+/** The account views: positions, orders and trade activity (each a workspace panel). */
 import { useState } from 'react'
 import { cancelOrder } from '../lib/api'
 import { direction, dollars, marketStamp, orderTypeLabel, percent, price, signedDollars } from '../lib/format'
@@ -7,60 +8,26 @@ import { ModifyOrderDialog } from './ModifyOrderDialog'
 import { Placeholder } from './Panel'
 import { ResetAccountDialog } from './ResetAccountDialog'
 
-interface Props {
-  account: Account | null
-  orders: Order[]
-  onSelect: (symbol: string) => void
-}
-
-type TabId = 'positions' | 'orders' | 'activity'
-
-export function BottomTabs({ account, orders, onSelect }: Props) {
-  const [active, setActive] = useState<TabId>('positions')
+export function Positions({ account, onSelect }: { account: Account | null; onSelect: (s: string) => void }) {
   const [showReset, setShowReset] = useState(false)
-  const working = orders.filter((o) => o.status === 'working')
-  const fills = orders.filter((o) => o.status === 'filled')
-
-  const tabs: { id: TabId; label: string }[] = [
-    { id: 'positions', label: `Positions${account?.positions.length ? ` (${account.positions.length})` : ''}` },
-    { id: 'orders', label: `Orders${working.length ? ` (${working.length} working)` : ''}` },
-    { id: 'activity', label: 'Activity' },
-  ]
-
   return (
-    <section className="panel bottom">
-      <div className="tabs" role="tablist">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            aria-selected={t.id === active}
-            className={t.id === active ? 'tab active' : 'tab'}
-            onClick={() => setActive(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-        <div className="tabs-spacer" />
-        {account && (
-          <button className="ctl tabs-action" onClick={() => setShowReset(true)}>
+    <>
+      {account && (
+        <div className="panel-toolbar">
+          <button className="ctl" onClick={() => setShowReset(true)}>
             Reset account…
           </button>
-        )}
-      </div>
-      <div className="panel-body" role="tabpanel">
-        {active === 'positions' && <Positions account={account} onSelect={onSelect} />}
-        {active === 'orders' && <Orders orders={orders} />}
-        {active === 'activity' && <Activity fills={fills} />}
-      </div>
+        </div>
+      )}
+      <PositionsTable account={account} onSelect={onSelect} />
       {showReset && account && (
         <ResetAccountDialog startingCash={account.starting_cash} onClose={() => setShowReset(false)} />
       )}
-    </section>
+    </>
   )
 }
 
-function Positions({ account, onSelect }: { account: Account | null; onSelect: (s: string) => void }) {
+function PositionsTable({ account, onSelect }: { account: Account | null; onSelect: (s: string) => void }) {
   if (!account?.positions.length) return <Placeholder text="No positions. Use the order ticket to buy shares." />
   return (
     <table className="grid-table clickable">
@@ -106,7 +73,7 @@ function updatedAt(o: Order): string {
   return o.filled_at ?? o.closed_at ?? o.triggered_at ?? o.created_at
 }
 
-function Orders({ orders }: { orders: Order[] }) {
+export function Orders({ orders }: { orders: Order[] }) {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<FilterId>('all')
   const [modifying, setModifying] = useState<number | null>(null)
@@ -199,7 +166,8 @@ function Orders({ orders }: { orders: Order[] }) {
   )
 }
 
-function Activity({ fills }: { fills: Order[] }) {
+export function Activity({ orders }: { orders: Order[] }) {
+  const fills = orders.filter((o) => o.status === 'filled')
   if (!fills.length) return <Placeholder text="No trades yet." />
   const byTime = [...fills].sort((a, b) => b.filled_at!.localeCompare(a.filled_at!))
   return (

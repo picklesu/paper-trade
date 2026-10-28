@@ -21,3 +21,11 @@ describe('api errors', () => {
     await expect(previewOrder({ symbol: 'SPY', side: 'buy', qty: 1, type: 'market', tif: 'day' })).rejects.toThrow('Nope')
   })
 })
+
+describe('fetchBars', () => {
+  it('rejects a response without bars instead of passing it on', async () => {
+    const { fetchBars } = await import('./api')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }))
+    await expect(fetchBars('SPY', '5m')).rejects.toThrow('unexpected response')
+  })
+})

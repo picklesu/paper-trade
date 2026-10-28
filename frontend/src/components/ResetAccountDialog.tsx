@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Modal } from './Modal'
 import { resetAccount } from '../lib/api'
 
 interface Props {
@@ -24,37 +25,29 @@ export function ResetAccountDialog({ startingCash, onClose }: Props) {
   }
 
   return (
-    <div className="dialog-backdrop" onClick={onClose}>
-      <div
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reset-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 id="reset-title">Reset account?</h2>
-        <p>
-          All orders, trades and positions are erased and the account starts over with fresh cash. The market keeps
-          its current date and prices.
-        </p>
-        <label className="field">
-          <span>Starting cash ($)</span>
-          <input type="number" min={1} step={1000} value={cash} onChange={(e) => setCash(e.target.value)} />
-        </label>
-        <div className="dialog-actions">
-          <button className="btn danger" disabled={busy || !(Number(cash) > 0)} onClick={confirm}>
-            Reset account
-          </button>
-          <button className="btn" disabled={busy} onClick={onClose}>
-            Cancel
-          </button>
-        </div>
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
+    <Modal labelledBy="reset-title" onClose={onClose}>
+      <h2 id="reset-title">Reset account?</h2>
+      <p>
+        All orders, trades and positions are erased and the account starts over with fresh cash. The market keeps
+        its current date and prices.
+      </p>
+      <label className="field">
+        <span>Starting cash ($)</span>
+        <input type="number" min={1} step={1000} value={cash} onChange={(e) => setCash(e.target.value)} />
+      </label>
+      <div className="dialog-actions">
+        <button className="btn danger" disabled={busy || !(Number(cash) > 0)} onClick={confirm}>
+          Reset account
+        </button>
+        <button className="btn" disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
       </div>
-    </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </Modal>
   )
 }

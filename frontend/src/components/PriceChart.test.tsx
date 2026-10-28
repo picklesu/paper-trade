@@ -49,24 +49,27 @@ describe('PriceChart', () => {
 
   it('range presets pick a bar size; bar sizes can be chosen directly', async () => {
     const fn = serve()
+    // Full loads only (older pages, which may follow, carry an `end`).
+    const loads = () => fn.mock.calls.map(([u]) => new URL(u, 'http://x').searchParams).filter((p) => !p.has('end'))
     render(<PriceChart quote={quote} clock={clock} orders={[]} />)
-    await waitFor(() => expect(fn).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(loads()).toHaveLength(1))
     fireEvent.click(screen.getByRole('button', { name: '5Y' }))
-    await waitFor(() => expect(fn).toHaveBeenCalledTimes(2))
-    expect(param(fn, 1, 'interval')).toBe('1W')
+    await waitFor(() => expect(loads()).toHaveLength(2))
+    expect(loads()[1].get('interval')).toBe('1W')
     fireEvent.click(screen.getByRole('button', { name: '15-minute bars' }))
-    await waitFor(() => expect(fn).toHaveBeenCalledTimes(3))
-    expect(param(fn, 2, 'interval')).toBe('15m')
+    await waitFor(() => expect(loads()).toHaveLength(3))
+    expect(loads()[2].get('interval')).toBe('15m')
     expect(screen.getByRole('button', { name: '15-minute bars' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: '5Y' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('reloads when the timeline changes (a jump or rewind)', async () => {
     const fn = serve()
+    const loads = () => fn.mock.calls.filter(([u]) => !String(u).includes('end=')).length
     const { rerender } = render(<PriceChart quote={quote} clock={clock} orders={[]} />)
-    await waitFor(() => expect(fn).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(loads()).toBe(1))
     rerender(<PriceChart quote={quote} clock={{ ...clock, timeline: 1 }} orders={[]} />)
-    await waitFor(() => expect(fn).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(loads()).toBe(2))
   })
 
   it('marks your fills on the chart', async () => {
@@ -173,6 +176,7 @@ describe('PriceChart races', () => {
     vi.stubGlobal('fetch', fn)
     const { rerender } = render(<PriceChart quote={quote} clock={clock} orders={[]} />)
     await waitFor(() => expect(calls.candleData).toHaveLength(2))
+    await new Promise((r) => setTimeout(r, 120)) // the fresh view settles
     act(() => calls.onRangeChange!({ from: 0, to: 50 })) // scrolled back: load older SPY bars
     await waitFor(() => expect(fn.mock.calls.some(([u]) => String(u).includes('end='))).toBe(true))
 

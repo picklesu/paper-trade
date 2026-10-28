@@ -234,7 +234,8 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     if (!ts) return
     const onRange = (range: { from: number; to: number } | null) => {
       if (!settled.current) return // a fresh load's view is still being applied
-      if (!range || range.from > 20 || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
+      // Near the start only (written so a missing or odd range never counts as "near").
+      if (!range || !(range.from <= 20) || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
       loadingOlder.current = true
       const first = barsRef.current[0][0]
       const gen = generation.current

@@ -6,6 +6,7 @@ import pytest
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
+from paper_trade.store import Store
 
 START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
 
@@ -21,7 +22,7 @@ class FakeTime:
 def make_service() -> tuple[MarketService, FakeTime]:
     real = FakeTime()
     clock = SimClock(start=START, real_time=real)
-    return MarketService(clock, MarketEngine(START)), real
+    return MarketService(clock, MarketEngine(START), Store(":memory:")), real
 
 
 def test_tick_publishes_only_when_time_moves() -> None:
@@ -136,3 +137,45 @@ def test_progress_counts_only_sessions_left_to_generate() -> None:
     asyncio.run(run())
     progress = [m for m in drain(q) if m["type"] == "progress"]
     assert progress[-1]["total"] == 22  # Mar 2 -> Apr 1, not Feb 2 -> Apr 1
+
+
+def test_fill_found_by_any_sync_is_saved_and_announced() -> None:
+    svc, real = make_service()
+    last = svc.engine.quotes["TSLA"].last
+    svc.broker.place("TSLA", "buy", 1, "limit", limit_price=round(last * 0.97, 2), tif="gtc")
+    q = svc.subscribe()
+    svc.clock.set_speed(600)
+    real.t = 3 * 3600  # far enough for a 3% move in TSLA
+    svc.sync()  # as GET /api/account or a goto preview would
+    orders = [m for m in drain(q) if m["type"] == "orders"]
+    assert orders and orders[-1]["orders"][0]["status"] == "filled"
+    assert svc.store.load_orders()[0].status == "filled"
+
+
+def test_fast_forward_fills_match_stepping() -> None:
+    a, _ = make_service()
+    b, _ = make_service()
+    target = datetime(2026, 2, 20, 15, 0, tzinfo=UTC)
+    for svc in (a, b):
+        last = svc.engine.quotes["NVDA"].last
+        svc.broker.place("NVDA", "buy", 1, "limit", limit_price=round(last * 0.9, 2), tif="gtc")
+        svc.broker.place("NVDA", "buy", 1, "limit", limit_price=round(last * 0.5, 2), tif="day")
+    asyncio.run(a.goto(target))
+    t0 = b.engine.time
+    b.engine.advance(target)
+    b.broker.process(t0, target)
+    assert [o.to_dict() for o in a.broker.orders.values()] == [o.to_dict() for o in b.broker.orders.values()]
+
+
+def test_saves_session_starts_only_when_they_change(monkeypatch) -> None:
+    svc, real = make_service()
+    keys: list[str] = []
+    original = svc.store.set
+    monkeypatch.setattr(svc.store, "set", lambda k, v: (keys.append(k), original(k, v)))
+    svc.save()
+    svc.save()
+    assert keys.count("market_starts") == 1
+    real.t = 7 * 3600  # into the next session
+    svc.sync()
+    svc.save()
+    assert keys.count("market_starts") == 2

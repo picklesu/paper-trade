@@ -7,8 +7,8 @@ from paper_trade.main import create_app
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    with TestClient(create_app()) as c:
+def client(tmp_path) -> Iterator[TestClient]:
+    with TestClient(create_app(db_path=tmp_path / "test.db")) as c:
         yield c
 
 
@@ -48,6 +48,7 @@ def test_paused_clock_does_not_advance(client: TestClient) -> None:
 
 def test_websocket_streams_ticks(client: TestClient) -> None:
     with client.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["type"] == "orders"
         first = ws.receive_json()
         assert first["type"] == "tick"
         assert first["clock"]["speed"] == 1
@@ -58,6 +59,7 @@ def test_websocket_streams_ticks(client: TestClient) -> None:
 
 def test_websocket_sees_clock_changes(client: TestClient) -> None:
     with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
         ws.receive_json()
         client.post("/api/clock", json={"speed": 600})
         for _ in range(5):
@@ -70,6 +72,7 @@ def test_websocket_sees_clock_changes(client: TestClient) -> None:
 def test_websocket_ignores_client_messages(client: TestClient) -> None:
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()
+        ws.receive_json()
         ws.send_bytes(b"\x00")
         ws.send_text("hello")
         assert ws.receive_json()["type"] == "tick"
@@ -80,7 +83,8 @@ def test_goto_preview_and_jump(client: TestClient) -> None:
 
     # Naive times are New York wall-clock; Saturday snaps to Monday's open.
     preview = client.get("/api/clock/goto", params={"time": "2030-01-05T12:00"}).json()
-    assert preview == {"action": "forward", "target": "2030-01-07T14:30:00+00:00"}
+    assert preview["action"] == "forward"
+    assert preview["target"] == "2030-01-07T14:30:00+00:00"
 
     body = client.post("/api/clock/goto", json={"time": "2027-03-03T10:00"}).json()
     assert body["action"] == "forward"
@@ -108,3 +112,121 @@ def test_clock_changes_rejected_during_a_jump(client: TestClient) -> None:
     client.app.state.market._jumping = True
     assert client.post("/api/clock", json={"speed": 60}).status_code == 409
     client.app.state.market._jumping = False
+
+
+def test_place_and_cancel_orders(client: TestClient) -> None:
+    order = client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 10, "type": "market"}).json()
+    assert order["status"] == "filled"
+
+    working = client.post(
+        "/api/orders",
+        json={"symbol": "SPY", "side": "sell", "qty": 5, "type": "limit", "limit_price": 9999, "tif": "gtc"},
+    ).json()
+    assert working["status"] == "working"
+
+    account = client.get("/api/account").json()
+    assert account["positions"][0]["symbol"] == "SPY"
+    assert account["cash"] == pytest.approx(100_000 - 10 * order["fill_price"], abs=0.01)
+
+    assert client.delete(f"/api/orders/{working['id']}").json()["status"] == "canceled"
+    assert [o["status"] for o in client.get("/api/orders").json()] == ["canceled", "filled"]
+
+
+def test_rejected_order_explains_why(client: TestClient) -> None:
+    resp = client.post("/api/orders", json={"symbol": "SPY", "side": "sell", "qty": 1, "type": "market"})
+    assert resp.status_code == 422
+    assert "Short selling" in resp.json()["detail"]
+
+
+def test_reset_account(client: TestClient) -> None:
+    client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 1, "type": "market"})
+    account = client.post("/api/account/reset", json={"starting_cash": 25_000}).json()
+    assert account["cash"] == 25_000 and account["positions"] == []
+    assert client.get("/api/orders").json() == []
+
+
+def test_rewind_preview_lists_trades_to_erase(client: TestClient) -> None:
+    client.post("/api/clock", json={"paused": True})
+    before = client.get("/api/clock").json()["time"]
+    client.post("/api/clock/goto", json={"time": "2027-01-05T10:00"})
+    fill = client.post("/api/orders", json={"symbol": "AAPL", "side": "buy", "qty": 3, "type": "market"}).json()
+
+    preview = client.get("/api/clock/goto", params={"time": before}).json()
+    assert preview["action"] == "rewind"
+    assert [f["id"] for f in preview["erased_fills"]] == [fill["id"]]
+    assert preview["cash_then"] == 100_000
+
+    client.post("/api/clock/goto", json={"time": before})
+    assert client.get("/api/account").json()["cash"] == 100_000
+
+
+def test_state_survives_restart(tmp_path) -> None:
+    db = tmp_path / "restart.db"
+    with TestClient(create_app(db_path=db)) as c:
+        c.post("/api/clock", json={"paused": True, "speed": 60})
+        c.post("/api/clock/goto", json={"time": "2027-02-01T11:00"})
+        c.post("/api/orders", json={"symbol": "MSFT", "side": "buy", "qty": 7, "type": "market"})
+        c.post("/api/orders", json={"symbol": "MSFT", "side": "sell", "qty": 7, "type": "limit", "limit_price": 9999, "tif": "gtc"})
+        account = c.get("/api/account").json()
+        quotes = c.get("/api/quotes").json()
+        clock = c.get("/api/clock").json()
+
+    with TestClient(create_app(db_path=db)) as c:
+        # The market resumes where it stopped, not at the real-world time.
+        assert c.get("/api/clock").json() == clock
+        assert c.get("/api/quotes").json() == quotes
+        assert c.get("/api/account").json() == account
+        assert len(c.get("/api/orders").json()) == 2
+
+
+def test_websocket_sends_orders_and_account(client: TestClient) -> None:
+    with client.websocket_connect("/ws") as ws:
+        assert ws.receive_json() == {"type": "orders", "orders": []}
+        assert ws.receive_json()["account"]["cash"] == 100_000
+        client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 1, "type": "market"})
+        for _ in range(10):
+            msg = ws.receive_json()
+            if msg["type"] == "orders" and msg["orders"]:
+                assert msg["orders"][0]["status"] == "filled"
+                break
+        else:
+            pytest.fail("order update never reached the stream")
+
+
+def test_trading_blocked_during_a_jump(client: TestClient) -> None:
+    client.app.state.market._jumping = True
+    resp = client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 1, "type": "market"})
+    assert resp.status_code == 409
+    client.app.state.market._jumping = False
+
+
+def test_goto_preview_refused_during_a_jump(client: TestClient) -> None:
+    client.app.state.market._jumping = True
+    assert client.get("/api/clock/goto", params={"time": "2026-01-05T10:00"}).status_code == 409
+    client.app.state.market._jumping = False
+
+
+def test_pause_saves_the_current_market_time(tmp_path) -> None:
+    import time
+
+    from paper_trade.store import Store
+
+    db = tmp_path / "pause.db"
+    with TestClient(create_app(db_path=db)) as c:
+        c.post("/api/clock", json={"speed": 600})
+        time.sleep(0.3)  # about 3 market-minutes; the engine may lag the clock by a tick
+        c.post("/api/clock", json={"paused": True})
+        time.sleep(0.6)  # let a tick run while paused
+        shown = c.get("/api/clock").json()["time"]
+        saved = Store(db).get("market")["time"]  # read the file, as a restart would
+    assert saved == shown
+
+
+def test_rejects_infinite_prices(client: TestClient) -> None:
+    resp = client.post(
+        "/api/orders",
+        content='{"symbol": "SPY", "side": "buy", "qty": 1, "type": "limit", "limit_price": Infinity}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 422
+    assert client.get("/api/orders").json() == []

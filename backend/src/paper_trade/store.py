@@ -1,0 +1,39 @@
+"""SQLite persistence: small JSON settings plus one row per order."""
+
+import json
+import sqlite3
+from pathlib import Path
+
+from paper_trade.trading.orders import Order
+
+
+class Store:
+    def __init__(self, path: str | Path) -> None:
+        self._db = sqlite3.connect(path, isolation_level=None)  # autocommit
+        self._db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        self._db.execute("CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
+
+    def get(self, key: str, default=None):
+        row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return json.loads(row[0]) if row else default
+
+    def set(self, key: str, value) -> None:
+        self._db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+
+    def load_orders(self) -> list[Order]:
+        rows = self._db.execute("SELECT data FROM orders ORDER BY id").fetchall()
+        return [Order.from_dict(json.loads(data)) for (data,) in rows]
+
+    def save_order(self, order: Order) -> None:
+        self._db.execute(
+            "INSERT OR REPLACE INTO orders (id, data) VALUES (?, ?)", (order.id, json.dumps(order.to_dict()))
+        )
+
+    def delete_order(self, order_id: int) -> None:
+        self._db.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+
+    def delete_all_orders(self) -> None:
+        self._db.execute("DELETE FROM orders")
+
+    def close(self) -> None:
+        self._db.close()

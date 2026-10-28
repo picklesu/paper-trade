@@ -71,3 +71,29 @@ export function shiftInputDays(value: string, days: number): string {
   const shifted = new Date(Date.UTC(y, m - 1, d + days))
   return `${shifted.toISOString().slice(0, 10)}T${timePart}`
 }
+
+export function dollars(n: number): string {
+  return (n < 0 ? '-$' : '$') + price(Math.abs(n))
+}
+
+export function signedDollars(n: number): string {
+  const v = cents(n)
+  return (v > 0 ? '+' : '') + dollars(v)
+}
+
+/** Compact market time for tables: "Jan 5 10:30:15". */
+export function marketStamp(iso: string): string {
+  const d = new Date(iso)
+  const day = d.toLocaleDateString('en-US', { timeZone: MARKET_TZ, month: 'short', day: 'numeric' })
+  return `${day} ${marketTime(iso)}`
+}
+
+const TYPE_LABEL = { market: 'Market', limit: 'Limit', stop: 'Stop', stop_limit: 'Stop limit' } as const
+
+/** "Limit 580.00", "Stop 570.00", "Stop limit 570.00 / 571.00", "Market". */
+export function orderTypeLabel(o: { type: keyof typeof TYPE_LABEL; limit_price: number | null; stop_price: number | null }): string {
+  const parts: string[] = [TYPE_LABEL[o.type]]
+  if (o.stop_price !== null) parts.push(price(o.stop_price))
+  if (o.limit_price !== null) parts.push((o.stop_price !== null ? '/ ' : '') + price(o.limit_price))
+  return parts.join(' ')
+}

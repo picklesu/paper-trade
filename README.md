@@ -16,7 +16,14 @@ A paper trading simulator that runs 24/7 on simulated market data.
   - **Forward** fast-forwards the market through the skipped sessions.
   - **Back** asks whether to **replay the same prices** or **generate a new future** from that point. Prices are reproducible, so a replay is exact.
   - **Before the market's history** starts a brand-new market on that date.
-- Restarting the backend restarts the market at the current real-world time, or the next open if the real market is closed. (Saving state comes in Phase 2b.)
+- **Everything is saved** in `backend/paper_trade.db`: the market picks up where it left off after a restart (time the server was off doesn't count), along with your account and orders. Delete the file to start completely fresh.
+
+## Trading
+
+- **Cash account:** $100,000 to start (change it with **Reset account…**). No margin and no short selling: buys need buying power (cash minus what open buy orders have set aside), and you can only sell shares you own.
+- **Order types:** market, limit, stop and stop limit; **Day** (expires at the 4:00 PM close) or **Good till canceled**.
+- **Fills:** market orders fill at the ask (buy) or bid (sell). A limit order fills at its price once the quote reaches it (the ask for a buy, the bid for a sell), or at a better price if the market opens past it. A stop triggers when the last price reaches it: a stop then fills at the ask/bid, and a stop limit becomes a limit order. Orders are checked against every second of prices, including at 600× and during fast-forwards.
+- **Going back in time** erases trades made after that point and refunds them. Orders that were open then become open again, and positions are valued at that time's prices.
 
 ## Run
 
@@ -45,7 +52,7 @@ cd frontend && npm test
 | 0 | Skeleton: backend, frontend, live connection, layout shell | Done |
 | 1 | Market engine: simulated clock, symbols, live quotes, speed control | Done |
 | 2a | Market sessions (9:30–4:00 ET, jump to next open) and date/time control | Done |
-| 2b | Persistence, account and orders: market/limit/stop, fills, positions, P&L | |
+| 2b | Persistence, account and orders: market/limit/stop, fills, positions, P&L | Done |
 | 3 | Order ticket preview and order history | |
 | 4 | Candlestick charts | |
 | 5 | Indicators | |

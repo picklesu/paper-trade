@@ -61,12 +61,38 @@ describe('GoToDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Go' }))
 
     expect(await screen.findByText(/Go back to Tue, Jan 6, 2026, 10:30 AM ET/)).toBeInTheDocument()
-    expect(screen.getByText(/will be erased, and their money refunded/)).toBeInTheDocument()
+    expect(screen.getByText(/nothing is erased/)).toBeInTheDocument()
     expect(postedBody(fetchMock)).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate a new future' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
     expect(postedBody(fetchMock)).toEqual({ time: '2026-01-06T10:30', future: 'new' })
+  })
+
+  it('going back lists the trades it will erase and how positions are valued', async () => {
+    const fn = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        action: 'rewind',
+        target: '2026-01-06T15:30:00Z',
+        erased_fills: [
+          { id: 7, symbol: 'MSFT', side: 'buy', qty: 20, fill_price: 421.5, filled_at: '2026-01-06T18:00:00Z' },
+        ],
+        erased_orders: 2,
+        cash_now: 91_570,
+        cash_then: 100_000,
+        positions: [{ symbol: 'AAPL', qty: 10, price_now: 231.2, price_then: 229.8 }],
+      }),
+    }))
+    vi.stubGlobal('fetch', fn)
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '−1 day' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+
+    expect(await screen.findByText(/This trade will be erased and refunded/)).toBeInTheDocument()
+    expect(screen.getByText(/Bought 20 MSFT at 421.50/)).toBeInTheDocument()
+    expect(screen.getByText('Cash goes from $91,570.00 to $100,000.00.')).toBeInTheDocument()
+    expect(screen.getByText('229.80')).toBeInTheDocument()
   })
 
   it('replay sends future=replay', async () => {

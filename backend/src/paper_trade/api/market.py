@@ -6,7 +6,8 @@ from pydantic import BaseModel
 
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.market.clock import SPEEDS
-from paper_trade.market.service import BusyError, MarketService
+from paper_trade.api.deps import idle_market, market
+from paper_trade.market.service import BusyError
 
 router = APIRouter()
 
@@ -16,10 +17,6 @@ MIN_YEAR, MAX_YEAR = 1900, 2999
 # Endpoints that touch the market are `async def` so they run on the event loop,
 # the same thread as the tick loop. A plain `def` would run in a worker thread
 # and race with the engine and the subscriber queues.
-
-
-def market(request: Request) -> MarketService:
-    return request.app.state.market
 
 
 class ClockUpdate(BaseModel):
@@ -39,9 +36,7 @@ async def get_clock(request: Request) -> dict:
 
 @router.post("/clock")
 async def update_clock(update: ClockUpdate, request: Request) -> dict:
-    svc = market(request)
-    if svc.jumping:
-        raise HTTPException(409, "a time jump is in progress")
+    svc = idle_market(request)
     if update.speed is not None:
         if update.speed not in SPEEDS:
             raise HTTPException(422, f"speed must be one of {SPEEDS}")
@@ -50,7 +45,10 @@ async def update_clock(update: ClockUpdate, request: Request) -> dict:
         svc.clock.pause()
     elif update.paused is False:
         svc.clock.resume()
-    # Push the new clock state right away instead of waiting for the next tick.
+    # Catch the engine up to the (possibly now paused) clock so what's saved is
+    # exactly where the market stands, then push it right away.
+    svc.sync()
+    svc.save()
     svc.publish(svc.snapshot(), force=True)
     return svc.clock_state()
 
@@ -69,8 +67,9 @@ def parse_market_time(value: str) -> datetime:
 @router.get("/clock/goto")
 async def preview_goto(time: str, request: Request) -> dict:
     """What going to `time` would do, so the UI can confirm first."""
-    action, target = market(request).preview_goto(parse_market_time(time))
-    return {"action": action, "target": target.isoformat()}
+    svc = idle_market(request)
+    action, target = svc.preview_goto(parse_market_time(time))
+    return {"action": action, "target": target.isoformat(), **svc.goto_details(action, target)}
 
 
 class Goto(BaseModel):

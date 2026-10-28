@@ -20,6 +20,7 @@ async def stream(ws: WebSocket) -> None:
     queue = svc.subscribe()
 
     async def send() -> None:
+        await ws.send_json(svc.orders_message())
         await ws.send_json(svc.snapshot())
         while True:
             await ws.send_json(await queue.get())

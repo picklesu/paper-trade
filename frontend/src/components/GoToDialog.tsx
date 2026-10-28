@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { goto, previewGoto, type GotoResult } from '../lib/api'
-import { marketDateTime, shiftInputDays, toMarketInput } from '../lib/format'
+import { dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
 interface Props {
@@ -73,11 +73,7 @@ export function GoToDialog({ clock, onClose }: Props) {
         {preview?.action === 'rewind' ? (
           <>
             <h2 id="goto-title">Go back to {marketDateTime(preview.target)}?</h2>
-            <ul className="dialog-list">
-              <li>Trades made after this time will be erased, and their money refunded.</li>
-              <li>Positions you hold will be valued at that time's prices.</li>
-            </ul>
-            <p className="muted">Trading arrives in Phase 2b, so there's nothing to erase yet.</p>
+            <RewindSummary preview={preview} />
             <p>What should happen after that?</p>
             <div className="dialog-actions">
               <button className="btn primary" disabled={busy} onClick={() => run('replay')}>
@@ -96,8 +92,16 @@ export function GoToDialog({ clock, onClose }: Props) {
             <h2 id="goto-title">Start a new market on {marketDateTime(preview.target)}?</h2>
             <p>
               That's before this market's history begins ({marketDateTime(clock.origin)}). Going there starts a
-              brand-new market: all price history and trades are erased, and cash resets to the starting amount.
+              brand-new market: all price history and trades are erased, and cash resets to{' '}
+              {dollars(preview.starting_cash ?? 0)}.
             </p>
+            {(preview.erased_orders ?? 0) > 0 && (
+              <p>
+                {preview.erased_orders} order{preview.erased_orders === 1 ? '' : 's'} (
+                {preview.erased_fills?.length ?? 0} trade{preview.erased_fills?.length === 1 ? '' : 's'}) will be
+                erased.
+              </p>
+            )}
             <div className="dialog-actions">
               <button className="btn danger" disabled={busy} onClick={() => run()}>
                 Start new market
@@ -146,5 +150,76 @@ export function GoToDialog({ clock, onClose }: Props) {
         )}
       </div>
     </div>
+  )
+}
+
+const MAX_LISTED = 8
+
+function RewindSummary({ preview }: { preview: GotoResult }) {
+  const fills = preview.erased_fills ?? []
+  const positions = preview.positions ?? []
+  const erasedOrders = preview.erased_orders ?? 0
+  return (
+    <>
+      {fills.length === 0 && erasedOrders === 0 ? (
+        <p className="muted">No trades or orders after this time, so nothing is erased.</p>
+      ) : (
+        <>
+          <p>
+            {fills.length === 1
+              ? 'This trade will be erased and refunded:'
+              : fills.length
+                ? `These ${fills.length} trades will be erased and refunded:`
+                : 'No trades will be erased.'}
+          </p>
+          {fills.length > 0 && (
+            <ul className="dialog-list">
+              {fills.slice(0, MAX_LISTED).map((o) => (
+                <li key={o.id}>
+                  {o.side === 'buy' ? 'Bought' : 'Sold'} {o.qty} {o.symbol} at {price(o.fill_price!)} ({marketStamp(o.filled_at!)})
+                </li>
+              ))}
+              {fills.length > MAX_LISTED && <li>…and {fills.length - MAX_LISTED} more</li>}
+            </ul>
+          )}
+          {erasedOrders > 0 && (
+            <p className="muted">
+              {erasedOrders} order{erasedOrders === 1 ? '' : 's'} placed after this time will be removed. Orders that were
+              open then become open again.
+            </p>
+          )}
+          {preview.cash_then !== undefined && preview.cash_now !== undefined && preview.cash_then !== preview.cash_now && (
+            <p>
+              Cash goes from {dollars(preview.cash_now)} to {dollars(preview.cash_then)}.
+            </p>
+          )}
+        </>
+      )}
+      {positions.length > 0 && (
+        <>
+          <p>Positions you held then are valued at that time's prices:</p>
+          <table className="grid-table compact">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th className="num">Qty</th>
+                <th className="num">Price now</th>
+                <th className="num">Price then</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.symbol}>
+                  <td className="sym">{p.symbol}</td>
+                  <td className="num">{p.qty.toLocaleString()}</td>
+                  <td className="num">{price(p.price_now)}</td>
+                  <td className="num">{price(p.price_then)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
   )
 }

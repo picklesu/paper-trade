@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-27, after Phase 2a was merged._
+_Last updated: 2026-10-27, after Phase 2b was merged._
 
 ## Where things stand
 
@@ -9,86 +9,43 @@ _Last updated: 2026-10-27, after Phase 2a was merged._
 | 0. Skeleton | Merged (committed directly to `main`) | — |
 | 1. Market engine + live watchlist | Merged, tested by the user on their Mac | #1 |
 | `server.sh` on/off script | Merged | #2 |
-| 2a. Market sessions + date/time control | Merged. **The user hasn't tested it yet**: ask how it went. | #7 |
-| **2b. Persistence, account and orders** | **Next. Not started. Decisions made (below).** | — |
+| 2a. Market sessions + date/time control | Merged. Not confirmed by the user yet. | #7 |
+| 2b. Persistence, account and orders | Merged. **Not tested by the user yet**: ask how it went. | #8 |
+| **3. Order preview and order history** | **Next. Not started.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-1. Ask the user whether Phase 2a works for them (`./server.sh restart`, then try Go to…).
-   Fix anything they report in a follow-up PR first.
-2. Build **Phase 2b** on branch `phase-2b-orders`, following the workflow in `CLAUDE.md`.
+1. Ask the user whether Phases 2a and 2b work for them (`./server.sh restart`). Fix anything they
+   report in a follow-up PR first.
+2. Then Phase 3 (see README roadmap). Phase 2b already has an order ticket with an estimated
+   cost and the Orders/Activity tabs, so Phase 3 should focus on the following. Agree the scope
+   with the user first.
+   - A **preview/confirm step** before sending: estimated cost or proceeds, buying power before
+     and after, and position after. Optionally commissions (currently $0).
+   - **Ticket feedback:** the result message ("Order #2 is working") goes stale once the order
+     fills. Follow the order's status from the stream instead.
+   - **Order history:** filters (working / filled / canceled), and details such as the time
+     triggered and the time closed with a reason.
+   - Possibly **replace/modify** a working order.
 
-### Going back in time (decided by the user, 2026-10-27)
+## Going back in time (decided by the user; built in 2a + 2b)
 
-Picking a date/time earlier than the current sim time:
+Picking an earlier date/time shows a confirmation that lists the trades to be erased and refunded,
+the cash before and after, and held positions valued at that time's prices. The user then picks
+**Replay the same prices** or **Generate a new future**. Going before the market's history
+starts a new market and resets the account. See `Broker.rewind` / `preview_rewind` and
+`MarketEngine.rewind`.
 
-1. **Confirmation dialog first.** It lists the trades made after that date that will be erased,
-   says their money will be refunded, and shows how held positions will be repriced. The user
-   must confirm.
-2. **The account is restored to its state at that date**, as if later trades never happened.
-   Erased buys refund their cash. Erased sells give the shares back and remove the sale proceeds.
-   Realized P&L after the date reverses. Orders placed after the date are erased. Orders that
-   were working at the date (including ones that filled later) go back to working.
-3. **Positions held at that date get normal P&L adjustments:** they are valued at the market
-   prices recorded at that date. Day stats (open, high, low, volume) are rebuilt from that
-   day's history up to that time.
-4. **The user chooses what happens next, each time (in the same dialog):**
-   - **Replay the same prices:** the market repeats exactly what happened before (practice a
-     scenario again).
-   - **New future:** prices from that date on are freshly generated (no hindsight).
-   Either way, the old history after that date is discarded and rebuilt as time moves forward.
-5. **Earlier than the market's history** (before it started or was last reset): warn that **all**
-   trades will be erased and cash reset to the starting amount, then start a brand-new market at
-   that date. Any date works.
+## Phase 2b decisions (from the user)
 
-**Built in 2a (market side):** steps 3–5 for prices, and the dialog with both choices. The
-dialog already says trades will be erased and refunded, but there are no trades yet.
-**Still to build in 2b (account side):** steps 1–2. The rewind dialog must list the actual
-trades to be erased and show the repricing. Also reset the account in step 5.
-
-- Account rewind is simplest if the account is **rebuilt from a time-stamped list of all fills
-  and cash events** (an event log): drop events after the date and recompute. Design the 2b
-  schema that way from the start.
-
-### Phase 2b: persistence, account and orders
-
-Decided by the user (2026-10-27):
-
-- **Save across restarts.** The account, orders, fills and positions persist (SQLite file in
-  `backend/`, git-ignored). Market state must persist too, or positions would be valued against
-  prices that reset on every restart. On restart, resume from the saved sim time; don't count
-  the time the server was off.
-  - Saving the market is small, because prices are regenerated from seeds. `MarketEngine` needs
-    only: `origin`, `_time`, `_epochs` (list of (start time, seed)), `_starts` (per session:
-    previous close per symbol plus regime index; it could even be trimmed to the latest
-    session plus the epochs, since earlier ones can be regenerated), `_seed` and `_seeds_used`.
-    The clock needs speed and paused. No price history or RNG state has to be stored.
-- **Cash account only.** No margin and no short selling. Buying power = cash minus cash
-  reserved by working buy orders. Reject a sell for more shares than are held.
-
-Scope (agreed except the bullets marked **Proposal**):
-
-- Account: starting cash (e.g. $100,000), cash, buying power, net liquidation value, day P&L
-  shown in the top bar (the placeholders already exist in `TopBar.tsx`).
-- Orders: market, limit, stop, stop-limit; buy/sell; day vs GTC; cancel working orders.
-- **Day orders expire at the 4:00 PM ET session close.**
-- Fills: market buys at the ask and sells at the bid; limits fill when the market crosses the
-  limit; stops trigger on last price. Working orders must be checked against the price path,
-  not just the half-second tick snapshots. A fast-forward jumps whole sessions at a time
-  (`advance_iter`), and at 600× each tick covers 5 minutes. Scan the generated per-second path
-  (`_DayPath.prices`, `high`, `low`) between the previous and new time for each working order,
-  and fill at the first second it triggers.
-- Positions: quantity, average cost, market value, unrealized and realized P&L.
-- UI: the order ticket in the right panel, and the Positions / Orders / Activity bottom tabs
-  (placeholders exist in `BottomTabs.tsx`). Fills are pushed over the existing WebSocket as
-  new message types (`StreamMessage` in `frontend/src/lib/types.ts` is a union for this).
-- **Proposal:** a "Reset account" action (cash back to the starting amount, positions and
-  orders cleared, optional start date), since saved state otherwise never resets.
-- Going back in time erases later trades (see above). Store fills and cash movements as a
-  time-stamped event log so the account can be rebuilt as of any date.
-- Phase 3 (order preview: estimated cost, buying-power impact, order history) builds on this.
+- **Saved across restarts** in SQLite (`backend/paper_trade.db`, git-ignored; `PAPER_TRADE_DB`
+  overrides the path). On restart the market resumes at its saved time.
+- **Cash account only:** no margin and no short selling. Buying power = cash minus the cash set
+  aside for working buy orders (limit/stop-limit at the limit, stop at the stop, market at the ask).
+- Day orders expire at the 4:00 PM close. **Reset account…** is in the bottom tab bar (choose
+  the starting cash).
 
 ## Architecture
 
@@ -110,26 +67,53 @@ Scope (agreed except the bullets marked **Proposal**):
     drove the latest move.
   - `market/symbols.py`: 10 symbols (SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, META, TSLA, AMD).
     Prices are synthetic.
-  - `market/service.py`: `MarketService`. A background loop advances the engine to `clock.now()`
-    every 0.5s and sends `tick` messages. It skips ticks while paused or during a jump, and logs
-    and survives a failed tick. `goto()` handles forward (session by session, with `progress`
-    messages), rewind and reset. The final snapshot is always sent, with `force=True`, so it
-    is never dropped from a full client queue.
+  - `market/service.py`: `MarketService` owns the clock, engine, store and `Broker`. A
+    background loop runs `sync()` every 0.5s (advance the engine to `clock.now()`, then
+    `broker.process(t0, t1)`; if orders changed, `sync()` itself saves and sends an `orders`
+    message, so every caller gets that) and sends `tick` messages, which include the account. It saves the market about every 5s and after any trade,
+    jump or clock change. It skips ticks while paused or during a jump. `goto()` handles
+    forward (sessions, then order matching, both yielding), rewind (engine + broker) and reset
+    (engine + broker). The final state after a jump is always sent with `force=True`.
+    `goto_details()` builds the rewind/reset confirmation contents.
+  - `trading/broker.py`: `Broker`, the cash account. `place`/`cancel` validate buying power and
+    shares and fill at once when marketable. `process_iter(t0, t1)` scans each session's
+    per-second path (`engine.day_prices`) for every working order and handles events in time
+    order. It expires day orders at each close. The ledger (cash, positions, average cost,
+    realized P&L) is rebuilt from filled orders and cached. `summary()` gives net liq, buying
+    power, day P&L (vs holdings at the previous close) and positions. `rewind(t)` deletes
+    orders created after `t` and rolls back later fills, closes and triggers. `reset()`. Fill
+    rules are in the module docstring.
+  - `trading/orders.py`: the `Order` dataclass. Every status change is time-stamped
+    (`created_at`, `triggered_at`, `filled_at`, `closed_at`).
+  - `store.py`: SQLite. A `meta` table holds JSON for `market` (`engine.to_state()` without
+    `starts`, saved about every 5s), `market_starts` (written only when
+    `engine.starts_version` changes), `clock` and `starting_cash`; an `orders` table holds
+    one JSON row per order. Startup
+    (`main.load_market`) resumes from it, and `MarketService` rolls back any order newer than
+    the saved market time.
   - `api/`: `GET /api/health`, `GET /api/quotes`, `GET|POST /api/clock` (409 during a jump),
     `GET /api/clock/goto?time=` (preview: forward / rewind / reset / none, plus the snapped
     target), `POST /api/clock/goto {time, future: replay|new}`, WebSocket `/ws`. Times without a
     UTC offset are New York wall-clock time; years 1900–2999; forward jumps are capped at 5
-    years. **Endpoints that touch market state must be `async def`** so they run on the event
-    loop's thread; a plain `def` runs in a worker thread and races the tick loop.
+    years. `api/deps.py`: `market` (read-only) and `idle_market` (409 during a jump) for
+    anything that syncs or changes state. Trading (`api/trading.py`): `GET /api/account`, `POST /api/account/reset`,
+    `GET|POST /api/orders`, `DELETE /api/orders/{id}`; 422 responses carry a user-readable
+    `detail`; 409 during a jump. **Endpoints that touch market state must be `async def`** so
+    they run on the event loop's thread; a plain `def` runs in a worker thread and races the
+    tick loop.
 - **frontend/** (React 19, TypeScript, Vite, Vitest)
   - `lib/stream.ts`: one WebSocket with auto-reconnect. `useStream()` returns the latest tick
-    and any fast-forward progress (cleared by the next tick).
+    (quotes, clock, account), the orders list, and any fast-forward progress (cleared by the
+    next tick).
   - `components/`: `TopBar`, `ClockControls` (Go to…, pause, speeds from `clock.speeds`,
     regime badge or progress), `GoToDialog` (picker with ±day/week shortcuts → preview → forward
     immediately / rewind confirmation with replay or new future / new-market warning),
-    `Watchlist` (tick flashes), `QuoteDetail`, `BottomTabs`, `Panel`.
+    `Watchlist` (tick flashes), `QuoteDetail`, `OrderTicket` (side, quantity, type,
+    limit/stop, time in force, estimated cost, result), `BottomTabs` (Positions / Orders with
+    Cancel / Activity, plus "Reset account…"), `ResetAccountDialog`, `Panel`. The top bar
+    shows net liq, buying power and day P&L.
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 63 (pytest), frontend 24 (Vitest + Testing Library).
+- Tests: backend 114 (pytest), frontend 30 (Vitest + Testing Library).
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -146,12 +130,16 @@ Scope (agreed except the bullets marked **Proposal**):
   the next open (the user chose this over a 24-hour market). The user can go to any date/time.
 - **Going back in time:** later trades are erased and refunded, positions are repriced, and the
   user picks replay or new future each time. Before the history, a fresh market (see above).
-- Saved across restarts; cash account only (Phase 2b).
+- Saved across restarts; cash account only (Phase 2b). No commissions.
 
 ## Known limitations / backlog
 
-- Restarting the backend starts a new market at the current real-world time. Phase 2b fixes
-  this by saving the market state.
+- Fills are all-or-nothing (no partial fills) and ignore volume and liquidity.
+- A stop buy reserves the higher of its stop price and the ask at placement. If the market gaps
+  past that, the fill can cost more than reserved. A fill may use only cash not set aside for
+  other working buys; otherwise the order is rejected.
+- The ledger is rebuilt from all fills when it changes. That's fine for thousands of trades;
+  revisit if history grows very large.
 - No exchange holidays; weekends only.
 - Phase 4 charts need history bars. They can be built from `_path(day)` (per-second prices and
   per-minute volume) for any past session, since paths are reproducible. Consider caching

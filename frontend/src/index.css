@@ -409,3 +409,127 @@ body {
 .error {
   color: var(--down);
 }
+
+/* Order ticket */
+.ticket-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.ticket-quote {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+}
+.ticket-quote .sym {
+  font-size: 16px;
+}
+.side-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.side {
+  padding: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.side + .side {
+  border-left: none;
+}
+.side.buy.active {
+  background: var(--up);
+  border-color: var(--up);
+  color: #04130a;
+}
+.side.sell.active {
+  background: var(--down);
+  border-color: var(--down);
+  color: #fff;
+}
+.field select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.ticket-summary {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.ticket-summary div {
+  display: flex;
+  justify-content: space-between;
+}
+.ticket-summary dt {
+  color: var(--muted);
+}
+.ticket-summary dd {
+  margin: 0;
+}
+.btn.submit {
+  padding: 9px;
+  font-weight: 600;
+}
+.btn.submit.buy {
+  background: var(--up);
+  border-color: var(--up);
+  color: #04130a;
+}
+.btn.submit.sell {
+  background: var(--down);
+  border-color: var(--down);
+  color: #fff;
+}
+.ticket-result {
+  margin: 0;
+  line-height: 1.4;
+}
+.ticket-result.ok {
+  color: var(--up);
+}
+
+/* Bottom tabs: tables and actions */
+.tabs {
+  align-items: center;
+}
+.tabs-spacer {
+  flex: 1;
+}
+.tabs-action {
+  margin-right: 12px;
+}
+.grid-table.clickable tbody tr {
+  cursor: pointer;
+}
+.grid-table.clickable tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.grid-table.compact td,
+.grid-table.compact th {
+  padding: 4px 8px;
+}
+.status-filled {
+  color: var(--up);
+}
+.status-rejected {
+  color: var(--down);
+}
+.status-canceled,
+.status-expired {
+  color: var(--muted);
+}
+.error.inline {
+  margin: 8px 12px;
+}

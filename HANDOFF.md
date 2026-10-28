@@ -179,8 +179,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     option props stable (module-level functions) and `Workspace` memoized; `App.test` checks
     ticks never call `updateOptions`. And `api.clear()` keeps the old grid's root, and with a
     floating window open dockview reported width 0 while rebuilding, so Reset built
-    everything 0px wide: `buildDefaultLayout` starts from `fromJSON` of an empty grid, and
-    `keepSidePanelSizes` lays out at the host's real size after every `fromJSON`.
+    everything 0px wide (dockview's `fromJSON` lays out at 0 when replacing floating windows): `buildDefaultLayout` starts from `fromJSON` of an empty grid, and
+    `onReady` registers (before the first load) a relayout at the host's `clientWidth` and
+    `clientHeight` after every `fromJSON`. Reset also drops any peek first (ids are reused).
   - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `collapseContext.ts`, `edges.ts`): a
     collapsed group is a hidden grid group (`group.api.setVisible(false)`; dockview saves
     `visible` in the layout JSON, so it survives reloads). `edgeOf` picks the edge from the
@@ -245,7 +246,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 111 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 113 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

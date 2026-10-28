@@ -342,13 +342,16 @@ describe('workspace', () => {
     unmount()
   })
 
-  it("market ticks don't touch dockview's options (that re-laid the grid out mid-drag)", () => {
+  it("market ticks and the workspace's own re-renders don't touch dockview's options (that re-laid the grid out mid-drag)", () => {
     const update = vi.spyOn(DockviewApi.prototype, 'updateOptions')
     render(<App />)
     push(tick())
     update.mockClear()
     push(tick({ regime: 'volatile' }))
     push(tick({ regime: 'calm' }))
+    // The workspace's own re-renders (peeking) mustn't either.
+    fireEvent.click(stripTab('Watchlist'))
+    fireEvent.pointerDown(panel('Chart'))
     expect(update).not.toHaveBeenCalled()
   })
 
@@ -365,6 +368,32 @@ describe('workspace', () => {
       expect(saved.grid.root.data.map((n: { type: string }) => n.type)).toEqual(['branch', 'leaf'])
     })
     expect(panel('Chart').closest('.dv-resize-container')).toBeNull()
+  })
+
+  it('Reset layout lays the rebuilt grid out at the workspace size', () => {
+    const size = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200)
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700)
+    const layout = vi.spyOn(DockviewApi.prototype, 'layout')
+    try {
+      render(<App />)
+      setPanel('Watchlist', 'Float')
+      layout.mockClear()
+      fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
+      expect(layout).toHaveBeenCalledWith(1200, 700, true)
+    } finally {
+      size.mockRestore()
+      height.mockRestore()
+      layout.mockRestore()
+    }
+  })
+
+  it('Reset layout drops a peek, so it cannot land on a new group with the same id', () => {
+    render(<App />)
+    fireEvent.click(stripTab('Watchlist'))
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
+    expect(document.querySelector('.peeking')).toBeNull()
+    expect(stripTab('Watchlist')).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('ignores a corrupted saved layout', () => {

@@ -82,6 +82,8 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       },
       reset: () => {
         if (!api) return
+        // Drop any peek first: the new layout reuses group ids.
+        collapse?.pin()
         clearLayout()
         buildDefaultLayout(api)
       },
@@ -122,6 +124,7 @@ export const Workspace = memo(function Workspace() {
   const disposeSizes = useRef<() => void>(() => {})
   const disposeResizes = useRef<() => void>(() => {})
   const disposeTidy = useRef<() => void>(() => {})
+  const disposeFromJSON = useRef<() => void>(() => {})
 
   const scheduleSave = (api: DockviewApi) => {
     window.clearTimeout(saveTimer.current)
@@ -160,6 +163,15 @@ export const Workspace = memo(function Workspace() {
   const onReady = (event: DockviewReadyEvent) => {
     const api = event.api
     apiRef.current = api
+    // dockview's fromJSON lays the grid out at a size of 0 when floating windows are being
+    // replaced (Reset layout then built everything 0px wide, so nothing showed). After any
+    // load or rebuild, lay it out at the workspace's real size, measured as dockview does.
+    disposeFromJSON.current()
+    const relayout = api.onDidLayoutFromJSON(() => {
+      const el = host.current
+      if (el?.clientWidth && el.clientHeight) api.layout(el.clientWidth, el.clientHeight, true)
+    })
+    disposeFromJSON.current = () => relayout.dispose()
     let saved = loadLayout()
     try {
       if (saved) api.fromJSON(saved)
@@ -271,13 +283,6 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     before = gridSizes()
   })
   observer.observe(host)
-  // A layout loaded or rebuilt (Reset layout) is laid out at the size dockview last knew,
-  // which can be 0 (with a floating window open, it reported a width of 0 and Reset built
-  // everything 0px wide). Lay it out at the workspace's real size.
-  const fromJSON = api.onDidLayoutFromJSON(() => {
-    const { width, height } = host.getBoundingClientRect()
-    if (width && height) api.layout(width, height, true)
-  })
   // A saved layout is scaled to the workspace's size now; give the side panels back the sizes
   // they were saved with.
   const chart = api.getPanel('chart')?.group
@@ -294,7 +299,6 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
   }
   return () => {
     sub.dispose()
-    fromJSON.dispose()
     observer.disconnect()
   }
 }

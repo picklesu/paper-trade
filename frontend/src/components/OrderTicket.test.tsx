@@ -69,6 +69,7 @@ function order(overrides: Partial<Order>): Order {
     closed_at: null,
     reason: null,
     replaces: null,
+    realized: null,
     ...overrides,
   }
 }

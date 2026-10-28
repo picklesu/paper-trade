@@ -1,8 +1,8 @@
 import { type AddPanelOptions, type DockviewApi, type DockviewGroupPanel, type IDockviewPanel, Orientation } from 'dockview-react'
 import type { FunctionComponent } from 'react'
-import { ActivityView, ChartSpaceView, ChartView, OrdersView, PositionsView, TicketView, WatchlistView } from './PanelViews'
+import { ChartSpaceView, ChartView, OrdersView, PositionsView, TicketView, WatchlistView } from './PanelViews'
 
-export type PanelId = 'chart' | 'watchlist' | 'ticket' | 'positions' | 'orders' | 'activity'
+export type PanelId = 'chart' | 'watchlist' | 'ticket' | 'positions' | 'orders'
 
 /** Every view, by id. Panel ids double as dockview component names. */
 export const PANELS: Record<PanelId, { title: string; component: FunctionComponent }> = {
@@ -11,7 +11,6 @@ export const PANELS: Record<PanelId, { title: string; component: FunctionCompone
   ticket: { title: 'Order Entry', component: TicketView },
   positions: { title: 'Positions', component: PositionsView },
   orders: { title: 'Orders', component: OrdersView },
-  activity: { title: 'Activity', component: ActivityView },
 }
 
 export const PANEL_IDS = Object.keys(PANELS) as PanelId[]
@@ -71,7 +70,7 @@ function resetSideColumn(api: DockviewApi): void {
 }
 
 /** The panels beside the chart, top to bottom in their column at the left. */
-export const SIDE_PANELS: PanelId[] = ['watchlist', 'ticket', 'positions', 'orders', 'activity']
+export const SIDE_PANELS: PanelId[] = ['watchlist', 'ticket', 'positions', 'orders']
 
 /** The side column's default width (the chart takes the rest). */
 export const SIDE_WIDTH = 300

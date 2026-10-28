@@ -54,6 +54,7 @@ function order(overrides: Partial<Order>): Order {
     closed_at: null,
     reason: null,
     replaces: null,
+    realized: null,
     ...overrides,
   }
 }
@@ -115,7 +116,7 @@ describe('App', () => {
   it('lays out the default workspace before data arrives: the chart, everything else collapsed on the left', () => {
     render(<App />)
     expect(panel('Chart')).toBeInTheDocument()
-    expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Watchlist', 'Order Entry', 'Positions', 'Orders', 'Activity'])
+    expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Watchlist', 'Order Entry', 'Positions', 'Orders'])
     // No tab bars: the Panels menu places panels.
     const headers = [...document.querySelectorAll<HTMLElement>('.dv-tabs-and-actions-container')]
     expect(headers.length).toBeGreaterThan(0)
@@ -161,7 +162,9 @@ describe('App', () => {
         data: JSON.stringify({
           type: 'orders',
           orders: [
-            order({ id: 2, status: 'working', type: 'limit', limit_price: 570 }),
+            order({ id: 4, status: 'working', type: 'limit', limit_price: 570 }),
+            order({ id: 3, side: 'sell', qty: 4, status: 'filled', fill_price: 585.5, filled_at: '2026-01-05T15:20:00Z', realized: 21.88 }),
+            order({ id: 2, side: 'sell', qty: 2, status: 'filled', fill_price: 575, filled_at: '2026-01-05T15:10:00Z', realized: -10.06 }),
             order({ id: 1, status: 'filled', fill_price: 580.03, filled_at: '2026-01-05T15:00:00Z' }),
           ],
         }),
@@ -172,16 +175,21 @@ describe('App', () => {
     const orders = panel('Orders')
     expect(within(orders).getByText('Limit 570.00')).toBeInTheDocument()
     expect(within(orders).getByText('Filled at 580.03')).toBeInTheDocument()
-    fireEvent.click(within(orders).getByRole('button', { name: 'Cancel order 2' }))
-    expect(fetchMock).toHaveBeenCalledWith('/api/orders/2', expect.objectContaining({ method: 'DELETE' }))
+    fireEvent.click(within(orders).getByRole('button', { name: 'Cancel order 4' }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/orders/4', expect.objectContaining({ method: 'DELETE' }))
 
-    // Filters narrow the list.
-    fireEvent.click(within(orders).getByRole('button', { name: 'Filled (1)' }))
+    // Filled sells show the P/L they realized; a buy has none of its own.
+    const row = (id: number) => within(orders).getAllByRole('row').find((r) => r.querySelector('td')?.textContent === String(id))!
+    expect(within(row(3)).getByText('+$21.88')).toHaveClass('up')
+    expect(within(row(2)).getByText('-$10.06')).toHaveClass('down')
+    expect(within(row(1)).getByText('—')).toBeInTheDocument()
+
+    // Filters narrow the list; Filled adds up what the sells realized.
+    expect(within(orders).queryByText('Realized P/L on these sells')).not.toBeInTheDocument()
+    fireEvent.click(within(orders).getByRole('button', { name: 'Filled (3)' }))
     expect(within(orders).queryByText('Limit 570.00')).not.toBeInTheDocument()
     expect(within(orders).getByText('Filled at 580.03')).toBeInTheDocument()
-
-    setPanel('Activity', 'Open')
-    expect(within(panel('Activity')).getByText('-$5,800.30')).toBeInTheDocument()
+    expect(within(orders).getByText('Realized P/L on these sells').closest('tr')).toHaveTextContent('+$11.82')
   })
 
   it('selecting a watchlist row updates the chart and order entry', () => {
@@ -269,11 +277,11 @@ describe('workspace', () => {
     setPanel('Chart', 'Float')
     setPanel('Watchlist', 'Float')
     expect(document.querySelector('.chart-space')).not.toBeNull()
-    await waitFor(() => expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Order Entry', 'Positions', 'Orders', 'Activity']))
+    await waitFor(() => expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Order Entry', 'Positions', 'Orders']))
     expect(screen.queryByRole('toolbar', { name: /Collapsed panels \((top|bottom)\)/ })).not.toBeInTheDocument()
     // The placeholder isn't a panel you can place.
     if (!screen.queryByRole('menu', { name: 'Panels' })) fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
-    expect(screen.getAllByRole('radiogroup').map((g) => g.getAttribute('aria-label'))).toEqual(['Chart', 'Watchlist', 'Order Entry', 'Positions', 'Orders', 'Activity'])
+    expect(screen.getAllByRole('radiogroup').map((g) => g.getAttribute('aria-label'))).toEqual(['Chart', 'Watchlist', 'Order Entry', 'Positions', 'Orders'])
 
     // Docking the chart takes the placeholder's place.
     setPanel('Chart', 'Open')
@@ -342,11 +350,11 @@ describe('workspace', () => {
   it('saves the layout immediately when the page is closing', () => {
     render(<App />)
     localStorage.clear()
-    setPanel('Activity', 'Off')
+    setPanel('Orders', 'Off')
     window.dispatchEvent(new Event('pagehide')) // before the delayed save
     const saved = localStorage.getItem('paper-trade.layout.v2') ?? ''
     expect(saved).toContain('"positions"')
-    expect(saved).not.toContain('"activity"')
+    expect(saved).not.toContain('"orders"')
   })
 
   it('remembers the layout across reloads, and Reset layout restores the default', async () => {
@@ -374,9 +382,12 @@ describe('workspace', () => {
         <App />
       </StrictMode>,
     )
-    setPanel('Activity', 'Off')
-    await waitFor(() => expect(localStorage.getItem('paper-trade.layout.v2') ?? '').toContain('"positions"'))
-    expect(localStorage.getItem('paper-trade.layout.v2')).not.toContain('"activity"')
+    setPanel('Orders', 'Off')
+    await waitFor(() => {
+      const saved = localStorage.getItem('paper-trade.layout.v2') ?? ''
+      expect(saved).toContain('"positions"')
+      expect(saved).not.toContain('"orders"')
+    })
     unmount()
   })
 
@@ -432,6 +443,24 @@ describe('workspace', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
     expect(document.querySelector('.peeking')).toBeNull()
     expect(stripTab('Watchlist')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('a saved layout with the removed Activity panel loads without it, keeping the rest', () => {
+    const { unmount } = render(<App />)
+    setPanel('Watchlist', 'Open')
+    window.dispatchEvent(new Event('pagehide'))
+    unmount()
+    // Add an Activity panel below Orders, as layouts saved before its removal had.
+    const saved = JSON.parse(localStorage.getItem('paper-trade.layout.v2')!)
+    const column = saved.grid.root.data[0]
+    column.data.push({ type: 'leaf', data: { views: ['activity'], activeView: 'activity', id: '99', hideHeader: true }, size: 100, visible: false })
+    saved.panels.activity = { id: 'activity', contentComponent: 'activity', title: 'Activity' }
+    localStorage.setItem('paper-trade.layout.v2', JSON.stringify(saved))
+
+    render(<App />)
+    expect(stateOf('Watchlist')).toBe('Open') // the saved layout, not the default
+    expect(hasPanel('Activity')).toBe(false)
+    expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Order Entry', 'Positions', 'Orders'])
   })
 
   it('ignores a corrupted saved layout', () => {

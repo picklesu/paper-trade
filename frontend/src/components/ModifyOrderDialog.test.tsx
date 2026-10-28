@@ -20,6 +20,7 @@ const order: Order = {
   closed_at: null,
   reason: null,
   replaces: null,
+    realized: null,
 }
 
 describe('ModifyOrderDialog', () => {

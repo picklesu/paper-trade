@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Activity, Orders, Positions } from '../components/AccountViews'
+import { Orders, Positions } from '../components/AccountViews'
 import { OrderTicket } from '../components/OrderTicket'
 import { Placeholder } from '../components/Panel'
 import { PriceChart } from '../components/PriceChart'
@@ -72,14 +72,6 @@ export function OrdersView() {
   return (
     <Frame label="Orders">
       <Orders orders={useAppData().orders} />
-    </Frame>
-  )
-}
-
-export function ActivityView() {
-  return (
-    <Frame label="Activity">
-      <Activity orders={useAppData().orders} />
     </Frame>
   )
 }

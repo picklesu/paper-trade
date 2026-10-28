@@ -173,7 +173,7 @@ export const Workspace = memo(function Workspace() {
     disposeFromJSON.current()
     const afterLoad = api.onDidLayoutFromJSON(relayout)
     disposeFromJSON.current = () => afterLoad.dispose()
-    let saved = loadLayout()
+    let saved = loadLayout(new Set(Object.keys(COMPONENTS)))
     try {
       if (saved) api.fromJSON(saved)
       else buildDefaultLayout(api)

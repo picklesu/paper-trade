@@ -210,9 +210,20 @@ def test_websocket_sends_orders_and_account(client: TestClient) -> None:
             msg = next_message(ws, "orders")
             if msg["orders"]:
                 assert msg["orders"][0]["status"] == "filled"
+                assert msg["orders"][0]["realized"] is None  # a buy realizes nothing
                 break
         else:
             pytest.fail("order update never reached the stream")
+
+
+def test_orders_carry_the_pnl_a_sell_realized(client: TestClient) -> None:
+    client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 2, "type": "market"})
+    sell = client.post("/api/orders", json={"symbol": "SPY", "side": "sell", "qty": 2, "type": "market"}).json()
+    assert sell["status"] == "filled"
+    # Bought at the ask, sold at the bid a moment later: the spread is lost.
+    assert sell["realized"] < 0
+    orders = client.get("/api/orders").json()
+    assert [o["realized"] for o in orders] == [sell["realized"], None]
 
 
 def test_trading_blocked_during_a_jump(client: TestClient) -> None:

@@ -20,7 +20,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
 
 ## Workspace
 
-- Every view is a panel: **Chart**, **Watchlist**, **Order Entry**, **Positions**, **Orders**, **Activity**. Panels have no tab bars or buttons, so the chart gets the room.
+- Every view is a panel: **Chart**, **Watchlist**, **Order Entry**, **Positions**, **Orders**. Panels have no tab bars or buttons, so the chart gets the room.
 - **By default only the chart is open.** The other panels wait as tabs on the left edge (Positions and Orders show a count when they have something). Click a tab to look at that panel; a click anywhere else in the workspace tucks it away again, and clicking the tab again does too.
 - **Panels ▾** (top bar) places each panel: **Open** (docked in the column left of the chart; several stack top to bottom), **Collapsed** (a tab on the left edge), **Float** (a window over the chart) or **Off**. **Reset layout** goes back to the default. Your layout is saved in this browser.
 - Drag the dividers to resize docked panels; the chart grows and shrinks, and the side column keeps its width when the window resizes.
@@ -41,6 +41,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - **Cash account:** $100,000 to start (change it with **Reset account…**). No margin and no short selling: buys need buying power (cash minus what open buy orders have set aside), and you can only sell shares you own.
 - **Order types:** market, limit, stop and stop limit; **Day** (expires at the 4:00 PM close) or **Good till canceled**.
 - **Fills:** market orders fill at the ask (buy) or bid (sell). A limit order fills at its price once the quote reaches it (the ask for a buy, the bid for a sell), or at a better price if the market opens past it. A stop triggers when the last price reaches it: a stop then fills at the ask/bid, and a stop limit becomes a limit order. Orders are checked against every second of prices, including at 600× and during fast-forwards.
+- **Orders** lists every order with filters (All, Working, Filled, Canceled / expired / rejected). A filled sell shows the **P/L** it realized against your average cost; the Filled filter adds them up. (A buy only opens a position: its open P/L is in Positions.)
 - **Review before placing:** the ticket shows a preview from the server (estimated price and total, buying power and position before and after, realized P&L on sells, warnings) before the order goes in. Afterwards, the ticket follows the order's live status.
 - **Modify** a working order from the Orders tab: it's canceled and replaced by a new order with your changes, as at a real broker. Filter the Orders tab by working, filled, or canceled/expired/rejected.
 - **Going back in time** erases trades made after that point and refunds them. Orders that were open then become open again, and positions are valued at that time's prices.

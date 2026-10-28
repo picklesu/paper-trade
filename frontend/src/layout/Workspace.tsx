@@ -166,12 +166,13 @@ export const Workspace = memo(function Workspace() {
     // dockview's fromJSON lays the grid out at a size of 0 when floating windows are being
     // replaced (Reset layout then built everything 0px wide, so nothing showed). After any
     // load or rebuild, lay it out at the workspace's real size, measured as dockview does.
-    disposeFromJSON.current()
-    const relayout = api.onDidLayoutFromJSON(() => {
+    const relayout = () => {
       const el = host.current
       if (el?.clientWidth && el.clientHeight) api.layout(el.clientWidth, el.clientHeight, true)
-    })
-    disposeFromJSON.current = () => relayout.dispose()
+    }
+    disposeFromJSON.current()
+    const afterLoad = api.onDidLayoutFromJSON(relayout)
+    disposeFromJSON.current = () => afterLoad.dispose()
     let saved = loadLayout()
     try {
       if (saved) api.fromJSON(saved)
@@ -182,6 +183,8 @@ export const Workspace = memo(function Workspace() {
       clearLayout()
       buildDefaultLayout(api)
     }
+    // Before the side sizes are restored, which are relative to the chart's place.
+    keepChartSpace(api, relayout)
     // StrictMode's development double-mount readies a second dockview on the same element.
     disposeSizes.current()
     if (host.current) disposeSizes.current = keepSidePanelSizes(api, host.current, saved)
@@ -195,14 +198,14 @@ export const Workspace = memo(function Workspace() {
         labelFloatingWindow(g)
       }
     }
-    keepChartSpace(api)
     tidy()
     const tidyColumn = sideColumnTidier(api)
     disposeTidy.current()
     const subs = [
       api.onDidAddGroup(tidy),
       api.onDidLayoutChange(() => {
-        keepChartSpace(api)
+        // After this change has settled, not inside it.
+        queueMicrotask(() => keepChartSpace(api, relayout))
         tidy()
         tidyColumn()
       }),

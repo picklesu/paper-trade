@@ -31,14 +31,43 @@ export function mainGroup(api: DockviewApi): DockviewGroupPanel | undefined {
   return space?.api.location.type === 'grid' ? space : undefined
 }
 
-/** Keep the placeholder exactly while the chart isn't docked: run on every layout change.
- *  (`floatGroup` adds it as the chart leaves; this is the backstop, and removes it once the
- *  chart is back.) */
-export function keepChartSpace(api: DockviewApi): void {
-  const chartDocked = api.getPanel('chart')?.group.api.location.type === 'grid'
+/** Add the chart's placeholder: beside the docked chart (as it's about to float), or at the
+ *  right of the grid. */
+function addChartSpace(api: DockviewApi, besideChart: boolean): void {
+  const position: AddPanelOptions['position'] = besideChart ? { referencePanel: 'chart', direction: 'right' } : { direction: 'right' }
+  api.addPanel({ id: CHART_SPACE, component: CHART_SPACE, title: '', position })
+}
+
+/** Keep the placeholder exactly while the chart floats: on load and after layout changes.
+ *  (`floatGroup` adds it as the chart leaves and `dockGroup` swaps the chart back in; this
+ *  covers anything else, such as a layout saved before the placeholder existed.) Added to
+ *  a grid of only collapsed panels, which dockview has shrunk to nothing, it starts at its
+ *  minimum size, so `relayout` (the grid laid out at the workspace's size) follows. */
+export function keepChartSpace(api: DockviewApi, relayout: () => void): void {
+  const chart = api.getPanel('chart')
+  if (!chart) return
+  const docked = chart.group.api.location.type === 'grid'
   const space = api.getPanel(CHART_SPACE)
-  if (chartDocked && space) space.api.close()
-  else if (!chartDocked && !space) api.addPanel({ id: CHART_SPACE, component: CHART_SPACE, title: '', position: { direction: 'right' } })
+  if (docked && space) space.api.close()
+  else if (!docked && !space) {
+    addChartSpace(api, false)
+    relayout()
+    resetSideColumn(api)
+  }
+}
+
+/** Put the side column back to its usual width; if nothing in it is showing, collapsed to no
+ *  width (showing one panel at that width and hiding it again, as only hiding gives the
+ *  space back). For a grid rebuilt around the column, where it had any share of the width. */
+function resetSideColumn(api: DockviewApi): void {
+  const docked = SIDE_PANELS.map((p) => api.getPanel(p)?.group).filter((g): g is DockviewGroupPanel => !!g && g.api.location.type === 'grid')
+  const shown = docked.find((g) => g.api.isVisible)
+  if (shown) shown.api.setSize({ width: SIDE_WIDTH })
+  else if (docked.length) {
+    docked[0].api.setVisible(true)
+    docked[0].api.setSize({ width: SIDE_WIDTH })
+    docked[0].api.setVisible(false)
+  }
 }
 
 /** The panels beside the chart, top to bottom in their column at the left. */
@@ -162,13 +191,13 @@ export function dockGroup(api: DockviewApi, group: DockviewGroupPanel): void {
     // Into the placeholder's place, which then goes.
     group.api.moveTo({ group: space.group, position: 'center' })
     space.api.close()
-    return
+  } else {
+    const spot = dockSpot(api, id)
+    const toPosition = { left: 'left', right: 'right', above: 'top', below: 'bottom' } as const
+    const target = spot.beside ? api.getPanel(spot.beside)?.group : undefined
+    group.api.moveTo({ group: target, position: toPosition[spot.side] })
+    if (spot.size !== undefined) group.api.setSize({ width: spot.size })
   }
-  const spot = dockSpot(api, id)
-  const toPosition = { left: 'left', right: 'right', above: 'top', below: 'bottom' } as const
-  const target = spot.beside ? api.getPanel(spot.beside)?.group : undefined
-  group.api.moveTo({ group: target, position: toPosition[spot.side] })
-  if (spot.size !== undefined) group.api.setSize({ width: spot.size })
   if (id === 'chart') {
     // Docking splits the neighbour's space evenly; the chart is the main view, so the side
     // column goes back to its usual width and the chart takes the rest.
@@ -199,9 +228,7 @@ export function floatGroup(api: DockviewApi, group: DockviewGroupPanel): void {
   // The chart's placeholder goes in beside it before it leaves, so it simply takes over the
   // chart's space. (Added afterwards, it would start from a grid of only collapsed panels,
   // which dockview has shrunk to nothing.)
-  if (isChart && !api.getPanel(CHART_SPACE)) {
-    api.addPanel({ id: CHART_SPACE, component: CHART_SPACE, title: '', position: { referencePanel: 'chart', direction: 'right' } })
-  }
+  if (isChart && !api.getPanel(CHART_SPACE)) addChartSpace(api, true)
   api.addFloatingGroup(group, { x, y, width, height })
   if (hidden || !group.api.isVisible) group.api.setVisible(true)
 }

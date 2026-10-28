@@ -23,7 +23,15 @@ describe('snapPosition', () => {
   })
 
   it('picks the nearest candidate', () => {
-    // Both the right edge (900) and another window's left-align (895) are in range.
-    expect(snapPosition(box(897, 300), container, [box(895, 20, 100, 100)])).toEqual({ left: 895, top: 300 })
+    // Both the right edge (900) and a nearby window's left-align (895) are in range.
+    expect(snapPosition(box(897, 300), container, [box(895, 280, 100, 100)])).toEqual({ left: 895, top: 300 })
+  })
+
+  it("ignores another window's edges when it's far away on the other axis", () => {
+    const other = box(500, 0, 300, 100) // top band
+    // Near x=200 (other.left - width) but 400px below the other window: no pull.
+    expect(snapPosition(box(205, 500, 300, 200), container, [other])).toEqual({ left: 205, top: 500 })
+    // Same x, but overlapping vertically: snaps.
+    expect(snapPosition(box(205, 50, 300, 200), container, [other])).toEqual({ left: 200, top: 50 })
   })
 })

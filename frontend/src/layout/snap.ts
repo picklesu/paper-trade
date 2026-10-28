@@ -23,9 +23,13 @@ export function snapPosition(
   const xs = [0, container.width - proposed.width]
   const ys = [0, container.height - proposed.height]
   for (const o of others) {
+    // Another window's edges only attract when the two are near each other on the other
+    // axis (overlapping or within `distance`); otherwise a far-away window feels sticky.
+    const nearVertically = proposed.top <= o.top + o.height + distance && proposed.top + proposed.height >= o.top - distance
+    const nearHorizontally = proposed.left <= o.left + o.width + distance && proposed.left + proposed.width >= o.left - distance
     // Side by side (touching), or aligned with the other window's edges.
-    xs.push(o.left + o.width, o.left - proposed.width, o.left, o.left + o.width - proposed.width)
-    ys.push(o.top + o.height, o.top - proposed.height, o.top, o.top + o.height - proposed.height)
+    if (nearVertically) xs.push(o.left + o.width, o.left - proposed.width, o.left, o.left + o.width - proposed.width)
+    if (nearHorizontally) ys.push(o.top + o.height, o.top - proposed.height, o.top, o.top + o.height - proposed.height)
   }
   return { left: nearest(proposed.left, xs, distance), top: nearest(proposed.top, ys, distance) }
 }

@@ -148,10 +148,14 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     below, 220px) and `reopenPanel`. `Workspace.tsx` contains `LayoutProvider` (the dockview API
     for the Panels menu; live tab titles "Positions (n)" and "Orders (n working)"),
     `Workspace` (restore from `localStorage` `paper-trade.layout.v1`, falling back to the
-    default when it's bad; save 300ms after changes; snapping through
+    default when it's bad; save 300ms after changes and immediately on `pagehide`. Don't clear
+    the API ref in effect cleanup: StrictMode's dev double-mount broke saving that way, and
+    `App.test` covers it under StrictMode; snapping through
     `transformFloatingGroupDrag` → `snap.ts`), `keepSidePanelSizes` (when a group leaves the
     grid, the others go back to their previous sizes and the chart takes the space), and
-    `GroupActions` (⤢ maximize, ⧉ float / ⇲ dock). `PanelsMenu.tsx`: show or hide panels, Reset
+    `GroupActions` (⤢ maximize; ⧉ float, cascading new windows 32px apart; ⇲ dock back via
+    `dockGroup`, which uses the same `dockSpot` rules as `reopenPanel`: floating panels never
+    count as a reference, and docking the chart restores the side widths). `PanelsMenu.tsx`: show or hide panels, Reset
     layout.
   - **Layering:** `.topbar` has z-index 1 over `.workspace` (`isolation: isolate`). Dialogs go
     through `components/Modal.tsx`, a portal to `<body>` at z-index 100. **dockview 8.5 CSS
@@ -196,7 +200,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 91 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 96 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

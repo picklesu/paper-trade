@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 import App from './App'
 import type { Order, Quote, TickMessage } from './lib/types'
 
@@ -245,6 +246,41 @@ describe('workspace', () => {
     expect(floatButtons()).toHaveLength(before)
   })
 
+  it('a panel reopened while the chart floats docks in the grid, not inside the floating window', () => {
+    render(<App />)
+    const chartGroup = panel('Chart').closest('.dv-groupview')!
+    fireEvent.click(within(chartGroup as HTMLElement).getByRole('button', { name: 'Float panel' }))
+    expect(panel('Chart').closest('.dv-resize-container')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Watchlist/ }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Watchlist/ }))
+    expect(panel('Watchlist').closest('.dv-resize-container')).toBeNull()
+    expect(panel('Chart').closest('.dv-resize-container')).not.toBeNull()
+  })
+
+  it('docking a floating panel returns it to its usual side', () => {
+    render(<App />)
+    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
+    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Float panel' }))
+    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Dock panel' }))
+    expect(panel('Watchlist').closest('.dv-resize-container')).toBeNull()
+    // Left of the chart again: earlier in the grid than the chart.
+    const order = group('Watchlist').compareDocumentPosition(group('Chart'))
+    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('saves the layout immediately when the page is closing', () => {
+    render(<App />)
+    localStorage.clear()
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ }))
+    window.dispatchEvent(new Event('pagehide')) // before the delayed save
+    const saved = localStorage.getItem('paper-trade.layout.v1') ?? ''
+    expect(saved).toContain('"positions"')
+    expect(saved).not.toContain('"activity"')
+  })
+
   it('remembers the layout across reloads, and Reset layout restores the default', async () => {
     const { unmount } = render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
@@ -264,6 +300,19 @@ describe('workspace', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
     expect(panel('Order Entry')).toBeInTheDocument()
+  })
+
+  it('saves the layout under StrictMode too, as the real page runs', async () => {
+    const { unmount } = render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ }))
+    await waitFor(() => expect(localStorage.getItem('paper-trade.layout.v1') ?? '').toContain('"positions"'))
+    expect(localStorage.getItem('paper-trade.layout.v1')).not.toContain('"activity"')
+    unmount()
   })
 
   it('ignores a corrupted saved layout', () => {

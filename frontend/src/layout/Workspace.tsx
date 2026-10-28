@@ -8,7 +8,7 @@ import {
   themeDark,
 } from 'dockview-react'
 import 'dockview-react/dist/styles/dockview.css'
-import { type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppData } from './appDataContext'
 import { type CollapseControls, CollapseContext, CollapseSetterContext } from './collapseContext'
 import { EdgeStrip } from './EdgeStrip'
@@ -101,8 +101,15 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
 const SAVE_DELAY_MS = 300
 const EDGES: Edge[] = ['top', 'left', 'right', 'bottom']
 
-/** The dockable, floatable workspace that holds every panel. */
-export function Workspace() {
+/** Floating windows snap to the workspace edges and to each other. A module-level function:
+ *  DockviewReact passes any changed option prop to `updateOptions`, which lays the whole grid
+ *  out again from the sizes saved before a divider drag, so a new function on each render
+ *  snapped a panel being resized back to where it started. */
+const snapFloatingDrag = (ctx: FloatingGroupDragContext) => snapPosition(ctx.proposed, ctx.container, ctx.others)
+
+/** The dockable, floatable workspace that holds every panel. Memoized: it has no props, and
+ *  its parent re-renders on every market tick. */
+export const Workspace = memo(function Workspace() {
   const setApi = useContext(ApiSetterContext)
   const setCollapseForMenu = useContext(CollapseSetterContext)
   const apiRef = useRef<DockviewApi | null>(null)
@@ -209,14 +216,13 @@ export function Workspace() {
             // tabbed behind another panel). Floating windows still move by their bar.
             disableDnd
             floatingGroupBounds="boundedWithinViewport"
-            // Floating windows snap to the workspace edges and to each other.
-            transformFloatingGroupDrag={(ctx: FloatingGroupDragContext) => snapPosition(ctx.proposed, ctx.container, ctx.others)}
+            transformFloatingGroupDrag={snapFloatingDrag}
           />
         </div>
       </div>
     </CollapseContext.Provider>
   )
-}
+})
 
 /** The layout to save: a group the user is only peeking at is saved collapsed. */
 function snapshot(api: DockviewApi, peeking: string | null) {
@@ -265,6 +271,13 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     before = gridSizes()
   })
   observer.observe(host)
+  // A layout loaded or rebuilt (Reset layout) is laid out at the size dockview last knew,
+  // which can be 0 (with a floating window open, it reported a width of 0 and Reset built
+  // everything 0px wide). Lay it out at the workspace's real size.
+  const fromJSON = api.onDidLayoutFromJSON(() => {
+    const { width, height } = host.getBoundingClientRect()
+    if (width && height) api.layout(width, height, true)
+  })
   // A saved layout is scaled to the workspace's size now; give the side panels back the sizes
   // they were saved with.
   const chart = api.getPanel('chart')?.group
@@ -281,6 +294,7 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
   }
   return () => {
     sub.dispose()
+    fromJSON.dispose()
     observer.disconnect()
   }
 }

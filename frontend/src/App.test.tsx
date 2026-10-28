@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
+import { DockviewApi } from 'dockview-react'
 import App from './App'
 import type { Order, Quote, TickMessage } from './lib/types'
 
@@ -339,6 +340,31 @@ describe('workspace', () => {
     await waitFor(() => expect(localStorage.getItem('paper-trade.layout.v2') ?? '').toContain('"positions"'))
     expect(localStorage.getItem('paper-trade.layout.v2')).not.toContain('"activity"')
     unmount()
+  })
+
+  it("market ticks don't touch dockview's options (that re-laid the grid out mid-drag)", () => {
+    const update = vi.spyOn(DockviewApi.prototype, 'updateOptions')
+    render(<App />)
+    push(tick())
+    update.mockClear()
+    push(tick({ regime: 'volatile' }))
+    push(tick({ regime: 'calm' }))
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('Reset layout after floating panels builds the default as one row: the column and the chart', async () => {
+    render(<App />)
+    setPanel('Watchlist', 'Float')
+    setPanel('Chart', 'Float')
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem('paper-trade.layout.v2') ?? '{}')
+      expect(saved.floatingGroups ?? []).toHaveLength(0)
+      // Not wrapped in an extra branch (which came out 0px tall and showed nothing).
+      expect(saved.grid.orientation).toBe('HORIZONTAL')
+      expect(saved.grid.root.data.map((n: { type: string }) => n.type)).toEqual(['branch', 'leaf'])
+    })
+    expect(panel('Chart').closest('.dv-resize-container')).toBeNull()
   })
 
   it('ignores a corrupted saved layout', () => {

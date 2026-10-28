@@ -93,29 +93,32 @@ function panel(name: string): HTMLElement {
 }
 const hasPanel = (name: string) => document.querySelector(`[data-panel="${name}"]`) !== null
 
-/** Click a workspace tab by its title. */
-function openTab(title: string | RegExp) {
-  const tab = screen.getAllByText(title).find((el) => el.closest('.dv-tab'))?.closest('.dv-tab')
-  if (!tab) throw new Error(`no tab ${title}`)
-  // dockview activates a tab on a primary-button pointer press.
-  fireEvent.pointerDown(tab, { button: 0 })
-  fireEvent.click(tab)
+/** Place a panel from the Panels menu: Open, Collapsed, Float or Off. */
+function setPanel(name: string, state: 'Open' | 'Collapsed' | 'Float' | 'Off') {
+  if (!screen.queryByRole('menu', { name: 'Panels' })) fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+  fireEvent.click(within(screen.getByRole('radiogroup', { name })).getByRole('radio', { name: state }))
 }
+const stateOf = (name: string) => {
+  if (!screen.queryByRole('menu', { name: 'Panels' })) fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+  return within(screen.getByRole('radiogroup', { name })).getByRole('radio', { checked: true }).textContent
+}
+const strip = () => screen.queryByRole('toolbar', { name: 'Collapsed panels (left)' })
+const stripTab = (name: string | RegExp) => within(strip()!).getByRole('button', { name })
+const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
 
 describe('App', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('lays out the default workspace before data arrives', () => {
+  it('lays out the default workspace before data arrives: the chart, everything else collapsed on the left', () => {
     render(<App />)
-    for (const name of ['Watchlist', 'Chart', 'Order Entry', 'Positions']) {
-      expect(panel(name)).toBeInTheDocument()
-    }
-    // Orders and Activity are tabs behind Positions.
-    for (const title of ['Orders', 'Activity']) {
-      expect(screen.getAllByText(title).some((el) => el.closest('.dv-tab'))).toBe(true)
-    }
+    expect(panel('Chart')).toBeInTheDocument()
+    expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Watchlist', 'Order Entry', 'Positions', 'Orders', 'Activity'])
+    // No tab bars: the Panels menu places panels.
+    const headers = [...document.querySelectorAll<HTMLElement>('.dv-tabs-and-actions-container')]
+    expect(headers.length).toBeGreaterThan(0)
+    for (const header of headers) expect(header.style.display).toBe('none')
     expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent('Connecting')
     expect(panel('Watchlist')).toHaveTextContent('Waiting for market data')
   })
@@ -143,7 +146,8 @@ describe('App', () => {
     expect(within(banner).getByText('+$20.00')).toHaveClass('up')
     expect(within(panel('Positions')).getByText('$5,820.00')).toBeInTheDocument()
     expect(within(panel('Positions')).getByText('+$20.00 (+0.34%)')).toHaveClass('up')
-    expect(screen.getAllByText('Positions (1)').some((el) => el.closest('.dv-tab'))).toBe(true)
+    // The collapsed panel's tab says how many there are.
+    expect(stripTab('Positions, 1 open')).toBeInTheDocument()
   })
 
   it('shows orders from the stream with a cancel button for working ones', async () => {
@@ -162,8 +166,8 @@ describe('App', () => {
         }),
       })
     })
-    openTab('Orders (1 working)')
-    await waitFor(() => expect(hasPanel('Orders')).toBe(true))
+    expect(stripTab('Orders, 1 working')).toBeInTheDocument()
+    setPanel('Orders', 'Open')
     const orders = panel('Orders')
     expect(within(orders).getByText('Limit 570.00')).toBeInTheDocument()
     expect(within(orders).getByText('Filled at 580.03')).toBeInTheDocument()
@@ -175,8 +179,7 @@ describe('App', () => {
     expect(within(orders).queryByText('Limit 570.00')).not.toBeInTheDocument()
     expect(within(orders).getByText('Filled at 580.03')).toBeInTheDocument()
 
-    openTab('Activity')
-    await waitFor(() => expect(hasPanel('Activity')).toBe(true))
+    setPanel('Activity', 'Open')
     expect(within(panel('Activity')).getByText('-$5,800.30')).toBeInTheDocument()
   })
 
@@ -219,87 +222,111 @@ describe('workspace', () => {
     vi.restoreAllMocks()
   })
 
-  it('the Panels menu hides and restores panels', () => {
+  it('the Panels menu opens, collapses, floats and turns off each panel', async () => {
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
-    const menu = screen.getByRole('menu', { name: 'Panels' })
-    const watchlist = within(menu).getByRole('menuitemcheckbox', { name: /Watchlist/ })
-    expect(watchlist).toHaveAttribute('aria-checked', 'true')
+    expect(stateOf('Watchlist')).toBe('Collapsed')
+    expect(stateOf('Chart')).toBe('Open')
 
-    fireEvent.click(watchlist)
+    setPanel('Watchlist', 'Open')
+    await waitFor(() => expect(within(strip()!).queryByRole('button', { name: 'Watchlist' })).not.toBeInTheDocument())
+    expect(stateOf('Watchlist')).toBe('Open')
+
+    setPanel('Watchlist', 'Float')
+    expect(panel('Watchlist').closest('.dv-resize-container')).not.toBeNull() // dockview's floating window
+    await waitFor(() => expect(stateOf('Watchlist')).toBe('Float'))
+
+    setPanel('Watchlist', 'Off')
     expect(hasPanel('Watchlist')).toBe(false)
-    expect(within(menu).getByRole('menuitemcheckbox', { name: /Watchlist/ })).toHaveAttribute('aria-checked', 'false')
+    await waitFor(() => expect(stateOf('Watchlist')).toBe('Off'))
 
-    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Watchlist/ }))
-    expect(panel('Watchlist')).toBeInTheDocument()
+    setPanel('Watchlist', 'Collapsed')
+    await waitFor(() => expect(stripTab('Watchlist')).toBeInTheDocument())
+    expect(panel('Watchlist').closest('.dv-resize-container')).toBeNull()
   })
 
-  it('pops a panel out as a floating window and docks it back', () => {
+  it('docking a floating panel puts it back in the left column', () => {
     render(<App />)
-    const floatButtons = () => screen.getAllByRole('button', { name: 'Float panel' })
-    const before = floatButtons().length
-    fireEvent.click(floatButtons()[0])
-    expect(screen.getAllByRole('button', { name: 'Dock panel' })).toHaveLength(1)
-    expect(document.querySelectorAll('.dv-resize-container')).toHaveLength(1) // dockview's floating window
-    fireEvent.click(screen.getByRole('button', { name: 'Dock panel' }))
-    expect(screen.queryByRole('button', { name: 'Dock panel' })).not.toBeInTheDocument()
-    expect(floatButtons()).toHaveLength(before)
+    setPanel('Order Entry', 'Float')
+    setPanel('Order Entry', 'Open')
+    expect(panel('Order Entry').closest('.dv-resize-container')).toBeNull()
+    // Left of the chart: earlier in the grid.
+    expect(group('Order Entry').compareDocumentPosition(group('Chart')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('a panel reopened while the chart floats docks in the grid, not inside the floating window', () => {
+  it('a panel opened while the chart floats docks in the grid, not inside the floating window', () => {
     render(<App />)
-    const chartGroup = panel('Chart').closest('.dv-groupview')!
-    fireEvent.click(within(chartGroup as HTMLElement).getByRole('button', { name: 'Float panel' }))
+    setPanel('Chart', 'Float')
     expect(panel('Chart').closest('.dv-resize-container')).not.toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Watchlist/ }))
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Watchlist/ }))
+    setPanel('Watchlist', 'Off')
+    setPanel('Watchlist', 'Open')
     expect(panel('Watchlist').closest('.dv-resize-container')).toBeNull()
     expect(panel('Chart').closest('.dv-resize-container')).not.toBeNull()
   })
 
-  it('docking a floating panel returns it to its usual side', () => {
+  it('a strip tab peeks at a collapsed panel until a click elsewhere; Open in the menu keeps it', () => {
     render(<App />)
-    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
-    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Float panel' }))
-    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Dock panel' }))
-    expect(panel('Watchlist').closest('.dv-resize-container')).toBeNull()
-    // Left of the chart again: earlier in the grid than the chart.
-    const order = group('Watchlist').compareDocumentPosition(group('Chart'))
-    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const tab = stripTab('Watchlist')
+    fireEvent.click(tab)
+    expect(tab).toHaveAttribute('aria-pressed', 'true')
+    expect(group('Watchlist')).toHaveClass('peeking')
+    fireEvent.pointerDown(panel('Chart'))
+    expect(tab).toHaveAttribute('aria-pressed', 'false')
+
+    // Clicks outside the workspace (the top bar) leave it; the same tab again tucks it away.
+    fireEvent.click(tab)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Panels ▾' }))
+    expect(tab).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(tab)
+    expect(tab).toHaveAttribute('aria-pressed', 'false')
+
+    // Peeking counts as collapsed; Open pins it.
+    fireEvent.click(tab)
+    expect(stateOf('Watchlist')).toBe('Collapsed')
+    setPanel('Watchlist', 'Open')
+    expect(group('Watchlist')).not.toHaveClass('peeking')
+    fireEvent.pointerDown(panel('Chart'))
+    expect(stateOf('Watchlist')).toBe('Open')
+  })
+
+  it('saves collapsed panels as collapsed, even one being peeked at', () => {
+    const { unmount } = render(<App />)
+    setPanel('Order Entry', 'Open')
+    fireEvent.click(stripTab('Watchlist'))
+    window.dispatchEvent(new Event('pagehide'))
+    unmount()
+
+    render(<App />)
+    expect(stripTab('Watchlist')).toHaveAttribute('aria-pressed', 'false')
+    expect(within(strip()!).queryByRole('button', { name: 'Order Entry' })).not.toBeInTheDocument()
   })
 
   it('saves the layout immediately when the page is closing', () => {
     render(<App />)
     localStorage.clear()
-    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ }))
+    setPanel('Activity', 'Off')
     window.dispatchEvent(new Event('pagehide')) // before the delayed save
-    const saved = localStorage.getItem('paper-trade.layout.v1') ?? ''
+    const saved = localStorage.getItem('paper-trade.layout.v2') ?? ''
     expect(saved).toContain('"positions"')
     expect(saved).not.toContain('"activity"')
   })
 
   it('remembers the layout across reloads, and Reset layout restores the default', async () => {
     const { unmount } = render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Order Entry/ }))
+    setPanel('Order Entry', 'Off')
     // The layout is saved shortly after it changes.
     await waitFor(() => {
-      const saved = localStorage.getItem('paper-trade.layout.v1') ?? ''
+      const saved = localStorage.getItem('paper-trade.layout.v2') ?? ''
       expect(saved).toContain('"watchlist"')
       expect(saved).not.toContain('"ticket"')
     })
     unmount()
 
     render(<App />)
-    expect(panel('Watchlist')).toBeInTheDocument()
     expect(hasPanel('Order Entry')).toBe(false)
-
     fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
     expect(panel('Order Entry')).toBeInTheDocument()
+    expect(stateOf('Order Entry')).toBe('Collapsed')
   })
 
   it('saves the layout under StrictMode too, as the real page runs', async () => {
@@ -308,103 +335,17 @@ describe('workspace', () => {
         <App />
       </StrictMode>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ }))
-    await waitFor(() => expect(localStorage.getItem('paper-trade.layout.v1') ?? '').toContain('"positions"'))
-    expect(localStorage.getItem('paper-trade.layout.v1')).not.toContain('"activity"')
+    setPanel('Activity', 'Off')
+    await waitFor(() => expect(localStorage.getItem('paper-trade.layout.v2') ?? '').toContain('"positions"'))
+    expect(localStorage.getItem('paper-trade.layout.v2')).not.toContain('"activity"')
     unmount()
-  })
-
-  it('collapses a side panel to an edge strip, peeks at it, and pins it open', () => {
-    render(<App />)
-    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
-    // The chart is the main view: it doesn't collapse.
-    expect(within(group('Chart')).queryByRole('button', { name: 'Collapse panel' })).not.toBeInTheDocument()
-
-    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Collapse panel' }))
-    const strip = screen.getByRole('toolbar', { name: 'Collapsed panels (left)' })
-    const tab = within(strip).getByRole('button', { name: 'Watchlist' })
-    expect(tab).toHaveAttribute('aria-pressed', 'false')
-
-    // Peek: shown until a click elsewhere in the workspace.
-    fireEvent.click(tab)
-    expect(tab).toHaveAttribute('aria-pressed', 'true')
-    expect(group('Watchlist')).toHaveClass('peeking')
-    fireEvent.pointerDown(panel('Chart'))
-    expect(tab).toHaveAttribute('aria-pressed', 'false')
-    expect(group('Watchlist')).not.toHaveClass('peeking')
-
-    // A click outside the workspace (the top bar) leaves it open; pinning keeps it.
-    fireEvent.click(tab)
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Panels ▾' }))
-    expect(tab).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Pin panel open' }))
-    expect(screen.queryByRole('toolbar', { name: /Collapsed panels/ })).not.toBeInTheDocument()
-    fireEvent.pointerDown(panel('Chart'))
-    expect(group('Watchlist')).not.toHaveClass('peeking')
-  })
-
-  it("a click in dockview's menus (like the list of tabs that don't fit) keeps a peeked panel open", () => {
-    render(<App />)
-    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
-    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Collapse panel' }))
-    const tab = within(screen.getByRole('toolbar', { name: 'Collapsed panels (left)' })).getByRole('button', { name: 'Watchlist' })
-    fireEvent.click(tab)
-    // dockview draws its popups in an anchor at the top of the workspace, outside the group.
-    const anchor = document.querySelector('.dv-popover-anchor')!
-    const row = document.createElement('div')
-    anchor.appendChild(row)
-    fireEvent.pointerDown(row)
-    expect(tab).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  it('puts each collapsed panel on its own edge, with one tab per panel in a group', () => {
-    render(<App />)
-    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
-    fireEvent.click(within(group('Order Entry')).getByRole('button', { name: 'Collapse panel' }))
-    fireEvent.click(within(group('Positions')).getByRole('button', { name: 'Collapse panel' }))
-    expect(within(screen.getByRole('toolbar', { name: 'Collapsed panels (right)' })).getByRole('button', { name: 'Order Entry' })).toBeInTheDocument()
-    const bottom = screen.getByRole('toolbar', { name: 'Collapsed panels (bottom)' })
-    expect(within(bottom).getAllByRole('button').map((b) => b.textContent)).toEqual(['Positions', 'Orders', 'Activity'])
-
-    // A tab brings its own panel to the front.
-    fireEvent.click(within(bottom).getByRole('button', { name: 'Orders' }))
-    expect(within(bottom).getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-pressed', 'true')
-    // The same tab again collapses it.
-    fireEvent.click(within(bottom).getByRole('button', { name: 'Orders' }))
-    expect(within(bottom).getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-pressed', 'false')
-  })
-
-  it('saves collapsed panels as collapsed, even one being peeked at', async () => {
-    const { unmount } = render(<App />)
-    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
-    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Collapse panel' }))
-    fireEvent.click(within(screen.getByRole('toolbar', { name: /left/ })).getByRole('button', { name: 'Watchlist' }))
-    window.dispatchEvent(new Event('pagehide'))
-    unmount()
-
-    render(<App />)
-    const tab = within(screen.getByRole('toolbar', { name: 'Collapsed panels (left)' })).getByRole('button', { name: 'Watchlist' })
-    expect(tab).toHaveAttribute('aria-pressed', 'false')
-  })
-
-  it('a panel picked in the Panels menu expands its collapsed group', async () => {
-    render(<App />)
-    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
-    fireEvent.click(within(group('Positions')).getByRole('button', { name: 'Collapse panel' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ })) // close it
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ })) // reopen: joins Positions
-    // dockview reports the layout change a moment later.
-    await waitFor(() => expect(screen.queryByRole('toolbar', { name: /Collapsed panels/ })).not.toBeInTheDocument())
-    expect(within(group('Activity')).getByText('Positions')).toBeInTheDocument() // tabbed with it
   })
 
   it('ignores a corrupted saved layout', () => {
-    localStorage.setItem('paper-trade.layout.v1', '{"grid": "nonsense"}')
+    localStorage.setItem('paper-trade.layout.v2', '{"grid": "nonsense"}')
     render(<App />)
     expect(panel('Chart')).toBeInTheDocument()
-    expect(panel('Order Entry')).toBeInTheDocument()
+    expect(stripTab('Order Entry')).toBeInTheDocument()
   })
 })
 

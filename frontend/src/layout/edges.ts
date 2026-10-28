@@ -40,17 +40,21 @@ export function edgeOf(layout: SerializedDockview, groupId: string, chartGroupId
   return before ? 'top' : 'bottom'
 }
 
-/** Each grid group's saved size along its branch: a width in a row, a height in a column. */
-export function savedSizes(layout: SerializedDockview): Map<string, { width: number } | { height: number }> {
-  const out = new Map<string, { width: number } | { height: number }>()
-  const walk = (node: Node, orientation: Orientation) => {
+/** Each grid group's saved width and height: its size along its branch, and the branch's
+ *  own size across (for a group in a column, the column's width). */
+export function savedSizes(layout: SerializedDockview): Map<string, { width: number; height: number }> {
+  const out = new Map<string, { width: number; height: number }>()
+  const walk = (node: Node, orientation: Orientation, across: number) => {
     for (const child of node.data as Node[]) {
+      const along = child.size ?? 0
       if (child.type === 'leaf') {
-        if (child.size) out.set((child.data as { id: string }).id, orientation === Orientation.HORIZONTAL ? { width: child.size } : { height: child.size })
-      } else walk(child, flip(orientation))
+        const id = (child.data as { id: string }).id
+        out.set(id, orientation === Orientation.HORIZONTAL ? { width: along, height: across } : { width: across, height: along })
+      } else walk(child, flip(orientation), along)
     }
   }
-  if (layout.grid.root.type === 'branch') walk(layout.grid.root, layout.grid.orientation)
+  const { root, orientation, width, height } = layout.grid
+  if (root.type === 'branch') walk(root, orientation, orientation === Orientation.HORIZONTAL ? height : width)
   return out
 }
 

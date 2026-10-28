@@ -1,8 +1,8 @@
 import type { DockviewApi } from 'dockview-react'
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CollapseControls, CollapsedGroup } from './collapseContext'
-import { type Edge, edgeOf } from './edges'
-import { PANELS, type PanelId } from './panels'
+import { edgeOf } from './edges'
+import { PANELS, type PanelId, showGroup } from './panels'
 
 const titleOf = (id: string) => PANELS[id as PanelId]?.title ?? id
 // Not api.getGroup: its type lacks the group's element.
@@ -20,7 +20,6 @@ export function useEdgeStrips(
   onPinned: () => void,
 ): CollapseControls {
   const [collapsed, setCollapsed] = useState<CollapsedGroup[]>([])
-  const [edges, setEdges] = useState<ReadonlyMap<string, Edge>>(new Map())
   const [peeking, setPeeking] = useState<string | null>(null)
   const sync = useRef<() => void>(() => {})
   const pinned = useRef(onPinned)
@@ -39,23 +38,17 @@ export function useEdgeStrips(
   useEffect(() => {
     if (!api) return
     sync.current = () => {
-      // While a group is maximized every other group is hidden too; keep the strips as they were.
-      if (api.hasMaximizedGroup()) return
       const layout = api.toJSON()
       const chart = api.getPanel('chart')?.group
       const chartId = chart?.api.location.type === 'grid' ? chart.id : undefined
-      const nextEdges = new Map<string, Edge>()
       const next: CollapsedGroup[] = []
       for (const g of api.groups) {
         if (g.api.location.type !== 'grid') continue
-        const edge = edgeOf(layout, g.id, chartId)
-        nextEdges.set(g.id, edge)
         if (!g.api.isVisible || g.id === peekRef.current) {
-          next.push({ id: g.id, edge, panels: g.panels.map((p) => ({ id: p.id, title: titleOf(p.id) })), activePanel: g.activePanel?.id })
+          next.push({ id: g.id, edge: edgeOf(layout, g.id, chartId), panels: g.panels.map((p) => ({ id: p.id, title: titleOf(p.id) })), activePanel: g.activePanel?.id })
         }
       }
       if (peekRef.current && !next.some((c) => c.id === peekRef.current)) setPeek(null)
-      setEdges(nextEdges)
       setCollapsed(next)
     }
     sync.current()
@@ -66,7 +59,6 @@ export function useEdgeStrips(
       api.onDidRemovePanel(run),
       api.onDidActivePanelChange(run),
       api.onDidLayoutFromJSON(run),
-      api.onDidMaximizedGroupChange(run),
     ]
     return () => subs.forEach((s) => s.dispose())
   }, [api, peekRef, setPeek])
@@ -78,9 +70,8 @@ export function useEdgeStrips(
     const onDown = (e: PointerEvent) => {
       const target = e.target as Element
       const group = groupOf(api, peeking)
-      // Dragging a divider (dockview's sash) resizes the peeked group, and dockview draws the
-      // group's menus (such as the list of tabs that don't fit) outside the group.
-      if (!frame.current?.contains(target) || group?.element.contains(target) || target.closest('.edge-strip, .dv-sash, .dv-popover-anchor')) return
+      // Dragging a divider (dockview's sash) resizes the peeked group.
+      if (!frame.current?.contains(target) || group?.element.contains(target) || target.closest('.edge-strip, .dv-sash')) return
       setPeek(null)
       group?.api.setVisible(false)
       sync.current()
@@ -98,7 +89,6 @@ export function useEdgeStrips(
     () => ({
       collapsed,
       peeking,
-      edges,
       collapse: (group) => {
         if (peekRef.current === group.id) setPeek(null)
         group.api.setVisible(false)
@@ -114,7 +104,7 @@ export function useEdgeStrips(
         } else {
           if (peekRef.current && peekRef.current !== groupId) groupOf(api, peekRef.current)?.api.setVisible(false)
           setPeek(groupId)
-          group.api.setVisible(true)
+          showGroup(api, group)
           api.getPanel(panelId)?.api.setActive()
         }
         sync.current()
@@ -125,7 +115,7 @@ export function useEdgeStrips(
         pinned.current()
       },
     }),
-    [api, collapsed, peeking, edges, peekRef, setPeek],
+    [api, collapsed, peeking, peekRef, setPeek],
   )
   return controls
 }

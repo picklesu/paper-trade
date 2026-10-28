@@ -1,4 +1,5 @@
 import { dollars, orderTypeLabel, price, signedDollars } from '../lib/format'
+import { tifLabel } from '../lib/orders'
 import type { OrderPreview } from '../lib/types'
 
 interface Props {
@@ -16,7 +17,7 @@ export function OrderReview({ preview: p, busy, onPlace, onEdit }: Props) {
       <h3>Review order</h3>
       <p className="review-headline">
         <span className={buy ? 'up' : 'down'}>{buy ? 'Buy' : 'Sell'}</span> {p.qty.toLocaleString()} {p.symbol} ·{' '}
-        {orderTypeLabel(p)} · {p.type === 'market' ? 'Day' : p.tif === 'gtc' ? 'Good till canceled' : 'Day'}
+        {orderTypeLabel(p)} · {tifLabel(p.tif)}
       </p>
       <dl className="ticket-summary">
         <Row label="Estimated price" value={`${price(p.estimated_price)} ${p.fills_now ? '(fills now)' : '(when it fills)'}`} />

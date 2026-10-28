@@ -524,3 +524,49 @@ def test_replaced_order_survives_reload(tmp_path) -> None:
     new = b.replace(old.id, limit_price=2.0)
     again = Broker(b.engine, Store(tmp_path / "r.db"))
     assert again.orders[new.id].replaces == old.id
+
+
+def test_ids_are_never_reused_after_a_rewind() -> None:
+    b = make()
+    b.place("SPY", "buy", 1, "limit", limit_price=1.0)
+    move(b, et(2026, 1, 5, 11, 0))
+    erased = b.place("SPY", "buy", 1, "limit", limit_price=1.0)
+    b.engine.rewind(et(2026, 1, 5, 10, 30), new_future=False)
+    b.rewind(et(2026, 1, 5, 10, 30))
+    assert erased.id not in b.orders
+    assert b.place("SPY", "buy", 1, "limit", limit_price=1.0).id == erased.id + 1
+
+
+def test_triggered_stop_limit_stays_triggered_when_modified() -> None:
+    b = make()
+    b.place("TSLA", "buy", 10, "market")
+    last = b.engine.quotes["TSLA"].last
+    # Stop already reached (triggers at once), limit far above: rests as a limit.
+    o = b.place("TSLA", "sell", 10, "stop_limit", stop_price=round(last * 1.5, 2), limit_price=round(last * 2, 2), tif="gtc")
+    assert o.triggered_at is not None and o.status == "working"
+    new = b.replace(o.id, limit_price=round(last * 1.9, 2))
+    assert new.triggered_at == o.triggered_at
+    with pytest.raises(OrderError, match="stop already triggered"):
+        b.replace(new.id, stop_price=round(last * 1.4, 2))
+
+
+def test_preview_position_math_matches_the_ledger() -> None:
+    b = make()
+    b.place("AMD", "buy", 7, "market")
+    move(b, et(2026, 1, 5, 12, 0))
+    p = b.preview("AMD", "buy", 5, "market")
+    b.place("AMD", "buy", 5, "market")
+    pos = b.ledger().positions["AMD"]
+    assert p["position_after"] == pos.qty
+    assert p["avg_cost_after"] == pytest.approx(pos.avg_cost, abs=1e-4)
+    assert p["cash_after"] == pytest.approx(b.ledger().cash, abs=0.01)
+    p = b.preview("AMD", "sell", 12, "market")
+    realized_before = pos.realized
+    b.place("AMD", "sell", 12, "market")
+    assert p["estimated_realized"] == pytest.approx(b.ledger().positions["AMD"].realized - realized_before, abs=0.01)
+
+
+def test_day_warning_names_the_date() -> None:
+    b = make()
+    p = b.preview("SPY", "buy", 1, "limit", limit_price=1.0)
+    assert any("today (Mon Jan 5)" in w for w in p["warnings"])

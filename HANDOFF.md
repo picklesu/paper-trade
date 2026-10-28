@@ -117,10 +117,12 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     server preview → place; `OrderStatusLine` follows the placed order through the stream,
     including replacements), `BottomTabs` (Positions / Orders with filters, Modify
     (`ModifyOrderDialog`) and Cancel / Activity, plus "Reset account…"),
-    `ResetAccountDialog`, `Panel`. `lib/orders.ts`: `latestVersion`, `describeOrder`. The top bar
+    `ResetAccountDialog`, `TifSelect`, `Panel`. `lib/orders.ts`: shared status wording
+    (`statusText`, `describeOrder`), time-in-force labels, and the replacement lookup.
+    Order ids are never reused (`last_order_id` in the store), even after a rewind. The top bar
     shows net liq, buying power and day P&L.
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 127 (pytest), frontend 35 (Vitest + Testing Library).
+- Tests: backend 131 (pytest), frontend 41 (Vitest + Testing Library).
 
 ## Decisions already made (don't reopen without a reason)
 

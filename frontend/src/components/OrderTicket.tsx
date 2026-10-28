@@ -4,6 +4,7 @@ import { dollars, price } from '../lib/format'
 import type { Account, Order, OrderPreview, OrderType, Quote, Side, TimeInForce } from '../lib/types'
 import { OrderReview } from './OrderReview'
 import { OrderStatusLine } from './OrderStatusLine'
+import { TifSelect } from './TifSelect'
 
 interface Props {
   quote: Quote
@@ -30,6 +31,16 @@ export function OrderTicket({ quote, account, orders }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [review, setReview] = useState<OrderPreview | null>(null)
   const [placed, setPlaced] = useState<Order | null>(null)
+  const [placedSeen, setPlacedSeen] = useState(false)
+
+  // Once the stream has shown the placed order, its disappearing means going back in
+  // time erased it: drop the line rather than show a stale or reused order.
+  const inStream = placed !== null && orders.some((o) => o.id === placed.id)
+  if (inStream && !placedSeen) setPlacedSeen(true)
+  if (placed && placedSeen && !inStream) {
+    setPlaced(null)
+    setPlacedSeen(false)
+  }
 
   // Start price fields at the current price when the symbol or order type changes,
   // but not on every tick (that would overwrite what the user is typing).
@@ -83,14 +94,9 @@ export function OrderTicket({ quote, account, orders }: Props) {
     run(async () => {
       const order = await placeOrder(request())
       setPlaced(order)
+      setPlacedSeen(false)
       setReview(null)
     })
-
-  // Editing anything sends the user back to the form.
-  const edit = <T,>(set: (v: T) => void) => (v: T) => {
-    set(v)
-    setReview(null)
-  }
 
   if (review) {
     return (
@@ -127,7 +133,7 @@ export function OrderTicket({ quote, account, orders }: Props) {
             type="button"
             className={side === s ? `side ${s} active` : `side ${s}`}
             aria-pressed={side === s}
-            onClick={() => edit(setSide)(s)}
+            onClick={() => setSide(s)}
           >
             {s === 'buy' ? 'Buy' : 'Sell'}
           </button>
@@ -136,12 +142,12 @@ export function OrderTicket({ quote, account, orders }: Props) {
 
       <label className="field">
         <span>Quantity (shares)</span>
-        <input type="number" min={1} step={1} value={qty} onChange={(e) => edit(setQty)(e.target.value)} />
+        <input type="number" min={1} step={1} value={qty} onChange={(e) => setQty(e.target.value)} />
       </label>
 
       <label className="field">
         <span>Order type</span>
-        <select value={type} onChange={(e) => edit(setType)(e.target.value as OrderType)}>
+        <select value={type} onChange={(e) => setType(e.target.value as OrderType)}>
           {TYPES.map((t) => (
             <option key={t.value} value={t.value}>
               {t.label}
@@ -153,24 +159,16 @@ export function OrderTicket({ quote, account, orders }: Props) {
       {needsStop && (
         <label className="field">
           <span>Stop price</span>
-          <input type="number" min={0.01} step={0.01} value={stop} onChange={(e) => edit(setStop)(e.target.value)} />
+          <input type="number" min={0.01} step={0.01} value={stop} onChange={(e) => setStop(e.target.value)} />
         </label>
       )}
       {needsLimit && (
         <label className="field">
           <span>Limit price</span>
-          <input type="number" min={0.01} step={0.01} value={limit} onChange={(e) => edit(setLimit)(e.target.value)} />
+          <input type="number" min={0.01} step={0.01} value={limit} onChange={(e) => setLimit(e.target.value)} />
         </label>
       )}
-      {type !== 'market' && (
-        <label className="field">
-          <span>Time in force</span>
-          <select value={tif} onChange={(e) => edit(setTif)(e.target.value as TimeInForce)}>
-            <option value="day">Day (expires at 4:00 PM)</option>
-            <option value="gtc">Good till canceled</option>
-          </select>
-        </label>
-      )}
+      {type !== 'market' && <TifSelect value={tif} onChange={setTif} />}
 
       <dl className="ticket-summary">
         <div>

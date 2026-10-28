@@ -52,3 +52,32 @@ describe('ModifyOrderDialog', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 })
+
+describe('ModifyOrderDialog edge cases', () => {
+  it('says so when the order is no longer working', () => {
+    render(<ModifyOrderDialog order={{ ...order, status: 'filled', fill_price: 571 }} onClose={() => {}} />)
+    expect(screen.getByRole('dialog')).toHaveTextContent("can't be changed any more: Filled at 571.00")
+    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
+  })
+
+  it('hides the stop once it has triggered and does not send it', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ModifyOrderDialog order={{ ...order, triggered_at: '2026-01-05T15:10:00Z' }} onClose={() => {}} />)
+    expect(screen.queryByLabelText('Stop price')).not.toBeInTheDocument()
+    expect(screen.getByText(/working as a limit order/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ qty: 10, tif: 'day', limit_price: 571 })
+  })
+
+  it('rejects fractional quantities before sending', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ModifyOrderDialog order={order} onClose={() => {}} />)
+    fireEvent.change(screen.getByLabelText('Quantity (shares)'), { target: { value: '1.5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('whole number')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})

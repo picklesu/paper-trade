@@ -156,6 +156,18 @@ describe('OrderTicket', () => {
     expect(screen.queryByLabelText('Review order')).not.toBeInTheDocument()
   })
 
+  it('the status line disappears when going back in time erases the order', async () => {
+    server({ preview: { ...preview, type: 'limit', fills_now: false }, place: order({ id: 12, type: 'limit', limit_price: 225 }) })
+    const { rerender } = render(<OrderTicket quote={quote} account={account} orders={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Review buy 10 AAPL' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Place order' }))
+    await screen.findByText(/Order #12 working/)
+    rerender(<OrderTicket quote={quote} account={account} orders={[order({ id: 12, type: 'limit', limit_price: 225 })]} />)
+    expect(screen.getByText(/Order #12 working/)).toBeInTheDocument()
+    rerender(<OrderTicket quote={quote} account={account} orders={[]} />) // erased by a rewind
+    expect(screen.queryByText(/Order #12/)).not.toBeInTheDocument()
+  })
+
   it('the status line follows the order as it fills and through a replace', async () => {
     server({ preview: { ...preview, type: 'limit', fills_now: false }, place: order({ id: 5, type: 'limit', limit_price: 225 }) })
     const { rerender } = render(<OrderTicket quote={quote} account={account} orders={[]} />)

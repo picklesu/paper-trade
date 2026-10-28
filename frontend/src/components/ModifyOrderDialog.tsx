@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { replaceOrder, type OrderChange } from '../lib/api'
 import { orderTypeLabel } from '../lib/format'
+import { statusText } from '../lib/orders'
 import type { Order, TimeInForce } from '../lib/types'
+import { TifSelect } from './TifSelect'
 
 interface Props {
+  /** The live order from the stream, so the dialog notices if it fills or closes meanwhile. */
   order: Order
   onClose: () => void
 }
@@ -16,11 +19,18 @@ export function ModifyOrderDialog({ order, onClose }: Props) {
   const [tif, setTif] = useState<TimeInForce>(order.tif)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Once a stop has triggered, the order works as a limit; only the limit can change.
+  const stopEditable = order.stop_price !== null && order.triggered_at === null
 
   const save = async () => {
-    const change: OrderChange = { qty: Number(qty), tif }
+    const shares = Number(qty)
+    if (!Number.isInteger(shares) || shares < 1) {
+      setError('Quantity must be a whole number of shares')
+      return
+    }
+    const change: OrderChange = { qty: shares, tif }
     if (order.limit_price !== null) change.limit_price = Number(limit)
-    if (order.stop_price !== null) change.stop_price = Number(stop)
+    if (stopEditable) change.stop_price = Number(stop)
     setBusy(true)
     setError(null)
     try {
@@ -44,41 +54,51 @@ export function ModifyOrderDialog({ order, onClose }: Props) {
         <h2 id="modify-title">
           Modify order #{order.id}: {order.side === 'buy' ? 'Buy' : 'Sell'} {order.symbol}, {orderTypeLabel(order)}
         </h2>
-        <label className="field">
-          <span>Quantity (shares)</span>
-          <input type="number" min={1} step={1} value={qty} onChange={(e) => setQty(e.target.value)} />
-        </label>
-        {order.stop_price !== null && (
-          <label className="field">
-            <span>Stop price</span>
-            <input type="number" min={0.01} step={0.01} value={stop} onChange={(e) => setStop(e.target.value)} />
-          </label>
+        {order.status !== 'working' ? (
+          <>
+            <p>This order can't be changed any more: {statusText(order)}.</p>
+            <div className="dialog-actions">
+              <button className="btn" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <label className="field">
+              <span>Quantity (shares)</span>
+              <input type="number" min={1} step={1} value={qty} onChange={(e) => setQty(e.target.value)} />
+            </label>
+            {stopEditable && (
+              <label className="field">
+                <span>Stop price</span>
+                <input type="number" min={0.01} step={0.01} value={stop} onChange={(e) => setStop(e.target.value)} />
+              </label>
+            )}
+            {order.stop_price !== null && !stopEditable && (
+              <p className="muted">The stop already triggered, so this order is working as a limit order.</p>
+            )}
+            {order.limit_price !== null && (
+              <label className="field">
+                <span>Limit price</span>
+                <input type="number" min={0.01} step={0.01} value={limit} onChange={(e) => setLimit(e.target.value)} />
+              </label>
+            )}
+            <TifSelect value={tif} onChange={setTif} />
+            <p className="muted">
+              The order is canceled and replaced by a new one with your changes, as at a real broker. If the new order
+              can trade right away, it fills.
+            </p>
+            <div className="dialog-actions">
+              <button className="btn primary" disabled={busy} onClick={save}>
+                Save changes
+              </button>
+              <button className="btn" disabled={busy} onClick={onClose}>
+                Cancel
+              </button>
+            </div>
+          </>
         )}
-        {order.limit_price !== null && (
-          <label className="field">
-            <span>Limit price</span>
-            <input type="number" min={0.01} step={0.01} value={limit} onChange={(e) => setLimit(e.target.value)} />
-          </label>
-        )}
-        <label className="field">
-          <span>Time in force</span>
-          <select value={tif} onChange={(e) => setTif(e.target.value as TimeInForce)}>
-            <option value="day">Day (expires at 4:00 PM)</option>
-            <option value="gtc">Good till canceled</option>
-          </select>
-        </label>
-        <p className="muted">
-          The order is canceled and replaced by a new one with your changes, as at a real broker. If the new order can
-          trade right away, it fills.
-        </p>
-        <div className="dialog-actions">
-          <button className="btn primary" disabled={busy} onClick={save}>
-            Save changes
-          </button>
-          <button className="btn" disabled={busy} onClick={onClose}>
-            Cancel
-          </button>
-        </div>
         {error && (
           <p className="error" role="alert">
             {error}

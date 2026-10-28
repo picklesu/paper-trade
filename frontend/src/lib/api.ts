@@ -45,6 +45,17 @@ export async function goto(time: string, future: 'replay' | 'new' = 'replay'): P
   return resp.json()
 }
 
+/** FastAPI's `detail`: a message, or a list of validation errors like "qty: must be an integer". */
+function errorText(detail: unknown): string | null {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => `${Array.isArray(d?.loc) ? d.loc.filter((l: unknown) => l !== 'body').join('.') + ': ' : ''}${d?.msg ?? ''}`)
+      .join('; ')
+  }
+  return null
+}
+
 /** Throws an Error carrying the server's explanation (FastAPI's `detail`). */
 async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
   const resp = await fetch(url, {
@@ -54,7 +65,7 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
   })
   if (!resp.ok) {
     const data = await resp.json().catch(() => null)
-    throw new Error(typeof data?.detail === 'string' ? data.detail : `request failed: ${resp.status}`)
+    throw new Error(errorText(data?.detail) ?? `request failed: ${resp.status}`)
   }
   return resp.json()
 }

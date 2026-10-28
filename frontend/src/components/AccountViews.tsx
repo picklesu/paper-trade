@@ -1,4 +1,4 @@
-/** The account views: positions, orders and trade activity (each a workspace panel). */
+/** The account views: positions and orders (each a workspace panel). */
 import { useState } from 'react'
 import { cancelOrder } from '../lib/api'
 import { direction, dollars, marketStamp, orderTypeLabel, percent, price, signedDollars } from '../lib/format'
@@ -81,10 +81,17 @@ export function Orders({ orders }: { orders: Order[] }) {
   if (!orders.length) return <Placeholder text="No orders yet." />
 
   const match = FILTERS.find((f) => f.id === filter)!.match
-  // Working orders first, then the rest newest first (the server sends newest first).
-  const shown = [...orders.filter((o) => o.status === 'working'), ...orders.filter((o) => o.status !== 'working')].filter(
-    match,
-  )
+  // Working orders first, then the rest newest first (the server sends newest placed first).
+  // Filled lists the trades in the order they filled, latest first: a GTC order placed
+  // earlier can fill after later ones.
+  const shown =
+    filter === 'filled'
+      ? orders.filter(match).sort((a, b) => b.filled_at!.localeCompare(a.filled_at!) || b.id - a.id)
+      : [...orders.filter((o) => o.status === 'working'), ...orders.filter((o) => o.status !== 'working')].filter(match)
+
+  // The total of the sells shown (buys realize nothing).
+  const sells = shown.filter((o) => o.realized != null)
+  const realizedTotal = sells.length ? sells.reduce((sum, o) => sum + o.realized!, 0) : null
 
   const cancel = (id: number) => {
     setError(null)
@@ -121,6 +128,9 @@ export function Orders({ orders }: { orders: Order[] }) {
             <th>Type</th>
             <th>TIF</th>
             <th>Status</th>
+            <th className="num" title="Profit or loss a filled sell realized against your average cost">
+              P/L
+            </th>
             <th>Updated</th>
             <th />
           </tr>
@@ -139,6 +149,7 @@ export function Orders({ orders }: { orders: Order[] }) {
                 {statusText(o)}
                 {o.replaces !== null && <span className="muted"> · replaces #{o.replaces}</span>}
               </td>
+              <PnlCell order={o} />
               <td className="muted">{marketStamp(updatedAt(o))}</td>
               <td className="row-actions">
                 {o.status === 'working' && (
@@ -155,6 +166,15 @@ export function Orders({ orders }: { orders: Order[] }) {
             </tr>
           ))}
         </tbody>
+        {realizedTotal !== null && (
+          <tfoot>
+            <tr>
+              <td colSpan={8}>Realized P/L of the sells shown</td>
+              <td className={`num ${direction(realizedTotal)}`}>{signedDollars(realizedTotal)}</td>
+              <td colSpan={2} />
+            </tr>
+          </tfoot>
+        )}
       </table>
       {!shown.length && <Placeholder text="No orders match this filter." />}
       {modifyingOrder && (
@@ -166,37 +186,16 @@ export function Orders({ orders }: { orders: Order[] }) {
   )
 }
 
-export function Activity({ orders }: { orders: Order[] }) {
-  const fills = orders.filter((o) => o.status === 'filled')
-  if (!fills.length) return <Placeholder text="No trades yet." />
-  const byTime = [...fills].sort((a, b) => b.filled_at!.localeCompare(a.filled_at!))
-  return (
-    <table className="grid-table">
-      <thead>
-        <tr>
-          <th>Filled</th>
-          <th>Symbol</th>
-          <th>Side</th>
-          <th className="num">Qty</th>
-          <th className="num">Price</th>
-          <th className="num">Amount</th>
-        </tr>
-      </thead>
-      <tbody>
-        {byTime.map((o) => {
-          const amount = o.fill_price! * o.qty
-          return (
-            <tr key={o.id}>
-              <td>{marketStamp(o.filled_at!)}</td>
-              <td className="sym">{o.symbol}</td>
-              <td className={o.side === 'buy' ? 'up' : 'down'}>{o.side === 'buy' ? 'Bought' : 'Sold'}</td>
-              <td className="num">{o.qty.toLocaleString()}</td>
-              <td className="num">{price(o.fill_price!)}</td>
-              <td className="num">{o.side === 'buy' ? `-${dollars(amount)}` : `+${dollars(amount)}`}</td>
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
-  )
+/** What a filled order made or lost. A sell realizes P/L against the average cost; a buy only
+ *  opens (or adds to) a position, whose open P/L is in Positions. */
+function PnlCell({ order }: { order: Order }) {
+  // `!= null`: a server from before `realized` sends none.
+  if (order.realized != null) return <td className={`num ${direction(order.realized)}`}>{signedDollars(order.realized)}</td>
+  if (order.status === 'filled')
+    return (
+      <td className="num muted" title="A buy opens a position: its P/L is realized when you sell (open P/L is in Positions)">
+        —
+      </td>
+    )
+  return <td />
 }

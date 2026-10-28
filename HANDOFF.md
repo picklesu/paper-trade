@@ -16,6 +16,7 @@ _Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 | 5.5b redesign from the user's review: chart-first default (side panels collapsed on the left), no tab bars, Panels menu places panels, no date axis, range/bar size at the bottom | Merged | #18 |
 | Fixes: divider drags snapping back on market ticks; Reset layout showing nothing after floating | Merged | #19 |
 | Fix: with the chart floating, collapsed panels moved to the top/bottom and opened over the whole workspace | Merged | #20 |
+| Activity panel removed (Orders' Filled list covers it); filled sells show their realized P/L | Merged | #21 |
 | **5.5c. Workspace, next steps** | **Next.** See below. | — |
 | 6. Watchlists and quotes | After 5.5. | — |
 
@@ -34,7 +35,7 @@ Step 1 (#13), step 2 edge strips (#16, #17) and the redesign after the user's re
 see Architecture → `layout/`. The user found the earlier default (panels around the chart)
 cluttered; keep the chart-first look. Next steps, smallest first:
 1. **Layout presets** in the Panels menu: "Chart" (the default: everything collapsed),
-   "Trading" (Watchlist and Order Entry open), "Review" (Positions, Orders, Activity open),
+   "Trading" (Watchlist and Order Entry open), "Review" (Positions and Orders open),
    plus saving the current layout under a name.
 2. **Separate browser windows** (dockview `addPopoutGroup`), optional, for second monitors.
    The OS places them; the web page can't snap them to screen edges.
@@ -115,7 +116,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     happens right now" check used by both `_activate` and `preview`. `process_iter(t0, t1)` scans each session's
     per-second path (`engine.day_prices`) for every working order and handles events in time
     order. It expires day orders at each close. The ledger (cash, positions, average cost,
-    realized P&L) is rebuilt from filled orders and cached. `summary()` gives net liq, buying
+    realized P&L, and each filled sell's realized P&L in `realized_by_order`) is rebuilt from
+    filled orders and cached; `order_dict(o)` is how the API and stream send an order (its
+    stored fields plus `realized`). `summary()` gives net liq, buying
     power, day P&L (vs holdings at the previous close) and positions. `rewind(t)` deletes
     orders created after `t` and rolls back later fills, closes and triggers. `reset()`. Fill
     rules are in the module docstring.
@@ -231,7 +234,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `Watchlist` (tick flashes), `QuoteDetail`, `OrderTicket` (form → `OrderReview` from the
     server preview → place; `OrderStatusLine` follows the placed order through the stream,
     including replacements), `AccountViews` (Positions with "Reset account…", Orders with filters, Modify
-    (`ModifyOrderDialog`) and Cancel, Activity),
+    (`ModifyOrderDialog`) and Cancel, and a P/L column: each order's `realized` from the server,
+    the P&L a filled sell realized against the average cost, totalled under the Filled filter;
+    the Activity panel was removed at the user's request as it repeated Orders' Filled list),
     `ResetAccountDialog`, `TifSelect`, `Panel`. `lib/orders.ts`: shared status wording
     (`statusText`, `describeOrder`), time-in-force labels, and the replacement lookup.
     Order ids are never reused (`last_order_id` in the store), even after a rewind. The top bar
@@ -258,7 +263,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 115 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 165 (pytest), frontend 118 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

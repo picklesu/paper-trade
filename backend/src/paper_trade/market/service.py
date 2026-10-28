@@ -74,7 +74,7 @@ class MarketService:
 
     def orders_message(self) -> dict:
         orders = sorted(self.broker.orders.values(), key=lambda o: o.id, reverse=True)
-        return {"type": "orders", "orders": [o.to_dict() for o in orders]}
+        return {"type": "orders", "orders": [self.broker.order_dict(o) for o in orders]}
 
     def clock_state(self) -> dict:
         return {
@@ -162,7 +162,7 @@ class MarketService:
         if action == "reset":
             fills = [o for o in self.broker.orders.values() if o.status == "filled"]
             return {
-                "erased_fills": [o.to_dict() for o in sorted(fills, key=lambda o: o.filled_at)],
+                "erased_fills": [self.broker.order_dict(o) for o in sorted(fills, key=lambda o: o.filled_at)],
                 "erased_orders": len(self.broker.orders),
                 "starting_cash": self.broker.starting_cash,
             }

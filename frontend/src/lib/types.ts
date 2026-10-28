@@ -73,6 +73,8 @@ export interface Order {
   reason: string | null
   /** The order this one replaced (cancel/replace). */
   replaces: number | null
+  /** The P&L a filled sell realized against the average cost; null for buys and unfilled orders. */
+  realized: number | null
 }
 
 /** What placing an order would do, from POST /api/orders/preview. */

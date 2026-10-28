@@ -52,22 +52,27 @@ class Position:
 class Ledger:
     cash: float
     positions: dict[str, Position] = field(default_factory=dict)
+    # Realized P&L of each filled sell, by order id (a buy realizes nothing).
+    realized_by_order: dict[int, float] = field(default_factory=dict)
 
 
-def apply_fill(led: Ledger, symbol: str, side: str, qty: int, price: float) -> None:
-    """Book a fill into a ledger: cash, quantity, average cost and realized P&L."""
+def apply_fill(led: Ledger, symbol: str, side: str, qty: int, price: float) -> float | None:
+    """Book a fill into a ledger: cash, quantity, average cost and realized P&L. Returns the
+    P&L a sell realizes (against the average cost), None for a buy."""
     p = led.positions.setdefault(symbol, Position(symbol))
     amount = price * qty
     if side == "buy":
         led.cash -= amount
         p.avg_cost = (p.avg_cost * p.qty + amount) / (p.qty + qty)
         p.qty += qty
-    else:
-        led.cash += amount
-        p.realized += (price - p.avg_cost) * qty
-        p.qty -= qty
-        if p.qty == 0:
-            p.avg_cost = 0.0
+        return None
+    led.cash += amount
+    realized = (price - p.avg_cost) * qty
+    p.realized += realized
+    p.qty -= qty
+    if p.qty == 0:
+        p.avg_cost = 0.0
+    return realized
 
 
 def money(x: float) -> str:
@@ -101,10 +106,18 @@ class Broker:
         for o in fills:
             if before is not None and o.filled_at >= before:
                 break
-            apply_fill(led, o.symbol, o.side, o.qty, o.fill_price)
+            realized = apply_fill(led, o.symbol, o.side, o.qty, o.fill_price)
+            if realized is not None:
+                led.realized_by_order[o.id] = realized
         if before is None:
             self._ledger = led
         return led
+
+    def order_dict(self, order: Order) -> dict:
+        """An order as the API sends it: its stored fields plus `realized`, the P&L a filled sell
+        realized against the average cost (None for buys and unfilled orders). Not rounded, so
+        sums of them match the account's realized P&L; the frontend rounds for display."""
+        return {**order.to_dict(), "realized": self.ledger().realized_by_order.get(order.id)}
 
     def working(self) -> list[Order]:
         return [o for o in self.orders.values() if o.status == "working"]
@@ -519,7 +532,7 @@ class Broker:
         prices_then = self.engine.prices_at(t)
         quotes_now = self.engine.quotes
         return {
-            "erased_fills": [o.to_dict() for o in erased],
+            "erased_fills": [self.order_dict(o) for o in erased],
             "erased_orders": sum(1 for o in self.orders.values() if o.created_at > t),
             "cash_now": round(self.ledger().cash, 2),
             "cash_then": round(then.cash, 2),

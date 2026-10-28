@@ -68,7 +68,7 @@ async def place_order(body: OrderRequest, request: Request) -> dict:
     except OrderError as e:
         raise HTTPException(422, str(e)) from None
     svc.after_trade()
-    return order.to_dict()
+    return svc.broker.order_dict(order)
 
 
 @router.delete("/orders/{order_id}")
@@ -80,7 +80,7 @@ async def cancel_order(order_id: int, request: Request) -> dict:
     except OrderError as e:
         raise HTTPException(422, str(e)) from None
     svc.after_trade()
-    return order.to_dict()
+    return svc.broker.order_dict(order)
 
 
 class OrderChange(BaseModel):
@@ -100,4 +100,4 @@ async def replace_order(order_id: int, body: OrderChange, request: Request) -> d
     except OrderError as e:
         raise HTTPException(422, str(e)) from None
     svc.after_trade()
-    return order.to_dict()
+    return svc.broker.order_dict(order)

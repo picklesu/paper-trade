@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { placeOrder } from '../lib/api'
+import { placeOrder, previewOrder, type OrderRequest } from '../lib/api'
 import { dollars, price } from '../lib/format'
-import type { Account, Order, OrderType, Quote, Side, TimeInForce } from '../lib/types'
+import type { Account, Order, OrderPreview, OrderType, Quote, Side, TimeInForce } from '../lib/types'
+import { OrderReview } from './OrderReview'
+import { OrderStatusLine } from './OrderStatusLine'
+import { TifSelect } from './TifSelect'
 
 interface Props {
   quote: Quote
   account: Account
+  orders: Order[]
 }
 
 const TYPES: { value: OrderType; label: string }[] = [
@@ -15,16 +19,8 @@ const TYPES: { value: OrderType; label: string }[] = [
   { value: 'stop_limit', label: 'Stop limit' },
 ]
 
-type Result = { ok: true; text: string } | { ok: false; text: string }
-
-function describe(o: Order): string {
-  const what = `${o.side === 'buy' ? 'Bought' : 'Sold'} ${o.qty} ${o.symbol}`
-  if (o.status === 'filled') return `${what} at ${price(o.fill_price!)}`
-  if (o.status === 'rejected') return `Order #${o.id} rejected: ${o.reason}`
-  return `Order #${o.id} is working`
-}
-
-export function OrderTicket({ quote, account }: Props) {
+/** Order entry: fill in the form, review the server's preview, then place. */
+export function OrderTicket({ quote, account, orders }: Props) {
   const [side, setSide] = useState<Side>('buy')
   const [qty, setQty] = useState('10')
   const [type, setType] = useState<OrderType>('market')
@@ -32,7 +28,19 @@ export function OrderTicket({ quote, account }: Props) {
   const [stop, setStop] = useState('')
   const [tif, setTif] = useState<TimeInForce>('day')
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<Result | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [review, setReview] = useState<OrderPreview | null>(null)
+  const [placed, setPlaced] = useState<Order | null>(null)
+  const [placedSeen, setPlacedSeen] = useState(false)
+
+  // Once the stream has shown the placed order, its disappearing means going back in
+  // time erased it: drop the line rather than show a stale or reused order.
+  const inStream = placed !== null && orders.some((o) => o.id === placed.id)
+  if (inStream && !placedSeen) setPlacedSeen(true)
+  if (placed && placedSeen && !inStream) {
+    setPlaced(null)
+    setPlacedSeen(false)
+  }
 
   // Start price fields at the current price when the symbol or order type changes,
   // but not on every tick (that would overwrite what the user is typing).
@@ -43,7 +51,8 @@ export function OrderTicket({ quote, account }: Props) {
   useEffect(() => {
     setLimit(lastRef.current.toFixed(2))
     setStop(lastRef.current.toFixed(2))
-    setResult(null)
+    setError(null)
+    setReview(null)
   }, [quote.symbol, type])
 
   const needsLimit = type === 'limit' || type === 'stop_limit'
@@ -54,25 +63,52 @@ export function OrderTicket({ quote, account }: Props) {
   const estPrice = needsLimit ? Number(limit) : needsStop ? Number(stop) : side === 'buy' ? quote.ask : quote.bid
   const estTotal = Number.isFinite(shares * estPrice) ? shares * estPrice : 0
 
-  const submit = async () => {
+  const request = (): OrderRequest => ({
+    symbol: quote.symbol,
+    side,
+    qty: shares,
+    type,
+    tif: type === 'market' ? 'day' : tif,
+    limit_price: needsLimit ? Number(limit) : undefined,
+    stop_price: needsStop ? Number(stop) : undefined,
+  })
+
+  const run = async (action: () => Promise<void>) => {
     setBusy(true)
-    setResult(null)
+    setError(null)
     try {
-      const order = await placeOrder({
-        symbol: quote.symbol,
-        side,
-        qty: shares,
-        type,
-        tif: type === 'market' ? 'day' : tif,
-        limit_price: needsLimit ? Number(limit) : undefined,
-        stop_price: needsStop ? Number(stop) : undefined,
-      })
-      setResult({ ok: order.status !== 'rejected', text: describe(order) })
+      await action()
     } catch (err) {
-      setResult({ ok: false, text: err instanceof Error ? err.message : String(err) })
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
+  }
+
+  const reviewOrder = () =>
+    run(async () => {
+      setReview(await previewOrder(request()))
+    })
+
+  const place = () =>
+    run(async () => {
+      const order = await placeOrder(request())
+      setPlaced(order)
+      setPlacedSeen(false)
+      setReview(null)
+    })
+
+  if (review) {
+    return (
+      <div className="ticket-form">
+        <OrderReview preview={review} busy={busy} onPlace={place} onEdit={() => setReview(null)} />
+        {error && (
+          <p className="ticket-result error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -80,7 +116,7 @@ export function OrderTicket({ quote, account }: Props) {
       className="ticket-form"
       onSubmit={(e) => {
         e.preventDefault()
-        submit()
+        reviewOrder()
       }}
     >
       <div className="ticket-quote">
@@ -132,15 +168,7 @@ export function OrderTicket({ quote, account }: Props) {
           <input type="number" min={0.01} step={0.01} value={limit} onChange={(e) => setLimit(e.target.value)} />
         </label>
       )}
-      {type !== 'market' && (
-        <label className="field">
-          <span>Time in force</span>
-          <select value={tif} onChange={(e) => setTif(e.target.value as TimeInForce)}>
-            <option value="day">Day (expires at 4:00 PM)</option>
-            <option value="gtc">Good till canceled</option>
-          </select>
-        </label>
-      )}
+      {type !== 'market' && <TifSelect value={tif} onChange={setTif} />}
 
       <dl className="ticket-summary">
         <div>
@@ -154,14 +182,15 @@ export function OrderTicket({ quote, account }: Props) {
       </dl>
 
       <button type="submit" className={`btn submit ${side}`} disabled={busy || !(shares > 0)}>
-        {side === 'buy' ? 'Buy' : 'Sell'} {shares > 0 ? shares.toLocaleString() : ''} {quote.symbol}
+        Review {side === 'buy' ? 'buy' : 'sell'} {shares > 0 ? shares.toLocaleString() : ''} {quote.symbol}
       </button>
 
-      {result && (
-        <p className={result.ok ? 'ticket-result ok' : 'ticket-result error'} role={result.ok ? 'status' : 'alert'}>
-          {result.text}
+      {error && (
+        <p className="ticket-result error" role="alert">
+          {error}
         </p>
       )}
+      {placed && !error && <OrderStatusLine order={placed} orders={orders} />}
     </form>
   )
 }

@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { cancelOrder } from '../lib/api'
 import { direction, dollars, marketStamp, orderTypeLabel, percent, price, signedDollars } from '../lib/format'
 import type { Account, Order } from '../lib/types'
+import { statusText, tifLabel } from '../lib/orders'
+import { ModifyOrderDialog } from './ModifyOrderDialog'
 import { Placeholder } from './Panel'
 import { ResetAccountDialog } from './ResetAccountDialog'
 
@@ -90,19 +92,32 @@ function Positions({ account, onSelect }: { account: Account | null; onSelect: (
   )
 }
 
-const STATUS_LABEL = {
-  working: 'Working',
-  filled: 'Filled',
-  canceled: 'Canceled',
-  expired: 'Expired',
-  rejected: 'Rejected',
-} as const
+const FILTERS = [
+  { id: 'all', label: 'All', match: () => true },
+  { id: 'working', label: 'Working', match: (o: Order) => o.status === 'working' },
+  { id: 'filled', label: 'Filled', match: (o: Order) => o.status === 'filled' },
+  { id: 'closed', label: 'Canceled / expired / rejected', match: (o: Order) => ['canceled', 'expired', 'rejected'].includes(o.status) },
+] as const
+
+type FilterId = (typeof FILTERS)[number]['id']
+
+/** When the order last changed: filled, closed, stop hit, or placed. */
+function updatedAt(o: Order): string {
+  return o.filled_at ?? o.closed_at ?? o.triggered_at ?? o.created_at
+}
 
 function Orders({ orders }: { orders: Order[] }) {
   const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<FilterId>('all')
+  const [modifying, setModifying] = useState<number | null>(null)
+  const modifyingOrder = modifying === null ? undefined : orders.find((o) => o.id === modifying)
   if (!orders.length) return <Placeholder text="No orders yet." />
+
+  const match = FILTERS.find((f) => f.id === filter)!.match
   // Working orders first, then the rest newest first (the server sends newest first).
-  const sorted = [...orders.filter((o) => o.status === 'working'), ...orders.filter((o) => o.status !== 'working')]
+  const shown = [...orders.filter((o) => o.status === 'working'), ...orders.filter((o) => o.status !== 'working')].filter(
+    match,
+  )
 
   const cancel = (id: number) => {
     setError(null)
@@ -111,6 +126,18 @@ function Orders({ orders }: { orders: Order[] }) {
 
   return (
     <>
+      <div className="filters" role="group" aria-label="Show orders">
+        {FILTERS.map((f) => (
+          <button
+            key={f.id}
+            className={f.id === filter ? 'ctl active' : 'ctl'}
+            aria-pressed={f.id === filter}
+            onClick={() => setFilter(f.id)}
+          >
+            {f.label} ({orders.filter(f.match).length})
+          </button>
+        ))}
+      </div>
       {error && (
         <p className="error inline" role="alert">
           {error}
@@ -127,11 +154,12 @@ function Orders({ orders }: { orders: Order[] }) {
             <th>Type</th>
             <th>TIF</th>
             <th>Status</th>
+            <th>Updated</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {sorted.map((o) => (
+          {shown.map((o) => (
             <tr key={o.id}>
               <td className="muted">{o.id}</td>
               <td>{marketStamp(o.created_at)}</td>
@@ -139,24 +167,34 @@ function Orders({ orders }: { orders: Order[] }) {
               <td className={o.side === 'buy' ? 'up' : 'down'}>{o.side === 'buy' ? 'Buy' : 'Sell'}</td>
               <td className="num">{o.qty.toLocaleString()}</td>
               <td>{orderTypeLabel(o)}</td>
-              <td>{o.tif === 'gtc' ? 'GTC' : 'Day'}</td>
+              <td>{tifLabel(o.tif, true)}</td>
               <td className={`status-${o.status}`} title={o.reason ?? undefined}>
-                {STATUS_LABEL[o.status]}
-                {o.status === 'filled' && ` at ${price(o.fill_price!)}`}
-                {o.status === 'working' && o.triggered_at && ' (stop hit)'}
-                {o.reason && ` · ${o.reason}`}
+                {statusText(o)}
+                {o.replaces !== null && <span className="muted"> · replaces #{o.replaces}</span>}
               </td>
-              <td>
+              <td className="muted">{marketStamp(updatedAt(o))}</td>
+              <td className="row-actions">
                 {o.status === 'working' && (
-                  <button className="ctl" onClick={() => cancel(o.id)} aria-label={`Cancel order ${o.id}`}>
-                    Cancel
-                  </button>
+                  <>
+                    <button className="ctl" onClick={() => setModifying(o.id)} aria-label={`Modify order ${o.id}`}>
+                      Modify
+                    </button>
+                    <button className="ctl" onClick={() => cancel(o.id)} aria-label={`Cancel order ${o.id}`}>
+                      Cancel
+                    </button>
+                  </>
                 )}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {!shown.length && <Placeholder text="No orders match this filter." />}
+      {modifyingOrder && (
+        // The live order lets the dialog notice a fill or cancel meanwhile; if going back
+        // in time erases the order, the dialog simply goes away.
+        <ModifyOrderDialog key={modifyingOrder.id} order={modifyingOrder} onClose={() => setModifying(null)} />
+      )}
     </>
   )
 }

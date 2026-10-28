@@ -19,7 +19,7 @@ isn't set aside for other orders; if it can't, the order is rejected.
 """
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 
 import math
@@ -54,6 +54,22 @@ class Ledger:
     positions: dict[str, Position] = field(default_factory=dict)
 
 
+def apply_fill(led: Ledger, symbol: str, side: str, qty: int, price: float) -> None:
+    """Book a fill into a ledger: cash, quantity, average cost and realized P&L."""
+    p = led.positions.setdefault(symbol, Position(symbol))
+    amount = price * qty
+    if side == "buy":
+        led.cash -= amount
+        p.avg_cost = (p.avg_cost * p.qty + amount) / (p.qty + qty)
+        p.qty += qty
+    else:
+        led.cash += amount
+        p.realized += (price - p.avg_cost) * qty
+        p.qty -= qty
+        if p.qty == 0:
+            p.avg_cost = 0.0
+
+
 def money(x: float) -> str:
     return f"${x:,.2f}"
 
@@ -85,18 +101,7 @@ class Broker:
         for o in fills:
             if before is not None and o.filled_at >= before:
                 break
-            p = led.positions.setdefault(o.symbol, Position(o.symbol))
-            amount = o.fill_price * o.qty
-            if o.side == "buy":
-                led.cash -= amount
-                p.avg_cost = (p.avg_cost * p.qty + amount) / (p.qty + o.qty)
-                p.qty += o.qty
-            else:
-                led.cash += amount
-                p.realized += (o.fill_price - p.avg_cost) * o.qty
-                p.qty -= o.qty
-                if p.qty == 0:
-                    p.avg_cost = 0.0
+            apply_fill(led, o.symbol, o.side, o.qty, o.fill_price)
         if before is None:
             self._ledger = led
         return led
@@ -107,8 +112,8 @@ class Broker:
     def reserved_cash(self, excluding: Order | None = None) -> float:
         return sum(self._reservation(o) for o in self.working() if o.side == "buy" and o is not excluding)
 
-    def reserved_shares(self, symbol: str) -> int:
-        return sum(o.qty for o in self.working() if o.side == "sell" and o.symbol == symbol)
+    def reserved_shares(self, symbol: str, excluding: Order | None = None) -> int:
+        return sum(o.qty for o in self.working() if o.side == "sell" and o.symbol == symbol and o is not excluding)
 
     def buying_power(self) -> float:
         return self.ledger().cash - self.reserved_cash()
@@ -154,6 +159,83 @@ class Broker:
 
     # ----- order entry -----------------------------------------------------------
 
+    def preview(
+        self,
+        symbol: str,
+        side: Side,
+        qty: int,
+        type: OrderType,
+        tif: TimeInForce = "day",
+        limit_price: float | None = None,
+        stop_price: float | None = None,
+    ) -> dict:
+        """What placing this order would do, without placing it. Raises OrderError
+        exactly as place() would."""
+        o = self._build(symbol, side, qty, type, tif, limit_price, stop_price)
+        q = self.engine.quotes[symbol]
+        triggered, fill = self._immediate(o, q.last)
+        if fill is not None:
+            est = fill
+        elif o.has_limit:
+            est = o.limit_price
+        elif side == "buy":  # a stop fills at the market once triggered
+            est = max(o.stop_price, q.ask)
+        else:
+            est = min(o.stop_price, q.bid)
+        total = est * qty
+
+        led = self.ledger()
+        pos = led.positions.get(symbol, Position(symbol))
+        # The position as it would be after the fill, booked by the same rules as real fills.
+        after = Ledger(led.cash, {symbol: replace(pos)})
+        apply_fill(after, symbol, side, qty, est)
+        pos_after = after.positions[symbol]
+        bp = self.buying_power()
+        if side == "buy":
+            bp_after = bp - (total if fill is not None else self._reservation(o))
+            realized = None
+        else:
+            bp_after = bp + (total if fill is not None else 0)
+            realized = pos_after.realized - pos.realized
+        qty_after, avg_after, cash_after = pos_after.qty, pos_after.avg_cost, after.cash
+
+        warnings = []
+        if triggered:
+            warnings.append("The stop price is already reached, so the order triggers right away.")
+        if fill is not None and type != "market":
+            warnings.append(f"This order can trade now, so it fills right away at about {est:,.2f}.")
+        if type in ("stop", "stop_limit") and not triggered:
+            warnings.append(
+                "A stop fills at the market once triggered; if prices jump past the stop, the fill can be worse."
+                if type == "stop"
+                else "Once the stop triggers, the order only fills at the limit price or better, and may not fill."
+            )
+        if o.has_limit and abs(o.limit_price - q.last) / q.last > 0.10:
+            pct = abs(o.limit_price - q.last) / q.last * 100
+            warnings.append(f"The limit is {pct:.0f}% away from the last price ({q.last:,.2f}), so it may take a long time to fill.")
+        if fill is None and tif == "day" and type != "market":
+            day = market_day(self.engine.time).strftime("%a %b %-d")
+            warnings.append(f"Day order: if it hasn't filled by 4:00 PM ET today ({day}), it expires.")
+        if side == "sell" and realized is not None and realized < 0:
+            warnings.append(f"Selling at about {est:,.2f} realizes a loss of about {money(-realized)}.")
+
+        return {
+            **{k: v for k, v in o.to_dict().items() if k in ("symbol", "side", "qty", "type", "tif", "limit_price", "stop_price")},
+            "fills_now": fill is not None,
+            "estimated_price": round(est, 2),
+            "estimated_total": round(total, 2),
+            "commission": 0.0,
+            "buying_power_before": round(bp, 2),
+            "buying_power_after": round(bp_after, 2),
+            "cash_before": round(led.cash, 2),
+            "cash_after": round(cash_after, 2),
+            "position_before": pos.qty,
+            "position_after": qty_after,
+            "avg_cost_after": round(avg_after, 4),
+            "estimated_realized": None if realized is None else round(realized, 2),
+            "warnings": warnings,
+        }
+
     def place(
         self,
         symbol: str,
@@ -164,6 +246,59 @@ class Broker:
         limit_price: float | None = None,
         stop_price: float | None = None,
     ) -> Order:
+        order = self._build(symbol, side, qty, type, tif, limit_price, stop_price)
+        self.orders[order.id] = order
+        self._activate(order, self.engine.time, self.engine.quotes[symbol].last)
+        self._save(order)
+        return order
+
+    def replace(
+        self,
+        order_id: int,
+        qty: int | None = None,
+        limit_price: float | None = None,
+        stop_price: float | None = None,
+        tif: TimeInForce | None = None,
+    ) -> Order:
+        """Change a working order: cancel it and place a new one with the changes
+        (as brokers do). The new order records which one it replaces."""
+        old = self._working_order(order_id)
+        if old.triggered_at is not None and stop_price is not None and round(stop_price, 2) != old.stop_price:
+            raise OrderError("The stop already triggered, so this order is working as a limit: change the limit instead")
+        new = self._build(
+            old.symbol,
+            old.side,
+            old.qty if qty is None else qty,
+            old.type,
+            tif or old.tif,
+            old.limit_price if limit_price is None else limit_price,
+            old.stop_price if stop_price is None else stop_price,
+            replacing=old,
+        )
+        if (new.qty, new.tif, new.limit_price, new.stop_price) == (old.qty, old.tif, old.limit_price, old.stop_price):
+            raise OrderError("Nothing to change")
+        new.replaces = old.id
+        new.triggered_at = old.triggered_at  # a stop-limit whose stop already hit stays triggered
+        self._close(old, "canceled", self.engine.time, f"Replaced by #{new.id}")
+        self._save(old)
+        self.orders[new.id] = new
+        self._activate(new, self.engine.time, self.engine.quotes[new.symbol].last)
+        self._save(new)
+        return new
+
+    def _build(
+        self,
+        symbol: str,
+        side: Side,
+        qty: int,
+        type: OrderType,
+        tif: TimeInForce,
+        limit_price: float | None,
+        stop_price: float | None,
+        replacing: Order | None = None,
+    ) -> Order:
+        """Validate an order request and return the order, not yet placed. When
+        `replacing`, that order's reserved cash or shares count as available."""
         quotes = self.engine.quotes
         if symbol not in quotes:
             raise OrderError(f"Unknown symbol {symbol}")
@@ -182,7 +317,7 @@ class Broker:
             stop_price = None
 
         order = Order(
-            id=max(self.orders, default=0) + 1,
+            id=self._next_id(),
             symbol=symbol,
             side=side,
             qty=qty,
@@ -195,27 +330,32 @@ class Broker:
 
         if side == "buy":
             need = self._reservation(order)
-            if need > self.buying_power():
-                raise OrderError(f"Not enough buying power: this order needs {money(need)}, you have {money(self.buying_power())}")
+            available = self.ledger().cash - self.reserved_cash(excluding=replacing)
+            if need > available:
+                raise OrderError(f"Not enough buying power: this order needs {money(need)}, you have {money(available)}")
         else:
             owned = self.ledger().positions.get(symbol, Position(symbol)).qty
-            free = owned - self.reserved_shares(symbol)
+            free = owned - self.reserved_shares(symbol, excluding=replacing)
             if owned == 0:
                 raise OrderError(f"You don't own any {symbol}. Short selling isn't allowed in a cash account")
             if qty > free:
                 raise OrderError(f"You can sell at most {free:,} shares of {symbol} ({owned:,} owned, {owned - free:,} in other sell orders)")
-
-        self.orders[order.id] = order
-        self._activate(order, self.engine.time, quotes[symbol].last)
-        self._save(order)
         return order
 
-    def cancel(self, order_id: int) -> Order:
+    def _next_id(self) -> int:
+        """Ids are never reused, even after going back in time erases orders."""
+        return max(self.store.get("last_order_id", 0), max(self.orders, default=0)) + 1
+
+    def _working_order(self, order_id: int) -> Order:
         order = self.orders.get(order_id)
         if order is None:
             raise OrderError(f"No order #{order_id}")
         if order.status != "working":
             raise OrderError(f"Order #{order_id} is already {order.status}")
+        return order
+
+    def cancel(self, order_id: int) -> Order:
+        order = self._working_order(order_id)
         order.status = "canceled"
         order.closed_at = self.engine.time
         self._save(order)
@@ -312,22 +452,30 @@ class Broker:
 
     def _activate(self, o: Order, t: datetime, price: float) -> None:
         """An order goes live at `t` with the last price `price`: fill it if it's marketable now."""
+        triggered, fill = self._immediate(o, price)
+        if triggered:
+            o.triggered_at = t
+        if fill is not None:
+            self._fill(o, fill, t)
+
+    @staticmethod
+    def _immediate(o: Order, price: float) -> tuple[bool, float | None]:
+        """What happens to `o` at once with the last price `price`, without changing
+        anything: whether its stop triggers, and the fill price if it trades now."""
         bid, ask = bid_ask(price)
         market_price = ask if o.side == "buy" else bid
         if o.type == "market":
-            self._fill(o, market_price, t)
-            return
+            return False, market_price
+        triggered = False
         if o.waiting_for_stop:
             reached = price >= o.stop_price if o.side == "buy" else price <= o.stop_price
             if not reached:
-                return
-            o.triggered_at = t
+                return False, None
+            triggered = True
             if o.type == "stop":
-                self._fill(o, market_price, t)
-                return
+                return True, market_price
         marketable = market_price <= o.limit_price if o.side == "buy" else market_price >= o.limit_price
-        if marketable:
-            self._fill(o, market_price, t)
+        return triggered, market_price if marketable else None
 
     def _fill(self, o: Order, price: float, t: datetime) -> None:
         led = self.ledger()
@@ -422,6 +570,8 @@ class Broker:
 
     def _save(self, o: Order) -> None:
         self.store.save_order(o)
+        if o.id > self.store.get("last_order_id", 0):
+            self.store.set("last_order_id", o.id)
 
 
 def _after(t: datetime | None, day: date) -> int:

@@ -32,6 +32,7 @@ class Order:
     fill_price: float | None = None
     closed_at: datetime | None = None  # when canceled, expired or rejected
     reason: str | None = None
+    replaces: int | None = None  # the order this one replaced (cancel/replace)
 
     @property
     def has_limit(self) -> bool:
@@ -61,6 +62,7 @@ class Order:
             "fill_price": self.fill_price,
             "closed_at": iso(self.closed_at),
             "reason": self.reason,
+            "replaces": self.replaces,
         }
 
     @classmethod
@@ -84,4 +86,5 @@ class Order:
             fill_price=d["fill_price"],
             closed_at=dt(d["closed_at"]),
             reason=d["reason"],
+            replaces=d.get("replaces"),
         )

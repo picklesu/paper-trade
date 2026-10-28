@@ -390,3 +390,183 @@ def test_start_of_day_value_is_cached_until_fills_change() -> None:
 
 def add_seconds(t: datetime, s: int) -> datetime:
     return t + timedelta(seconds=s)
+
+
+# ----- preview ---------------------------------------------------------------------
+
+
+def test_preview_market_buy_matches_the_fill() -> None:
+    b = make()
+    q = b.engine.quotes["AAPL"]
+    p = b.preview("AAPL", "buy", 10, "market")
+    assert p["fills_now"] is True
+    assert p["estimated_price"] == q.ask
+    assert p["estimated_total"] == pytest.approx(10 * q.ask, abs=0.01)
+    assert p["buying_power_after"] == pytest.approx(STARTING_CASH - 10 * q.ask, abs=0.01)
+    assert (p["position_before"], p["position_after"]) == (0, 10)
+    assert p["commission"] == 0
+    assert not b.orders  # nothing placed
+
+    o = b.place("AAPL", "buy", 10, "market")
+    assert o.fill_price == p["estimated_price"]
+    assert b.buying_power() == pytest.approx(p["buying_power_after"], abs=0.01)
+
+
+def test_preview_resting_limit_reserves_and_warns() -> None:
+    b = make()
+    last = b.engine.quotes["SPY"].last
+    limit = round(last * 0.85, 2)
+    p = b.preview("SPY", "buy", 10, "limit", limit_price=limit)
+    assert p["fills_now"] is False
+    assert p["estimated_price"] == limit
+    assert p["buying_power_after"] == pytest.approx(STARTING_CASH - 10 * limit, abs=0.01)
+    text = " ".join(p["warnings"])
+    assert "15% away" in text
+    assert "expires" in text
+
+
+def test_preview_marketable_limit_and_triggered_stop() -> None:
+    b = make()
+    q = b.engine.quotes["MSFT"]
+    p = b.preview("MSFT", "buy", 1, "limit", limit_price=round(q.ask + 1, 2))
+    assert p["fills_now"] and p["estimated_price"] == q.ask
+    assert any("fills right away" in w for w in p["warnings"])
+
+    p = b.preview("MSFT", "buy", 1, "stop", stop_price=round(q.last * 0.9, 2))
+    assert p["fills_now"] and p["estimated_price"] == q.ask
+    assert any("already reached" in w for w in p["warnings"])
+
+
+def test_preview_sell_shows_realized_loss() -> None:
+    b = make()
+    b.place("TSLA", "buy", 10, "market")
+    q = b.engine.quotes["TSLA"]
+    p = b.preview("TSLA", "sell", 10, "market")
+    assert p["position_after"] == 0
+    assert p["estimated_realized"] == pytest.approx(10 * (q.bid - q.ask), abs=0.01)
+    assert any("realizes a loss" in w for w in p["warnings"])
+
+
+def test_preview_rejects_like_place() -> None:
+    b = make()
+    with pytest.raises(OrderError, match="Short selling"):
+        b.preview("SPY", "sell", 1, "market")
+    with pytest.raises(OrderError, match="Not enough buying power"):
+        b.preview("SPY", "buy", 10_000, "market")
+
+
+# ----- replace (cancel/replace) -------------------------------------------------
+
+
+def test_replace_changes_price_and_links_orders() -> None:
+    b = make()
+    last = b.engine.quotes["SPY"].last
+    old = b.place("SPY", "buy", 10, "limit", limit_price=round(last * 0.9, 2), tif="gtc")
+    new = b.replace(old.id, limit_price=round(last * 0.8, 2), qty=20)
+    assert old.status == "canceled" and old.reason == f"Replaced by #{new.id}"
+    assert new.status == "working" and new.replaces == old.id
+    assert (new.qty, new.limit_price, new.tif) == (20, round(last * 0.8, 2), "gtc")
+    assert b.buying_power() == pytest.approx(STARTING_CASH - 20 * round(last * 0.8, 2))
+
+
+def test_replace_can_use_its_own_reserved_cash() -> None:
+    b = make()
+    b.reset(10_000)
+    o = b.place("AAPL", "buy", 40, "limit", limit_price=200.0)  # reserves $8,000 of $10,000
+    new = b.replace(o.id, qty=45)  # needs $9,000: fine, since the old $8,000 is released
+    assert new.qty == 45
+    with pytest.raises(OrderError, match="Not enough buying power"):
+        b.replace(new.id, qty=60)  # $12,000
+
+
+def test_replace_sell_can_use_its_own_shares() -> None:
+    b = make()
+    b.place("AMD", "buy", 10, "market")
+    o = b.place("AMD", "sell", 10, "limit", limit_price=9999)
+    assert b.replace(o.id, limit_price=8888).qty == 10
+
+
+def test_replace_that_becomes_marketable_fills() -> None:
+    b = make()
+    q = b.engine.quotes["QQQ"]
+    o = b.place("QQQ", "buy", 1, "limit", limit_price=round(q.last * 0.9, 2))
+    new = b.replace(o.id, limit_price=round(q.ask + 1, 2))
+    assert new.status == "filled" and new.fill_price == q.ask
+
+
+def test_replace_errors() -> None:
+    b = make()
+    o = b.place("SPY", "buy", 1, "limit", limit_price=1.0)
+    with pytest.raises(OrderError, match="Nothing to change"):
+        b.replace(o.id, limit_price=1.0)
+    b.cancel(o.id)
+    with pytest.raises(OrderError, match="already canceled"):
+        b.replace(o.id, limit_price=2.0)
+    with pytest.raises(OrderError, match="No order"):
+        b.replace(999, qty=1)
+
+
+def test_rewind_before_a_replace_restores_the_original() -> None:
+    b = make()
+    old = b.place("SPY", "buy", 1, "limit", limit_price=1.0, tif="gtc")
+    move(b, et(2026, 1, 5, 11, 0))
+    new = b.replace(old.id, limit_price=2.0)
+    b.engine.rewind(et(2026, 1, 5, 10, 30), new_future=False)
+    b.rewind(et(2026, 1, 5, 10, 30))
+    assert new.id not in b.orders
+    assert old.status == "working" and old.reason is None
+
+
+def test_replaced_order_survives_reload(tmp_path) -> None:
+    store = Store(tmp_path / "r.db")
+    b = make(store=store)
+    old = b.place("SPY", "buy", 1, "limit", limit_price=1.0)
+    new = b.replace(old.id, limit_price=2.0)
+    again = Broker(b.engine, Store(tmp_path / "r.db"))
+    assert again.orders[new.id].replaces == old.id
+
+
+def test_ids_are_never_reused_after_a_rewind() -> None:
+    b = make()
+    b.place("SPY", "buy", 1, "limit", limit_price=1.0)
+    move(b, et(2026, 1, 5, 11, 0))
+    erased = b.place("SPY", "buy", 1, "limit", limit_price=1.0)
+    b.engine.rewind(et(2026, 1, 5, 10, 30), new_future=False)
+    b.rewind(et(2026, 1, 5, 10, 30))
+    assert erased.id not in b.orders
+    assert b.place("SPY", "buy", 1, "limit", limit_price=1.0).id == erased.id + 1
+
+
+def test_triggered_stop_limit_stays_triggered_when_modified() -> None:
+    b = make()
+    b.place("TSLA", "buy", 10, "market")
+    last = b.engine.quotes["TSLA"].last
+    # Stop already reached (triggers at once), limit far above: rests as a limit.
+    o = b.place("TSLA", "sell", 10, "stop_limit", stop_price=round(last * 1.5, 2), limit_price=round(last * 2, 2), tif="gtc")
+    assert o.triggered_at is not None and o.status == "working"
+    new = b.replace(o.id, limit_price=round(last * 1.9, 2))
+    assert new.triggered_at == o.triggered_at
+    with pytest.raises(OrderError, match="stop already triggered"):
+        b.replace(new.id, stop_price=round(last * 1.4, 2))
+
+
+def test_preview_position_math_matches_the_ledger() -> None:
+    b = make()
+    b.place("AMD", "buy", 7, "market")
+    move(b, et(2026, 1, 5, 12, 0))
+    p = b.preview("AMD", "buy", 5, "market")
+    b.place("AMD", "buy", 5, "market")
+    pos = b.ledger().positions["AMD"]
+    assert p["position_after"] == pos.qty
+    assert p["avg_cost_after"] == pytest.approx(pos.avg_cost, abs=1e-4)
+    assert p["cash_after"] == pytest.approx(b.ledger().cash, abs=0.01)
+    p = b.preview("AMD", "sell", 12, "market")
+    realized_before = pos.realized
+    b.place("AMD", "sell", 12, "market")
+    assert p["estimated_realized"] == pytest.approx(b.ledger().positions["AMD"].realized - realized_before, abs=0.01)
+
+
+def test_day_warning_names_the_date() -> None:
+    b = make()
+    p = b.preview("SPY", "buy", 1, "limit", limit_price=1.0)
+    assert any("today (Mon Jan 5)" in w for w in p["warnings"])

@@ -1,4 +1,4 @@
-import type { Account, ClockState, GotoAction, Order, OrderType, Side, TimeInForce } from './types'
+import type { Account, ClockState, GotoAction, Order, OrderPreview, OrderType, Side, TimeInForce } from './types'
 
 export async function updateClock(update: { speed?: number; paused?: boolean }): Promise<ClockState> {
   const resp = await fetch('/api/clock', {
@@ -45,6 +45,17 @@ export async function goto(time: string, future: 'replay' | 'new' = 'replay'): P
   return resp.json()
 }
 
+/** FastAPI's `detail`: a message, or a list of validation errors like "qty: must be an integer". */
+function errorText(detail: unknown): string | null {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => `${Array.isArray(d?.loc) ? d.loc.filter((l: unknown) => l !== 'body').join('.') + ': ' : ''}${d?.msg ?? ''}`)
+      .join('; ')
+  }
+  return null
+}
+
 /** Throws an Error carrying the server's explanation (FastAPI's `detail`). */
 async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
   const resp = await fetch(url, {
@@ -54,7 +65,7 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
   })
   if (!resp.ok) {
     const data = await resp.json().catch(() => null)
-    throw new Error(typeof data?.detail === 'string' ? data.detail : `request failed: ${resp.status}`)
+    throw new Error(errorText(data?.detail) ?? `request failed: ${resp.status}`)
   }
   return resp.json()
 }
@@ -71,6 +82,22 @@ export interface OrderRequest {
 
 export function placeOrder(order: OrderRequest): Promise<Order> {
   return send('/api/orders', 'POST', order)
+}
+
+export function previewOrder(order: OrderRequest): Promise<OrderPreview> {
+  return send('/api/orders/preview', 'POST', order)
+}
+
+export interface OrderChange {
+  qty?: number
+  limit_price?: number
+  stop_price?: number
+  tif?: TimeInForce
+}
+
+/** Cancel/replace a working order; resolves to the new order. */
+export function replaceOrder(id: number, change: OrderChange): Promise<Order> {
+  return send(`/api/orders/${id}`, 'PATCH', change)
 }
 
 export function cancelOrder(id: number): Promise<Order> {

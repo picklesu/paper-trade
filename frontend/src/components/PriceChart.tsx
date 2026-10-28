@@ -29,7 +29,10 @@ import {
   rangeStart,
 } from '../lib/bars'
 import { direction, percent, price, volume } from '../lib/format'
+import { compute, DEFAULT_SETTINGS, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
 import type { ClockState, Order, Quote } from '../lib/types'
+import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
+import { IndicatorMenu } from './IndicatorMenu'
 
 interface Props {
   quote: Quote
@@ -43,10 +46,31 @@ const UP = '#22c55e'
 const DOWN = '#ef4444'
 const PAGE = 500
 const RESYNC_MS = 1500
+const SETTLE_MS = 80
 // Bars per preset load: enough to cover the range in one request.
 const PRESET_COUNT: Record<string, number> = { '1D': 400, '5D': 420, '1M': 300, '3M': 460, '6M': 140, YTD: 260, '1Y': 260, '5Y': 270 }
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
+const SETTINGS_KEY = 'paper-trade.indicators'
+
+/** Indicator choices are a per-browser convenience; storage may be unavailable. */
+function loadSettings(): IndicatorSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    return raw ? sanitize(JSON.parse(raw)) : structuredClone(DEFAULT_SETTINGS)
+  } catch {
+    return structuredClone(DEFAULT_SETTINGS)
+  }
+}
+
+function saveSettings(settings: IndicatorSettings) {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+  } catch {
+    // Not saved; the choice still applies until the page reloads.
+  }
+}
 
 function candle(b: Bar) {
   return { time: b[0] as UTCTimestamp, open: b[1], high: b[2], low: b[3], close: b[4] }
@@ -63,6 +87,8 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
   const candles = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumes = useRef<ISeriesApi<'Histogram'> | null>(null)
   const markers = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const indicators = useRef<IndicatorLayer | null>(null)
+  const [settings, setSettings] = useState<IndicatorSettings>(loadSettings)
 
   const [interval, setInterval_] = useState<Interval>('5m')
   const [preset, setPreset] = useState<RangePreset | null>(RANGES[1])
@@ -79,6 +105,10 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
   const generation = useRef(0)
   // Which view (symbol|interval|timeline) the bars on screen belong to.
   const shownView = useRef<string | null>(null)
+  // False from a full load until its visible range has been applied (the chart applies
+  // ranges on its next frame); older pages wait for this so they shift the right view.
+  const settled = useRef(false)
+  const loadOlderIfNeeded = useRef<() => void>(() => {})
 
   const symbol = quote.symbol
   const now = Date.parse(clock.time) / 1000
@@ -102,6 +132,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     setBars(next)
     candles.current?.setData(next.map(candle))
     volumes.current?.setData(next.map(volumeBar))
+    indicators.current?.setData(next)
   }
 
   // Create the chart once.
@@ -133,6 +164,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     volumes.current = c.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'volume' })
     volumes.current.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } })
     markers.current = createSeriesMarkers(candles.current, [])
+    indicators.current = new IndicatorLayer(c)
 
     c.subscribeCrosshairMove((param) => {
       const t = param.time as number | undefined
@@ -141,15 +173,29 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     chart.current = c
     return () => {
       c.remove()
-      chart.current = candles.current = volumes.current = markers.current = null
+      chart.current = candles.current = volumes.current = markers.current = indicators.current = null
     }
   }, [])
+
+  // Indicator series follow the settings and the bar size (VWAP is intraday only). Their data
+  // comes with the bars: only fill them now if the bars on screen are already this view's.
+  useEffect(() => {
+    indicators.current?.configure(settings, interval)
+    if (shownView.current === `${symbol}|${interval}|${clock.timeline}`) indicators.current?.setData(barsRef.current)
+    // Only settings and bar size reconfigure; symbol and timeline changes reload the bars (show()).
+  }, [settings, interval]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const changeSettings = (next: IndicatorSettings) => {
+    setSettings(next)
+    saveSettings(next)
+  }
 
   // (Re)load when the symbol, bar size or timeline (a jump, rewind or new history) changes.
   useEffect(() => {
     let cancelled = false
     const key = `${symbol}|${interval}|${clock.timeline}`
     const gen = ++generation.current
+    settled.current = false
     // The preset chose this bar size; read it via the ref so changing only the preset
     // moves the view (choosePreset) instead of reloading.
     const preset = presetRef.current
@@ -169,6 +215,12 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
         } else {
           ts.setVisibleLogicalRange({ from: page.bars.length - 150, to: page.bars.length + 4 })
         }
+        // Once the chart has applied that range, load older bars if the view needs them.
+        window.setTimeout(() => {
+          if (gen !== generation.current) return
+          settled.current = true
+          loadOlderIfNeeded.current()
+        }, SETTLE_MS)
       })
       .catch((err) => !cancelled && setLoaded({ key, error: err instanceof Error ? err.message : String(err) }))
     return () => {
@@ -181,7 +233,9 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     const ts = chart.current?.timeScale()
     if (!ts) return
     const onRange = (range: { from: number; to: number } | null) => {
-      if (!range || range.from > 20 || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
+      if (!settled.current) return // a fresh load's view is still being applied
+      // Near the start only (written so a missing or odd range never counts as "near").
+      if (!range || !(range.from <= 20) || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
       loadingOlder.current = true
       const first = barsRef.current[0][0]
       const gen = generation.current
@@ -189,7 +243,15 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
         .then((page) => {
           if (gen !== generation.current) return // the chart reloaded meanwhile (symbol, size, jump)
           moreRef.current = page.more
+          // Inserting bars on the left would slide the view back in time (the chart keeps
+          // bar positions, not dates), which then triggers yet another load. Shift the view
+          // by the number of bars added, which keeps zoom, position and right margin exactly.
+          const ts = chart.current?.timeScale()
+          const view = ts?.getVisibleLogicalRange()
+          const before = barsRef.current.length
           show(mergeBars(page.bars, barsRef.current))
+          const added = barsRef.current.length - before
+          if (ts && view) ts.setVisibleLogicalRange({ from: view.from + added, to: view.to + added })
         })
         .catch(() => {
           moreRef.current = false
@@ -198,6 +260,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
           loadingOlder.current = false
         })
     }
+    loadOlderIfNeeded.current = () => onRange(ts.getVisibleLogicalRange())
     ts.subscribeVisibleLogicalRangeChange(onRange)
     return () => ts.unsubscribeVisibleLogicalRangeChange(onRange)
   }, [symbol])
@@ -215,7 +278,8 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     const bar = next[next.length - 1]
     candles.current.update(candle(bar))
     volumes.current?.update(volumeBar(bar))
-    if (next.length !== current.length) setBars(next)
+    indicators.current?.updateLast(next)
+    setBars(next) // the legend shows the latest bar and its indicator values
   }, [quote.last, now, sessionOpen, interval, viewKey])
 
   // ...and resync the latest two bars from the server now and then, for exact volume
@@ -275,6 +339,26 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
 
   const legend = hover ?? bars[bars.length - 1] ?? null
 
+  // Indicator series computed once per bars/settings; the legend just reads its bar's index.
+  const indicatorSeries = useMemo(
+    () =>
+      INDICATORS.filter((i) => settings[i.id].on && applicable(i.id, interval)).map((info) => ({
+        id: info.id,
+        label: indicatorLabel(info.id, settings[info.id]),
+        lines: compute(info.id, settings[info.id].params, bars).lines,
+      })),
+    [bars, settings, interval],
+  )
+  const legendIndex = legend ? bars.findIndex((b) => b[0] === legend[0]) : -1
+  const indicatorValues =
+    legendIndex < 0
+      ? []
+      : indicatorSeries.map((s) => ({
+          id: s.id,
+          label: s.label,
+          values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
+        }))
+
   return (
     <div className="price-chart">
       <div className="chart-toolbar">
@@ -305,6 +389,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
             </button>
           ))}
         </div>
+        <IndicatorMenu settings={settings} interval={interval} onChange={changeSettings} />
         <button className="ctl" onClick={() => chart.current?.timeScale().scrollToRealTime()} title="Scroll to the latest bar">
           Latest ⇥
         </button>
@@ -320,6 +405,20 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
             <span className={direction(legend[4] - legend[1])}>C {price(legend[4])}</span>
             <span className={direction(legend[4] - legend[1])}>{percent(((legend[4] - legend[1]) / legend[1]) * 100)}</span>
             <span className="muted">Vol {volume(legend[5])}</span>
+            {indicatorValues.length > 0 && (
+              <span className="legend-indicators">
+                {indicatorValues.map((iv) => (
+                  <span key={iv.id}>
+                    <span className="muted">{iv.label}</span>{' '}
+                    {iv.values.map((v) => (
+                      <span key={v.key} style={{ color: v.color }}>
+                        {v.value === null ? '–' : price(v.value)}{' '}
+                      </span>
+                    ))}
+                  </span>
+                ))}
+              </span>
+            )}
           </div>
         )}
         {(loading || error || clock.building_history) && (

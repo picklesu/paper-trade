@@ -9,22 +9,24 @@ _Last updated: 2026-10-27, after Phase 2b was merged._
 | 0–3. Skeleton, market engine, sessions, time travel, account, orders, order review | Merged; the user confirmed 2a–3 work | #1–#9 |
 | CI (GitHub Actions: tests, build, lint on every PR) | Merged | #10 |
 | 4. Interactive charts + 5 years of history | Merged | #11 |
-| **5. Indicators** | **Next. Not started.** | — |
+| 5. Indicators | Merged | #12 |
+| **6. Watchlists and quotes** | **Next. Not started.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Phase 5: indicators** on the chart (README roadmap: SMA, EMA, VWAP, RSI, MACD, Bollinger
-Bands). Agree the details with the user first: which indicators, overlays vs separate panes
-(lightweight-charts v5 supports panes via `addSeries(..., paneIndex)`), and settings (periods).
-Computing them on the frontend from the loaded bars is simplest; they need some extra history
-before the visible range, so load a little more than shown.
+**Phase 6: watchlists and quotes** (README roadmap). Agree the scope with the user first. Ideas:
+editable watchlists (add or remove symbols from those available, several named lists), more
+columns (bid/ask, volume, day range, 52-week range from history), sorting, and a fuller quote
+panel. Adding symbols beyond the fixed 10 would mean extending `market/symbols.py` and the
+engine's symbol arrays. Changing the symbol set changes every price path (the random draws are
+per symbol column), so treat that as a new market or make draws per symbol.
 
-User preferences so far: a **fully interactive** chart; ranges from 1 minute to 5 years; zoom to
-see less/more history. **The user is not QA**: verify everything (tests, build, lint with
-`--deny-warnings`, a headless-browser check, green CI) before merging, and don't ask them to test
-each phase.
+User preferences so far: a **fully interactive** chart; ranges from 1 minute to 5 years; a
+standard indicator set. **The user is not QA**: verify everything (tests, build, lint with
+`--deny-warnings`, a headless-browser check that **looks at screenshots**, green CI) before
+merging, and don't ask them to test each phase.
 
 ## Going back in time (decided by the user; built in 2a + 2b)
 
@@ -143,10 +145,24 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     size and visible range. Older pages load when the visible logical range nears the start.
     Live ticks fold into the last bar (`lib/bars.ts` `bucketStart`/`applyTick`), and the last 2
     bars resync from the server every 1.5s for exact volume. Data loads again when
-    `clock.timeline` changes. Pure logic is in `lib/bars.ts`. Tests use a recording stand-in for
+    `clock.timeline` changes. When older bars are prepended, the visible logical range is
+    shifted by the number of bars added. The library keeps bar positions on `setData`, which
+    slid the view back in time and chained extra loads. Older pages also wait until a fresh
+    load's visible range has been applied (`settled`, about 80ms, because the chart applies
+    ranges on its next frame), then load once if the view needs it. Pure
+    logic is in `lib/bars.ts`.
+  - Indicators: `lib/indicators.ts` (pure math: SMA, EMA, Wilder RSI, MACD, Bollinger with
+    population SD, session-anchored VWAP; settings, labels, sanitizing).
+    `components/IndicatorLayer.ts` owns the indicator series. Overlays go on pane 0; RSI and MACD
+    go in panes 1+ (stretch factor 4:1), and empty panes are removed. The layer recomputes on
+    load and updates the last point on each tick. `components/IndicatorMenu.tsx` has toggles and
+    lengths, saved in `localStorage` (`paper-trade.indicators`). The legend shows values at the
+    hovered bar, from series computed once per bars and settings. `updateLast` recomputes the
+    full series each tick: about 3.6ms for all 9 indicators over 5,000 bars, which is fine at
+    2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 60 (Vitest + Testing Library). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 83 (Vitest + Testing Library). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

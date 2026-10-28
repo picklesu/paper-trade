@@ -15,7 +15,7 @@ import { EdgeStrip } from './EdgeStrip'
 import { type Edge, edgeOf, savedSizes, withHidden } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
 import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
-import { buildDefaultLayout, COMPONENTS, dockPanel, floatGroup, PANEL_IDS, type PanelId, panelState, type PanelState, sideColumnTidier } from './panels'
+import { buildDefaultLayout, COMPONENTS, dockPanel, floatGroup, keepChartSpace, mainGroup, PANEL_IDS, type PanelId, panelState, type PanelState, sideColumnTidier } from './panels'
 import { snapFloatingResizes } from './floatingResize'
 import { snapPosition } from './snap'
 import { useEdgeStrips } from './useEdgeStrips'
@@ -166,12 +166,13 @@ export const Workspace = memo(function Workspace() {
     // dockview's fromJSON lays the grid out at a size of 0 when floating windows are being
     // replaced (Reset layout then built everything 0px wide, so nothing showed). After any
     // load or rebuild, lay it out at the workspace's real size, measured as dockview does.
-    disposeFromJSON.current()
-    const relayout = api.onDidLayoutFromJSON(() => {
+    const relayout = () => {
       const el = host.current
       if (el?.clientWidth && el.clientHeight) api.layout(el.clientWidth, el.clientHeight, true)
-    })
-    disposeFromJSON.current = () => relayout.dispose()
+    }
+    disposeFromJSON.current()
+    const afterLoad = api.onDidLayoutFromJSON(relayout)
+    disposeFromJSON.current = () => afterLoad.dispose()
     let saved = loadLayout()
     try {
       if (saved) api.fromJSON(saved)
@@ -182,6 +183,8 @@ export const Workspace = memo(function Workspace() {
       clearLayout()
       buildDefaultLayout(api)
     }
+    // Before the side sizes are restored, which are relative to the chart's place.
+    keepChartSpace(api, relayout)
     // StrictMode's development double-mount readies a second dockview on the same element.
     disposeSizes.current()
     if (host.current) disposeSizes.current = keepSidePanelSizes(api, host.current, saved)
@@ -201,6 +204,8 @@ export const Workspace = memo(function Workspace() {
     const subs = [
       api.onDidAddGroup(tidy),
       api.onDidLayoutChange(() => {
+        // After this change has settled, not inside it.
+        queueMicrotask(() => keepChartSpace(api, relayout))
         tidy()
         tidyColumn()
       }),
@@ -238,8 +243,7 @@ export const Workspace = memo(function Workspace() {
 
 /** The layout to save: a group the user is only peeking at is saved collapsed. */
 function snapshot(api: DockviewApi, peeking: string | null) {
-  const chart = api.getPanel('chart')?.group
-  return withHidden(api.toJSON(), new Set(peeking ? [peeking] : []), chart?.api.location.type === 'grid' ? chart.id : undefined)
+  return withHidden(api.toJSON(), new Set(peeking ? [peeking] : []), mainGroup(api)?.id)
 }
 
 type Size = { width: number; height: number }
@@ -257,8 +261,8 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     )
   let before = gridSizes()
   const restore = (now: Map<DockviewGroupPanel, Size>) => {
-    const chart = api.getPanel('chart')?.group
-    if (!chart || chart.api.location.type !== 'grid') return
+    const chart = mainGroup(api)
+    if (!chart) return
     const layout = api.toJSON()
     for (const [g] of now) {
       const size = before.get(g)
@@ -285,8 +289,8 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
   observer.observe(host)
   // A saved layout is scaled to the workspace's size now; give the side panels back the sizes
   // they were saved with.
-  const chart = api.getPanel('chart')?.group
-  if (saved && chart?.api.location.type === 'grid') {
+  const chart = mainGroup(api)
+  if (saved && chart) {
     const sizes = savedSizes(saved)
     const layout = api.toJSON()
     for (const g of api.groups) {

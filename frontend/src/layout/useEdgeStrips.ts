@@ -2,7 +2,7 @@ import type { DockviewApi } from 'dockview-react'
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CollapseControls, CollapsedGroup } from './collapseContext'
 import { edgeOf } from './edges'
-import { PANELS, type PanelId, showGroup } from './panels'
+import { mainGroup, PANELS, type PanelId, showGroup } from './panels'
 
 const titleOf = (id: string) => PANELS[id as PanelId]?.title ?? id
 // Not api.getGroup: its type lacks the group's element.
@@ -39,8 +39,7 @@ export function useEdgeStrips(
     if (!api) return
     sync.current = () => {
       const layout = api.toJSON()
-      const chart = api.getPanel('chart')?.group
-      const chartId = chart?.api.location.type === 'grid' ? chart.id : undefined
+      const chartId = mainGroup(api)?.id
       const next: CollapsedGroup[] = []
       for (const g of api.groups) {
         if (g.api.location.type !== 'grid') continue

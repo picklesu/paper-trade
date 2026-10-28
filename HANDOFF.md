@@ -15,6 +15,7 @@ _Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 | 5.5b fixes from the user's testing: chart space (one-line quote, toolbar in the chart's tab bar, thinner bars, full screen), tab-overflow menu while peeking, resize snapping and bring-to-front | Merged | #17 |
 | 5.5b redesign from the user's review: chart-first default (side panels collapsed on the left), no tab bars, Panels menu places panels, no date axis, range/bar size at the bottom | Merged | #18 |
 | Fixes: divider drags snapping back on market ticks; Reset layout showing nothing after floating | Merged | #19 |
+| Fix: with the chart floating, collapsed panels moved to the top/bottom and opened over the whole workspace | Merged | #20 |
 | **5.5c. Workspace, next steps** | **Next.** See below. | — |
 | 6. Watchlists and quotes | After 5.5. | — |
 
@@ -182,6 +183,17 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     everything 0px wide (dockview's `fromJSON` lays out at 0 when replacing floating windows): `buildDefaultLayout` starts from `fromJSON` of an empty grid, and
     `onReady` registers (before the first load) a relayout at the host's `clientWidth` and
     `clientHeight` after every `fromJSON`. Reset also drops any peek first (ids are reused).
+  - **Chart placeholder (#20):** while the chart floats, an empty `chart-space` panel
+    (`CHART_SPACE`, not in the menu) holds its place in the grid; `mainGroup(api)` is the
+    chart's group or the placeholder's, used wherever "the chart's group" is the reference
+    (edges, side sizes, saving). `floatGroup` adds it beside the chart *before* the chart
+    leaves (a grid of only collapsed panels has shrunk to 0px, so anything added after starts
+    at minimum size); `keepChartSpace` (on load, and after each layout change, in a microtask) is
+    the backstop, e.g. for layouts saved before #20: it adds the placeholder, relays the grid
+    out at the host's size and resets the side column (300px, or collapsed to nothing). It
+    removes the placeholder when the chart docks (`dockGroup` moves the chart into its place
+    and resets the column width). The chart floats at
+    about 60% × 70% of the workspace.
   - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `collapseContext.ts`, `edges.ts`): a
     collapsed group is a hidden grid group (`group.api.setVisible(false)`; dockview saves
     `visible` in the layout JSON, so it survives reloads). `edgeOf` picks the edge from the
@@ -246,7 +258,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 113 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 115 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

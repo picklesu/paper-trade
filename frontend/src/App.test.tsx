@@ -264,6 +264,44 @@ describe('workspace', () => {
     expect(panel('Chart').closest('.dv-resize-container')).not.toBeNull()
   })
 
+  it('while the chart floats, a placeholder keeps its place, so collapsed panels stay on the left', async () => {
+    render(<App />)
+    setPanel('Chart', 'Float')
+    setPanel('Watchlist', 'Float')
+    expect(document.querySelector('.chart-space')).not.toBeNull()
+    await waitFor(() => expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Order Entry', 'Positions', 'Orders', 'Activity']))
+    expect(screen.queryByRole('toolbar', { name: /Collapsed panels \((top|bottom)\)/ })).not.toBeInTheDocument()
+    // The placeholder isn't a panel you can place.
+    if (!screen.queryByRole('menu', { name: 'Panels' })) fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    expect(screen.getAllByRole('radiogroup').map((g) => g.getAttribute('aria-label'))).toEqual(['Chart', 'Watchlist', 'Order Entry', 'Positions', 'Orders', 'Activity'])
+
+    // Docking the chart takes the placeholder's place.
+    setPanel('Chart', 'Open')
+    expect(panel('Chart').closest('.dv-resize-container')).toBeNull()
+    await waitFor(() => expect(document.querySelector('.chart-space')).toBeNull())
+    expect(group('Order Entry').compareDocumentPosition(group('Chart')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('a layout saved with the chart floating but no placeholder (before #20) gets one on load', async () => {
+    const { unmount } = render(<App />)
+    setPanel('Chart', 'Float')
+    window.dispatchEvent(new Event('pagehide'))
+    unmount()
+    // What #19 saved: the same, without the placeholder.
+    const saved = JSON.parse(localStorage.getItem('paper-trade.layout.v2')!)
+    const drop = (n: { type: string; data: unknown }): unknown =>
+      n.type === 'leaf' ? n : { ...n, data: (n.data as { type: string; data: { id?: string; views?: string[] } }[]).filter((c) => !(c.type === 'leaf' && c.data.views?.includes('chart-space'))).map(drop) }
+    saved.grid.root = drop(saved.grid.root)
+    delete saved.panels['chart-space']
+    localStorage.setItem('paper-trade.layout.v2', JSON.stringify(saved))
+    expect(localStorage.getItem('paper-trade.layout.v2')).not.toContain('chart-space')
+
+    render(<App />)
+    expect(document.querySelector('.chart-space')).not.toBeNull()
+    expect(panel('Chart').closest('.dv-resize-container')).not.toBeNull()
+    await waitFor(() => expect(strip()).not.toBeNull())
+  })
+
   it('a strip tab peeks at a collapsed panel until a click elsewhere; Open in the menu keeps it', () => {
     render(<App />)
     const tab = stripTab('Watchlist')

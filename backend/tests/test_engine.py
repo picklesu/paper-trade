@@ -4,6 +4,7 @@ import statistics
 import time
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pytest
 
 from paper_trade.market import engine as engine_mod
@@ -244,3 +245,22 @@ def test_prices_at_past_time() -> None:
     t = et(2026, 1, 6, 11, 0)
     engine = at(et(2026, 1, 8, 14, 0))
     assert engine.prices_at(t) == prices(at(t))
+
+
+def test_bid_ask_arrays_match_scalar() -> None:
+    from paper_trade.market.engine import bid_ask_arrays
+
+    rng = random.Random(1)
+    prices = [1.234, 57.5, 100.0, 580.0, 999.999] + [rng.uniform(1, 2000) for _ in range(20_000)]
+    bids, asks = bid_ask_arrays(np.array(prices))
+    for p, b, a in zip(prices, bids, asks):
+        assert (float(b), float(a)) == bid_ask(p)
+
+
+def test_starts_version_changes_only_with_new_sessions() -> None:
+    engine = at(et(2026, 1, 5, 10, 0))
+    v = engine.starts_version
+    engine.advance(et(2026, 1, 5, 15, 0))
+    assert engine.starts_version == v
+    engine.advance(et(2026, 1, 6, 10, 0))
+    assert engine.starts_version > v

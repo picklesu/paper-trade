@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from paper_trade.market.calendar import MARKET_TZ, SESSION_SECONDS, market_day, session_open, session_seconds
-from paper_trade.market.engine import MarketEngine, bid_ask
+from paper_trade.market.engine import MarketEngine, bid_ask, bid_ask_arrays
 from paper_trade.store import Store
 from paper_trade.trading.broker import STARTING_CASH, Broker, OrderError
 
@@ -126,13 +126,14 @@ def test_resting_buy_limit_fills_at_limit_on_first_cross() -> None:
     b = make()
     day = market_day(T)
     x = path(b, "NVDA", day)
+    _, ask = bid_ask_arrays(x)
     s0 = int(session_seconds(T))
-    limit = round(float(x[s0:].min()) + 0.01, 2)  # reached later today, not now
+    limit = round(float(ask[s0:].min()), 2)  # the ask reaches it later today, not now
     o = b.place("NVDA", "buy", 10, "limit", limit_price=limit)
     assert o.status == "working"
 
     move(b, et(2026, 1, 5, 15, 59, 59))  # one big step, like 600x or a jump
-    k = first_second(x <= limit, s0)
+    k = first_second(ask <= limit, s0)
     assert o.status == "filled"
     assert o.fill_price == limit
     assert o.filled_at == session_open(day) + timedelta(seconds=k)
@@ -297,7 +298,7 @@ def test_replay_after_rewind_refills_identically() -> None:
     day = market_day(T)
     x = path(b, "META", day)
     s0 = int(session_seconds(T))
-    limit = round(float(x[s0:].min()) + 0.01, 2)
+    limit = round(float(bid_ask_arrays(x)[1][s0:].min()), 2)
     o = b.place("META", "buy", 1, "limit", limit_price=limit)
     move(b, et(2026, 1, 5, 15, 0))
     first = (o.filled_at, o.fill_price)
@@ -330,3 +331,62 @@ def test_orders_and_cash_survive_reload(tmp_path) -> None:
     assert again.starting_cash == 25_000
     assert {o.id: o.to_dict() for o in again.orders.values()} == {o.id: o.to_dict() for o in b.orders.values()}
     assert again.ledger().cash == pytest.approx(b.ledger().cash)
+
+
+def test_limit_at_last_price_does_not_fill_inside_the_spread() -> None:
+    b = make()
+    q = b.engine.quotes["SPY"]
+    o = b.place("SPY", "buy", 1, "limit", limit_price=round(q.last, 2))
+    move(b, add_seconds(T, 1))
+    if o.status == "filled":  # only if the ask itself came down to the limit
+        x = path(b, "SPY", market_day(T))
+        assert bid_ask(float(x[int(session_seconds(o.filled_at))]))[1] <= o.limit_price
+
+
+def test_buy_stop_reserves_at_least_the_ask() -> None:
+    b = make()
+    b.reset(10_000)
+    ask = b.engine.quotes["SPY"].ask
+    with pytest.raises(OrderError, match="Not enough buying power"):
+        b.place("SPY", "buy", 100, "stop", stop_price=1.0)  # already triggered: fills at the ask
+    o = b.place("SPY", "buy", 5, "stop", stop_price=round(ask * 1.5, 2))
+    assert b.buying_power() == pytest.approx(10_000 - 5 * round(ask * 1.5, 2))
+    assert o.status == "working"
+
+
+def test_fill_cannot_use_cash_set_aside_for_other_orders() -> None:
+    from paper_trade.trading.orders import Order
+
+    b = make()
+    b.reset(10_000)
+    b.place("AAPL", "buy", 90, "limit", limit_price=100.0)  # sets aside $9,000
+    assert b.buying_power() == pytest.approx(1_000)
+    # A $2,000 fill fits in total cash but not in the cash that's free.
+    o = Order(99, "AAPL", "buy", 10, "stop", "day", None, 1.0, b.engine.time)
+    b.orders[o.id] = o
+    b._fill(o, 200.0, b.engine.time)
+    assert o.status == "rejected"
+    assert "Not enough cash" in o.reason
+    assert b.ledger().cash == 10_000
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), 0, -1, 2_000_000])
+def test_rejects_unreasonable_prices(bad: float) -> None:
+    with pytest.raises(OrderError, match="Limit price"):
+        make().place("SPY", "buy", 1, "limit", limit_price=bad)
+
+
+def test_start_of_day_value_is_cached_until_fills_change() -> None:
+    b = make()
+    b.place("SPY", "buy", 1, "market")
+    quotes = b.engine.quotes
+    b.summary(quotes)
+    cached = b._day_start
+    b.summary(quotes)
+    assert b._day_start is cached
+    b.place("SPY", "buy", 1, "market")
+    assert b._day_start is None
+
+
+def add_seconds(t: datetime, s: int) -> datetime:
+    return t + timedelta(seconds=s)

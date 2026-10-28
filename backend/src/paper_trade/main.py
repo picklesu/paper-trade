@@ -23,6 +23,8 @@ def load_market(store: Store, seed: int) -> tuple[SimClock, MarketEngine]:
     if state is None:
         clock = SimClock()
         return clock, MarketEngine(start=clock.now(), seed=seed)
+    if "starts" not in state:  # saved separately since it can be large
+        state = {**state, "starts": store.get("market_starts", {})}
     engine = MarketEngine.from_state(state)
     saved = store.get("clock", {})
     clock = SimClock(start=engine.time, speed=saved.get("speed", 1), paused=saved.get("paused", False))

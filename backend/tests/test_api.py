@@ -198,3 +198,35 @@ def test_trading_blocked_during_a_jump(client: TestClient) -> None:
     resp = client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 1, "type": "market"})
     assert resp.status_code == 409
     client.app.state.market._jumping = False
+
+
+def test_goto_preview_refused_during_a_jump(client: TestClient) -> None:
+    client.app.state.market._jumping = True
+    assert client.get("/api/clock/goto", params={"time": "2026-01-05T10:00"}).status_code == 409
+    client.app.state.market._jumping = False
+
+
+def test_pause_saves_the_current_market_time(tmp_path) -> None:
+    import time
+
+    from paper_trade.store import Store
+
+    db = tmp_path / "pause.db"
+    with TestClient(create_app(db_path=db)) as c:
+        c.post("/api/clock", json={"speed": 600})
+        time.sleep(0.3)  # about 3 market-minutes; the engine may lag the clock by a tick
+        c.post("/api/clock", json={"paused": True})
+        time.sleep(0.6)  # let a tick run while paused
+        shown = c.get("/api/clock").json()["time"]
+        saved = Store(db).get("market")["time"]  # read the file, as a restart would
+    assert saved == shown
+
+
+def test_rejects_infinite_prices(client: TestClient) -> None:
+    resp = client.post(
+        "/api/orders",
+        content='{"symbol": "SPY", "side": "buy", "qty": 1, "type": "limit", "limit_price": Infinity}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 422
+    assert client.get("/api/orders").json() == []

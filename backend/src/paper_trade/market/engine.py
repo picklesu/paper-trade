@@ -97,6 +97,17 @@ def bid_ask(price: float) -> tuple[float, float]:
     return bid, ask
 
 
+def bid_ask_arrays(prices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """`bid_ask` for an array of prices, with identical results."""
+    spread = np.maximum(0.01, np.round(prices * 0.0001, 2))
+    bid = np.floor(np.round((prices - spread / 2) * 100, 6)) / 100
+    ask = np.round(bid + spread, 2)
+    low = ask < prices
+    bid = np.where(low, np.round(bid + 0.01, 2), bid)
+    ask = np.where(low, np.round(ask + 0.01, 2), ask)
+    return bid, ask
+
+
 @dataclass
 class _DayStart:
     prev_close: np.ndarray  # (N,) previous session's closing prices
@@ -153,6 +164,7 @@ class MarketEngine:
             nxt = next_trading_day(last)
             # The close is the last price shown in the session (one second before 4:00).
             self._starts[nxt] = _DayStart(path.prices[_S - 1].copy(), int(path.regimes[-1]))
+            self.starts_version += 1
             last = nxt
             yield last
         self._time = t
@@ -169,6 +181,7 @@ class MarketEngine:
             self._epochs = [first] + [e for e in self._epochs[1:] if e[0] < t]
             self._epochs.append((t, self._new_seed()))
             self._starts = {d: s for d, s in self._starts.items() if d <= day}
+            self.starts_version += 1
             for d in [d for d in self._paths if d >= day]:
                 del self._paths[d]
         self._time = t
@@ -263,6 +276,8 @@ class MarketEngine:
             market_day(self.origin): _DayStart(np.array([s.price for s in self.specs]), normal)
         }
         self._paths: OrderedDict[date, _DayPath] = OrderedDict()
+        # Bumped whenever session start states change, so savers can skip the large part.
+        self.starts_version = getattr(self, "starts_version", 0) + 1
 
     def _new_seed(self) -> int:
         self._seeds_used += 1

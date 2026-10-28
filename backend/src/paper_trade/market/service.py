@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Literal
 
-from paper_trade.market.calendar import market_day, snap, trading_days_between
+from paper_trade.market.calendar import market_day, session_open, snap, trading_days_between
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.store import Store
@@ -39,6 +39,7 @@ class MarketService:
         self._task: asyncio.Task | None = None
         self._jumping = False
         self._ticks_since_save = 0
+        self._saved_starts_version: int | None = None
 
     @property
     def jumping(self) -> bool:
@@ -86,20 +87,22 @@ class MarketService:
 
     # ----- running -----------------------------------------------------------------
 
-    def sync(self) -> bool:
-        """Bring the market and orders up to the clock. True if any order changed."""
+    def sync(self) -> None:
+        """Bring the market and orders up to the clock. If any order filled,
+        triggered or expired, save and tell every client, whoever called this."""
+        if self._jumping:
+            raise BusyError
         t0 = self.engine.time
         self.engine.advance(self.clock.now())
-        return self.broker.process(t0, self.engine.time)
+        if self.broker.process(t0, self.engine.time):
+            self.save()
+            self.publish(self.orders_message(), force=True)
 
     def tick(self) -> None:
         if self._jumping:
             return
         before = self.engine.time
-        orders_changed = self.sync()
-        if orders_changed:
-            self.save()
-            self.publish(self.orders_message(), force=True)
+        self.sync()
         # Nothing changes while paused; clock updates publish on their own.
         if self.engine.time != before:
             self.publish(self.snapshot())
@@ -108,7 +111,13 @@ class MarketService:
                 self.save()
 
     def save(self) -> None:
-        self.store.set("market", self.engine.to_state())
+        state = self.engine.to_state()
+        # Session start states grow with history: write them only when they change.
+        starts = state.pop("starts")
+        if self.engine.starts_version != self._saved_starts_version:
+            self.store.set("market_starts", starts)
+            self._saved_starts_version = self.engine.starts_version
+        self.store.set("market", state)
         self.store.set("clock", {"speed": self.clock.speed, "paused": self.clock.paused})
         self._ticks_since_save = 0
 
@@ -130,7 +139,8 @@ class MarketService:
         """For the confirmation: trades that would be erased and how holdings are revalued."""
         if action == "rewind":
             self.sync()
-            return self.broker.preview_rewind(target)
+            # Recheck: syncing can move "now", but never past the target of a rewind preview.
+            return self.broker.preview_rewind(min(target, self.engine.time))
         if action == "reset":
             fills = [o for o in self.broker.orders.values() if o.status == "filled"]
             return {
@@ -146,6 +156,10 @@ class MarketService:
         action, target = self.preview_goto(target)
         if action == "forward" and trading_days_between(market_day(self.engine.time), market_day(target)) > MAX_JUMP_DAYS:
             raise ValueError(f"can jump at most {MAX_JUMP_DAYS} trading days ahead")
+        if action == "rewind":
+            # Match orders up to now first, so what gets rolled back is complete.
+            self.sync()
+            target = min(target, self.engine.time)
 
         self._jumping = True
         try:
@@ -153,7 +167,6 @@ class MarketService:
                 self.engine.reset(target)
                 self.broker.reset()
             elif action == "rewind":
-                self.sync()
                 self.engine.rewind(target, new_future)
                 self.broker.rewind(target)
             elif action == "forward":
@@ -170,15 +183,16 @@ class MarketService:
     async def _fast_forward(self, target: datetime) -> None:
         # Sessions still to generate (fewer than the distance if a replay already generated some).
         days = trading_days_between(self.engine.generated_through, market_day(target))
-        t0 = self.engine.time
-        # Generate session by session, yielding so ticks and progress keep flowing.
-        for i, _ in enumerate(self.engine.advance_iter(target), start=1):
+        t = self.engine.time
+        # Session by session: generate it, match working orders against it while its
+        # price path is still cached, and yield so progress keeps flowing.
+        for i, day in enumerate(self.engine.advance_iter(target), start=1):
+            self.broker.process(t, session_open(day))
+            t = session_open(day)
             if i % PROGRESS_EVERY_DAYS == 0:
                 self.publish({"type": "progress", "done": i, "total": days})
             await asyncio.sleep(0)
-        # Then match working orders over the skipped time, also session by session.
-        for _ in self.broker.process_iter(t0, target):
-            await asyncio.sleep(0)
+        self.broker.process(t, target)
 
     # ----- trading -----------------------------------------------------------------
 

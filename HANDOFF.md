@@ -69,8 +69,8 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     Prices are synthetic.
   - `market/service.py`: `MarketService` owns the clock, engine, store and `Broker`. A
     background loop runs `sync()` every 0.5s (advance the engine to `clock.now()`, then
-    `broker.process(t0, t1)`) and sends `tick` messages, which include the account. It sends an
-    `orders` message when orders change. It saves the market about every 5s and after any trade,
+    `broker.process(t0, t1)`; if orders changed, `sync()` itself saves and sends an `orders`
+    message, so every caller gets that) and sends `tick` messages, which include the account. It saves the market about every 5s and after any trade,
     jump or clock change. It skips ticks while paused or during a jump. `goto()` handles
     forward (sessions, then order matching, both yielding), rewind (engine + broker) and reset
     (engine + broker). The final state after a jump is always sent with `force=True`.
@@ -85,15 +85,18 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     rules are in the module docstring.
   - `trading/orders.py`: the `Order` dataclass. Every status change is time-stamped
     (`created_at`, `triggered_at`, `filled_at`, `closed_at`).
-  - `store.py`: SQLite. A `meta` table holds JSON for `market` (`engine.to_state()`), `clock`
-    and `starting_cash`; an `orders` table holds one JSON row per order. Startup
+  - `store.py`: SQLite. A `meta` table holds JSON for `market` (`engine.to_state()` without
+    `starts`, saved about every 5s), `market_starts` (written only when
+    `engine.starts_version` changes), `clock` and `starting_cash`; an `orders` table holds
+    one JSON row per order. Startup
     (`main.load_market`) resumes from it, and `MarketService` rolls back any order newer than
     the saved market time.
   - `api/`: `GET /api/health`, `GET /api/quotes`, `GET|POST /api/clock` (409 during a jump),
     `GET /api/clock/goto?time=` (preview: forward / rewind / reset / none, plus the snapped
     target), `POST /api/clock/goto {time, future: replay|new}`, WebSocket `/ws`. Times without a
     UTC offset are New York wall-clock time; years 1900–2999; forward jumps are capped at 5
-    years. Trading (`api/trading.py`): `GET /api/account`, `POST /api/account/reset`,
+    years. `api/deps.py`: `market` (read-only) and `idle_market` (409 during a jump) for
+    anything that syncs or changes state. Trading (`api/trading.py`): `GET /api/account`, `POST /api/account/reset`,
     `GET|POST /api/orders`, `DELETE /api/orders/{id}`; 422 responses carry a user-readable
     `detail`; 409 during a jump. **Endpoints that touch market state must be `async def`** so
     they run on the event loop's thread; a plain `def` runs in a worker thread and races the
@@ -110,7 +113,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     Cancel / Activity, plus "Reset account…"), `ResetAccountDialog`, `Panel`. The top bar
     shows net liq, buying power and day P&L.
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 97 (pytest), frontend 30 (Vitest + Testing Library).
+- Tests: backend 114 (pytest), frontend 30 (Vitest + Testing Library).
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -132,8 +135,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 ## Known limitations / backlog
 
 - Fills are all-or-nothing (no partial fills) and ignore volume and liquidity.
-- A stop buy's reserved cash is based on the stop price. If the market gaps past it, the fill can
-  cost more than reserved; if cash is short at that moment, the order is rejected.
+- A stop buy reserves the higher of its stop price and the ask at placement. If the market gaps
+  past that, the fill can cost more than reserved. A fill may use only cash not set aside for
+  other working buys; otherwise the order is rejected.
 - The ledger is rebuilt from all fills when it changes. That's fine for thousands of trades;
   revisit if history grows very large.
 - No exchange holidays; weekends only.

@@ -3,19 +3,10 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from paper_trade.market.service import MarketService
+from paper_trade.api.deps import idle_market as market
 from paper_trade.trading.broker import OrderError
 
 router = APIRouter()
-
-# All `async def`: they touch market and account state, which lives on the event loop.
-
-
-def market(request: Request) -> MarketService:
-    svc: MarketService = request.app.state.market
-    if svc.jumping:
-        raise HTTPException(409, "a time jump is in progress")
-    return svc
 
 
 @router.get("/account")

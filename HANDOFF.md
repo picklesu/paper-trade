@@ -12,6 +12,7 @@ _Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 | 5. Indicators | Merged | #12 |
 | 5.5a. Customizable workspace (dockview): docking, floating windows, snapping, resize, maximize, Panels menu, saved layout | Merged | #13 |
 | 5.5b. Collapse panels to edge strips (peek, pin; side panels keep their size) | Merged | #16 |
+| 5.5b fixes from the user's testing: chart space (one-line quote, toolbar in the chart's tab bar, thinner bars, full screen), tab-overflow menu while peeking, resize snapping and bring-to-front | Merged | #17 |
 | **5.5c. Workspace, next steps** | **Next.** See below. | — |
 | 6. Watchlists and quotes | After 5.5. | — |
 
@@ -169,7 +170,22 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     the pin button keeps it open. Saving uses `withHidden` so a peeked group is saved
     collapsed. `reopenPanel`/`dockGroup` expand a collapsed group a panel lands in. The chart's
     group never collapses. dockview's `onDidLayoutChange` arrives a moment after
-    `setVisible`, so tests `waitFor` it.
+    `setVisible`, so tests `waitFor` it. dockview draws popups (the tab-overflow list, menus)
+    in `.dv-popover-anchor` outside the group, so clicks there don't collapse a peek.
+  - **Chart space** (the user wants the chart to be the focus; their OS/browser bars already
+    take ~100px): top bar 36px (brand hidden under 1240px), tab bars 30px
+    (`--dv-tabs-and-actions-container-height`), one-line `QuoteDetail` (name and `minor` stats
+    hidden by container queries on narrow charts), account tabs 180px by default, and
+    `FullscreenButton` (F). The chart's toolbar is portaled (`chartToolbarSlot.ts`) into a
+    `ChartToolbarSlot` rendered by dockview's `leftHeaderActionsComponent` in the chart's
+    group when the room left beside its tabs (estimated from titles) and buttons allows: every
+    button (660px), or compact drop-downs (320px); otherwise in the panel, compact. Outside the
+    workspace (context undefined, as in its tests) it shows every button in the panel.
+  - `floatingResize.ts`: dockview's floating-window resize has no snapping hook and doesn't
+    raise the window. A window-level pointerdown (bubbling, so it runs after the handle's own
+    listener) activates the group (which raises it) and adds a pointermove that runs after
+    dockview's resize step and applies `snapResize` (`snap.ts`) to the inline style, keeping
+    dockview's anchored side.
   - **Layering:** `.topbar` has z-index 1 over `.workspace` (`isolation: isolate`). Dialogs go
     through `components/Modal.tsx`, a portal to `<body>` at z-index 100. **dockview 8.5 CSS
     bug:** `.dv-resize-container { --dv-overlay-z-index: var(--dv-overlay-z-index, 999) }` refers
@@ -213,7 +229,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 106 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 113 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

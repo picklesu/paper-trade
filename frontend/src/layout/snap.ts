@@ -46,3 +46,42 @@ function nearest(value: number, candidates: number[], distance: number): number 
   }
   return best
 }
+
+/** The edges of a floating window being resized (the handle's sides). */
+export interface ResizeEdges {
+  left?: boolean
+  right?: boolean
+  top?: boolean
+  bottom?: boolean
+}
+
+/**
+ * A floating window being resized: the edges being dragged pull flush against the
+ * workspace edges and against other floating windows (touching them, or lined up with
+ * their edges) when within `distance`. The opposite edges stay put.
+ */
+export function snapResize(
+  box: Box,
+  edges: ResizeEdges,
+  container: { width: number; height: number },
+  others: readonly Box[],
+  distance = SNAP_DISTANCE,
+): Box {
+  let x1 = box.left
+  let x2 = box.left + box.width
+  let y1 = box.top
+  let y2 = box.top + box.height
+  const xs = [0, container.width]
+  const ys = [0, container.height]
+  for (const o of others) {
+    const nearVertically = y1 <= o.top + o.height + distance && y2 >= o.top - distance
+    const nearHorizontally = x1 <= o.left + o.width + distance && x2 >= o.left - distance
+    if (nearVertically) xs.push(o.left, o.left + o.width)
+    if (nearHorizontally) ys.push(o.top, o.top + o.height)
+  }
+  if (edges.left) x1 = nearest(x1, xs, distance)
+  if (edges.right) x2 = nearest(x2, xs, distance)
+  if (edges.top) y1 = nearest(y1, ys, distance)
+  if (edges.bottom) y2 = nearest(y2, ys, distance)
+  return { left: x1, top: y1, width: x2 - x1, height: y2 - y1 }
+}

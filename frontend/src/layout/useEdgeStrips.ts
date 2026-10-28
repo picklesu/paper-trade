@@ -78,8 +78,9 @@ export function useEdgeStrips(
     const onDown = (e: PointerEvent) => {
       const target = e.target as Element
       const group = groupOf(api, peeking)
-      // Dragging a divider (dockview's sash, outside the group) resizes the peeked group.
-      if (!frame.current?.contains(target) || group?.element.contains(target) || target.closest('.edge-strip, .dv-sash')) return
+      // Dragging a divider (dockview's sash) resizes the peeked group, and dockview draws the
+      // group's menus (such as the list of tabs that don't fit) outside the group.
+      if (!frame.current?.contains(target) || group?.element.contains(target) || target.closest('.edge-strip, .dv-sash, .dv-popover-anchor')) return
       setPeek(null)
       group?.api.setVisible(false)
       sync.current()

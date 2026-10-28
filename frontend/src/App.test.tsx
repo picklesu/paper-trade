@@ -344,6 +344,20 @@ describe('workspace', () => {
     expect(group('Watchlist')).not.toHaveClass('peeking')
   })
 
+  it("a click in dockview's menus (like the list of tabs that don't fit) keeps a peeked panel open", () => {
+    render(<App />)
+    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
+    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Collapse panel' }))
+    const tab = within(screen.getByRole('toolbar', { name: 'Collapsed panels (left)' })).getByRole('button', { name: 'Watchlist' })
+    fireEvent.click(tab)
+    // dockview draws its popups in an anchor at the top of the workspace, outside the group.
+    const anchor = document.querySelector('.dv-popover-anchor')!
+    const row = document.createElement('div')
+    anchor.appendChild(row)
+    fireEvent.pointerDown(row)
+    expect(tab).toHaveAttribute('aria-pressed', 'true')
+  })
+
   it('puts each collapsed panel on its own edge, with one tab per panel in a group', () => {
     render(<App />)
     const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
@@ -391,6 +405,25 @@ describe('workspace', () => {
     render(<App />)
     expect(panel('Chart')).toBeInTheDocument()
     expect(panel('Order Entry')).toBeInTheDocument()
+  })
+})
+
+describe('full screen', () => {
+  it('the top bar button and F toggle full screen, but not while typing', () => {
+    const request = vi.fn(() => Promise.resolve())
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true })
+    Object.defineProperty(document.documentElement, 'requestFullscreen', { configurable: true, value: request })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Full screen' }))
+    expect(request).toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(document.body, { key: 'f' })
+    expect(request).toHaveBeenCalledTimes(2)
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireEvent.keyDown(input, { key: 'f' })
+    expect(request).toHaveBeenCalledTimes(2)
+    input.remove()
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: false })
   })
 })
 

@@ -18,6 +18,14 @@ A paper trading simulator that runs 24/7 on simulated market data.
   - **Before the market's history** starts a brand-new market on that date.
 - **Everything is saved** in `backend/paper_trade.db`: the market picks up where it left off after a restart (time the server was off doesn't count), along with your account and orders. Delete the file to start completely fresh.
 
+## Workspace
+
+- Every view is a panel: **Chart**, **Watchlist**, **Order Entry**, **Positions**, **Orders**, **Activity**.
+- **Drag a tab** to move a panel: drop it on an edge of a panel or the workspace to dock it there (a blue preview shows where), or onto another panel's tabs to group them. Drag the dividers between panels to resize.
+- **⧉ pops a panel out** as a floating window over everything else; drag it by its top bar (it snaps to the workspace edges and to other floating windows) and resize it from any edge or corner. **⇲ docks it back.** Shift+drag a tab also floats it.
+- **⤢ maximizes** a panel (⤡ restores).
+- **Panels ▾** (top bar) shows or hides panels and has **Reset layout**. Your layout is saved in this browser.
+
 ## Charts
 
 - Interactive candlestick chart with volume: **drag** to pan, **scroll or pinch** to zoom, hover for the bar's open/high/low/close/volume. Older history loads automatically as you scroll or zoom out.
@@ -66,6 +74,7 @@ cd frontend && npm test
 | 3 | Order ticket preview and order history | Done |
 | 4 | Candlestick charts | Done |
 | 5 | Indicators | Done |
+| 5.5 | Customizable workspace: dockable, floating, resizable panels (step 1) | Done |
 | 6 | Watchlists and quotes | |
 | 7 | Options chain with Greeks | |
 | 8 | Option expiration, exercise, assignment | |

@@ -1,19 +1,20 @@
-import { useState } from 'react'
-import { BottomTabs } from './components/BottomTabs'
-import { OrderTicket } from './components/OrderTicket'
-import { PriceChart } from './components/PriceChart'
-import { Panel, Placeholder } from './components/Panel'
-import { QuoteDetail } from './components/QuoteDetail'
 import { TopBar } from './components/TopBar'
-import { Watchlist } from './components/Watchlist'
-import { useStream } from './lib/stream'
+import { AppDataProvider } from './layout/AppData'
+import { useAppData } from './layout/appDataContext'
+import { LayoutProvider, Workspace } from './layout/Workspace'
 
 export default function App() {
-  const { status, tick, progress, orders, history } = useStream()
-  const [selected, setSelected] = useState('SPY')
-  const quotes = tick?.quotes ?? []
-  const quote = quotes.find((q) => q.symbol === selected)
+  return (
+    <AppDataProvider>
+      <LayoutProvider>
+        <Shell />
+      </LayoutProvider>
+    </AppDataProvider>
+  )
+}
 
+function Shell() {
+  const { status, tick, progress } = useAppData()
   return (
     <div className="app">
       <TopBar
@@ -24,31 +25,7 @@ export default function App() {
         account={tick?.account ?? null}
       />
       <main className="workspace">
-        <Panel title="Watchlist" className="watchlist">
-          {quotes.length ? (
-            <Watchlist quotes={quotes} selected={selected} onSelect={setSelected} />
-          ) : (
-            <Placeholder text="Waiting for market data…" />
-          )}
-        </Panel>
-        <Panel title="Chart" className="chart">
-          {quote && tick ? (
-            <div className="chart-panel">
-              <QuoteDetail quote={quote} />
-              <PriceChart quote={quote} clock={tick.clock} orders={orders} history={history} />
-            </div>
-          ) : (
-            <Placeholder text="Waiting for market data…" />
-          )}
-        </Panel>
-        <Panel title="Order Entry" className="ticket">
-          {quote && tick ? (
-            <OrderTicket quote={quote} account={tick.account} orders={orders} />
-          ) : (
-            <Placeholder text="Waiting for market data…" />
-          )}
-        </Panel>
-        <BottomTabs account={tick?.account ?? null} orders={orders} onSelect={setSelected} />
+        <Workspace />
       </main>
     </div>
   )

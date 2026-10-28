@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Modal } from './Modal'
 import { goto, previewGoto, type GotoResult } from '../lib/api'
 import { dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
@@ -62,94 +63,86 @@ export function GoToDialog({ clock, onClose }: Props) {
   }
 
   return (
-    <div className="dialog-backdrop" onClick={onClose}>
-      <div
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="goto-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {preview?.action === 'rewind' ? (
-          <>
-            <h2 id="goto-title">Go back to {marketDateTime(preview.target)}?</h2>
-            <RewindSummary preview={preview} />
-            <p>What should happen after that?</p>
-            <div className="dialog-actions">
-              <button className="btn primary" disabled={busy} onClick={() => run('replay')}>
-                Replay the same prices
-              </button>
-              <button className="btn primary" disabled={busy} onClick={() => run('new')}>
-                Generate a new future
-              </button>
-              <button className="btn" disabled={busy} onClick={onClose}>
-                Cancel
-              </button>
-            </div>
-          </>
-        ) : preview?.action === 'reset' ? (
-          <>
-            <h2 id="goto-title">Start a new market on {marketDateTime(preview.target)}?</h2>
-            <p>
-              That's before this market's history begins ({marketDateTime(clock.origin)}). Going there starts a
-              brand-new market: all price history and trades are erased, and cash resets to{' '}
-              {dollars(preview.starting_cash ?? 0)}.
-            </p>
-            {(preview.erased_orders ?? 0) > 0 && (
-              <p>
-                {preview.erased_orders} order{preview.erased_orders === 1 ? '' : 's'} (
-                {preview.erased_fills?.length ?? 0} trade{preview.erased_fills?.length === 1 ? '' : 's'}) will be
-                erased.
-              </p>
-            )}
-            <div className="dialog-actions">
-              <button className="btn danger" disabled={busy} onClick={() => run()}>
-                Start new market
-              </button>
-              <button className="btn" disabled={busy} onClick={onClose}>
-                Cancel
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h2 id="goto-title">Go to date and time</h2>
-            <label className="field">
-              <span>Market time (New York)</span>
-              <input
-                type="datetime-local"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                aria-label="Market date and time"
-              />
-            </label>
-            <div className="shortcuts">
-              {SHORTCUTS.map((s) => (
-                <button key={s.label} className="ctl" onClick={() => setValue((v) => shiftInputDays(v, s.days))}>
-                  {s.label}
-                </button>
-              ))}
-            </div>
-            <p className="muted">
-              The market is open 9:30 AM–4:00 PM ET, Monday–Friday. Other times go to the next open.
-            </p>
-            <div className="dialog-actions">
-              <button className="btn primary" disabled={busy || !value} onClick={check}>
-                Go
-              </button>
-              <button className="btn" disabled={busy} onClick={onClose}>
-                Cancel
-              </button>
-            </div>
-          </>
-        )}
-        {error && (
-          <p className="error" role="alert">
-            {error}
+    <Modal labelledBy="goto-title" onClose={onClose}>
+      {preview?.action === 'rewind' ? (
+        <>
+          <h2 id="goto-title">Go back to {marketDateTime(preview.target)}?</h2>
+          <RewindSummary preview={preview} />
+          <p>What should happen after that?</p>
+          <div className="dialog-actions">
+            <button className="btn primary" disabled={busy} onClick={() => run('replay')}>
+              Replay the same prices
+            </button>
+            <button className="btn primary" disabled={busy} onClick={() => run('new')}>
+              Generate a new future
+            </button>
+            <button className="btn" disabled={busy} onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : preview?.action === 'reset' ? (
+        <>
+          <h2 id="goto-title">Start a new market on {marketDateTime(preview.target)}?</h2>
+          <p>
+            That's before this market's history begins ({marketDateTime(clock.origin)}). Going there starts a
+            brand-new market: all price history and trades are erased, and cash resets to{' '}
+            {dollars(preview.starting_cash ?? 0)}.
           </p>
-        )}
-      </div>
-    </div>
+          {(preview.erased_orders ?? 0) > 0 && (
+            <p>
+              {preview.erased_orders} order{preview.erased_orders === 1 ? '' : 's'} (
+              {preview.erased_fills?.length ?? 0} trade{preview.erased_fills?.length === 1 ? '' : 's'}) will be
+              erased.
+            </p>
+          )}
+          <div className="dialog-actions">
+            <button className="btn danger" disabled={busy} onClick={() => run()}>
+              Start new market
+            </button>
+            <button className="btn" disabled={busy} onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <h2 id="goto-title">Go to date and time</h2>
+          <label className="field">
+            <span>Market time (New York)</span>
+            <input
+              type="datetime-local"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              aria-label="Market date and time"
+            />
+          </label>
+          <div className="shortcuts">
+            {SHORTCUTS.map((s) => (
+              <button key={s.label} className="ctl" onClick={() => setValue((v) => shiftInputDays(v, s.days))}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <p className="muted">
+            The market is open 9:30 AM–4:00 PM ET, Monday–Friday. Other times go to the next open.
+          </p>
+          <div className="dialog-actions">
+            <button className="btn primary" disabled={busy || !value} onClick={check}>
+              Go
+            </button>
+            <button className="btn" disabled={busy} onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </Modal>
   )
 }
 

@@ -9,6 +9,9 @@ const clock: ClockState = {
   paused: false,
   speeds: [1, 10, 60, 600],
   origin: '2026-01-05T14:30:00Z',
+  session_open: '2026-01-07T14:30:00Z',
+  timeline: 0,
+  building_history: false,
 }
 
 /** fetch stub: GET preview returns `action`; POST goto succeeds. */

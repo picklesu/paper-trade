@@ -10,8 +10,16 @@ from paper_trade.trading.orders import Order
 class Store:
     def __init__(self, path: str | Path) -> None:
         self._db = sqlite3.connect(path, isolation_level=None)  # autocommit
+        # Write-ahead logging with normal syncing: each commit no longer waits for a full
+        # disk flush (still safe against app crashes; a power cut may lose the last moments).
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self._db.execute("CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self._db
 
     def get(self, key: str, default=None):
         row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()

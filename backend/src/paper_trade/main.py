@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from paper_trade import __version__
 from paper_trade.api import health, market, stream, trading
 from paper_trade.market.clock import SimClock
-from paper_trade.market.engine import MarketEngine
+from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.store import Store
 
@@ -31,12 +31,12 @@ def load_market(store: Store, seed: int) -> tuple[SimClock, MarketEngine]:
     return clock, engine
 
 
-def create_app(seed: int = 42, db_path: str | Path | None = None) -> FastAPI:
+def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: int = HISTORY_DAYS) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         store = Store(db_path or os.environ.get("PAPER_TRADE_DB") or DEFAULT_DB)
         clock, engine = load_market(store, seed)
-        svc = MarketService(clock, engine, store)
+        svc = MarketService(clock, engine, store, history_days)
         app.state.market = svc
         svc.start()
         yield

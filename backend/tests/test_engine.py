@@ -264,3 +264,96 @@ def test_starts_version_changes_only_with_new_sessions() -> None:
     assert engine.starts_version == v
     engine.advance(et(2026, 1, 6, 10, 0))
     assert engine.starts_version > v
+
+
+# ----- history ---------------------------------------------------------------------
+
+
+def test_backfill_ends_exactly_at_the_starting_prices() -> None:
+    engine = MarketEngine(START)
+    start_prices = prices(engine)
+    days = list(engine.backfill_iter(30))
+    assert len(days) == 30 and days[0] == date(2026, 1, 2) and days == sorted(days, reverse=True)
+    assert engine.origin == session_open_of(days[-1])
+    assert engine.backfilled
+    assert prices(engine) == start_prices  # the present is unchanged
+    # The last backfilled session closes at the origin's previous close.
+    close = engine.day_prices(days[0])[-1]
+    for spec, c in zip(engine.specs, close):
+        assert c == pytest.approx(spec.price, rel=1e-12)
+
+
+def test_rewinding_into_history_replays_it() -> None:
+    engine = MarketEngine(START)
+    list(engine.backfill_iter(30))
+    t = et(2025, 12, 10, 11, 0)
+    seen = engine.prices_at(t)
+    engine.advance(et(2026, 1, 6, 10, 0))
+    later = prices(engine)
+    engine.rewind(t, new_future=False)
+    assert prices(engine) == pytest.approx(seen, rel=1e-12)
+    engine.advance(et(2026, 1, 6, 10, 0))
+    assert prices(engine) == pytest.approx(later, rel=1e-9)
+
+
+def test_backfill_survives_save_and_restore() -> None:
+    import json
+
+    engine = MarketEngine(START)
+    list(engine.backfill_iter(10))
+    restored = MarketEngine.from_state(json.loads(json.dumps(engine.to_state())))
+    assert restored.origin == engine.origin and restored.backfilled
+    day = market_day_of(restored.origin)
+    assert np.allclose(restored.day_prices(day), engine.day_prices(day), rtol=1e-12)
+
+
+def test_minute_bars_match_quotes() -> None:
+    engine = at(et(2026, 1, 5, 10, 15, 30))
+    bars = engine.minute_bars(date(2026, 1, 5), through=45 * 60 + 30)
+    assert bars.shape[0] == 46
+    q = engine.quotes
+    for i, spec in enumerate(engine.specs):
+        assert bars[-1, i, 3] == pytest.approx(q[spec.symbol].last)
+        assert bars[:, i, 1].max() == pytest.approx(q[spec.symbol].high)
+        assert bars[:, i, 2].min() == pytest.approx(q[spec.symbol].low)
+        assert bars[0, i, 0] == pytest.approx(q[spec.symbol].open)
+        assert bars[:, i, 4].sum() == pytest.approx(q[spec.symbol].volume, abs=2)
+
+
+def test_day_complete_hook_fires_once_per_session() -> None:
+    engine = MarketEngine(START)
+    done: list[date] = []
+    engine.on_day_complete = done.append
+    engine.advance(et(2026, 1, 8, 10, 0))
+    assert done == [date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)]
+
+
+def session_open_of(d: date) -> datetime:
+    from paper_trade.market.calendar import session_open
+
+    return session_open(d)
+
+
+def market_day_of(t: datetime) -> date:
+    from paper_trade.market.calendar import market_day
+
+    return market_day(t)
+
+
+def test_interrupted_backfill_changes_nothing() -> None:
+    engine = MarketEngine(START)
+    before = (engine.origin, dict(engine._starts), engine.starts_version)
+    it = engine.backfill_iter(20)
+    for _ in range(7):
+        next(it)
+    it.close()  # e.g. the server stopped mid-build
+    assert (engine.origin, dict(engine._starts), engine.starts_version) == before
+    assert not engine.backfilled
+
+
+def test_backfill_keeps_todays_path_cached() -> None:
+    engine = at(et(2026, 1, 5, 11, 0))
+    today = engine._path(date(2026, 1, 5))
+    for _ in engine.backfill_iter(30):
+        pass
+    assert engine._paths.get(date(2026, 1, 5)) is today

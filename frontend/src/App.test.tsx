@@ -59,7 +59,7 @@ function order(overrides: Partial<Order>): Order {
 function tick(overrides: Partial<TickMessage> = {}): TickMessage {
   return {
     type: 'tick',
-    clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z' },
+    clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z', session_open: '2026-01-05T14:30:00Z', timeline: 0, building_history: false },
     regime: 'normal',
     quotes: [quote('SPY', 582, 580), quote('AAPL', 228, 230)],
     account: {
@@ -183,14 +183,15 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '60×' }))
     fireEvent.click(screen.getByRole('button', { name: 'Pause market' }))
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ speed: 60 })
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ paused: true })
+    const clockCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/clock')
+    expect(clockCalls).toHaveLength(2)
+    expect(JSON.parse(clockCalls[0][1].body)).toEqual({ speed: 60 })
+    expect(JSON.parse(clockCalls[1][1].body)).toEqual({ paused: true })
   })
 
   it('shows the resume button while paused', () => {
     render(<App />)
-    push(tick({ clock: { time: '2026-01-05T15:30:00Z', speed: 10, paused: true, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z' } }))
+    push(tick({ clock: { time: '2026-01-05T15:30:00Z', speed: 10, paused: true, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z', session_open: '2026-01-05T14:30:00Z', timeline: 0, building_history: false } }))
     expect(screen.getByRole('button', { name: 'Resume market' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '10×' })).toHaveAttribute('aria-pressed', 'true')
   })

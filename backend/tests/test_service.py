@@ -22,7 +22,7 @@ class FakeTime:
 def make_service() -> tuple[MarketService, FakeTime]:
     real = FakeTime()
     clock = SimClock(start=START, real_time=real)
-    return MarketService(clock, MarketEngine(START), Store(":memory:")), real
+    return MarketService(clock, MarketEngine(START), Store(":memory:"), history_days=5), real
 
 
 def test_tick_publishes_only_when_time_moves() -> None:
@@ -179,3 +179,19 @@ def test_saves_session_starts_only_when_they_change(monkeypatch) -> None:
     svc.sync()
     svc.save()
     assert keys.count("market_starts") == 2
+
+
+def test_history_build_finishes_with_a_snapshot_that_says_so() -> None:
+    svc, _ = make_service()
+    svc.clock.pause()
+    q = svc.subscribe()
+
+    async def run() -> None:
+        svc.start_history()
+        assert svc.building_history
+        await svc._history_task
+
+    asyncio.run(run())
+    ticks = [m for m in drain(q) if m["type"] == "tick"]
+    assert ticks and ticks[-1]["clock"]["building_history"] is False
+    assert svc.engine.backfilled and svc.engine.origin < datetime(2026, 1, 5, tzinfo=UTC)

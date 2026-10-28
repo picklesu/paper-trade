@@ -9,7 +9,8 @@ from typing import Literal
 
 from paper_trade.market.calendar import market_day, session_open, snap, trading_days_between
 from paper_trade.market.clock import SPEEDS, SimClock
-from paper_trade.market.engine import MarketEngine
+from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
+from paper_trade.market.history import History
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 
@@ -24,15 +25,20 @@ GotoAction = Literal["forward", "rewind", "reset", "none"]
 
 
 class BusyError(Exception):
-    """Another time jump is already running."""
+    """A time jump or the history build is running."""
+
+    def __init__(self, message: str = "a time jump is already in progress") -> None:
+        super().__init__(message)
 
 
 class MarketService:
-    def __init__(self, clock: SimClock, engine: MarketEngine, store: Store) -> None:
+    def __init__(self, clock: SimClock, engine: MarketEngine, store: Store, history_days: int = HISTORY_DAYS) -> None:
         self.clock = clock
         self.engine = engine
         self.store = store
         self.broker = Broker(engine, store)
+        self.history = History(store.connection, engine)
+        engine.on_day_complete = self.history.record
         # Anything saved after the market's last saved time never happened.
         self.broker.rewind(engine.time)
         self._subscribers: set[asyncio.Queue[dict]] = set()
@@ -40,10 +46,19 @@ class MarketService:
         self._jumping = False
         self._ticks_since_save = 0
         self._saved_starts_version: int | None = None
+        self._history_task: asyncio.Task | None = None
+        self._building = False
+        # Bumped whenever market time jumps or history changes, so charts reload.
+        self.timeline = 0
+        self.history_days = history_days
 
     @property
     def jumping(self) -> bool:
         return self._jumping
+
+    @property
+    def building_history(self) -> bool:
+        return self._building
 
     # ----- messages ----------------------------------------------------------------
 
@@ -68,6 +83,9 @@ class MarketService:
             "paused": self.clock.paused,
             "speeds": SPEEDS,
             "origin": self.engine.origin.isoformat(),
+            "session_open": session_open(market_day(self.engine.time)).isoformat(),
+            "timeline": self.timeline,
+            "building_history": self.building_history,
         }
 
     def publish(self, msg: dict, force: bool = False) -> None:
@@ -153,6 +171,8 @@ class MarketService:
     async def goto(self, target: datetime, new_future: bool = False) -> tuple[GotoAction, datetime]:
         if self._jumping:
             raise BusyError
+        if self.building_history:
+            raise BusyError("price history is still being built; try again in a moment")
         action, target = self.preview_goto(target)
         if action == "forward" and trading_days_between(market_day(self.engine.time), market_day(target)) > MAX_JUMP_DAYS:
             raise ValueError(f"can jump at most {MAX_JUMP_DAYS} trading days ahead")
@@ -166,15 +186,21 @@ class MarketService:
             if action == "reset":
                 self.engine.reset(target)
                 self.broker.reset()
+                self.history.clear()
             elif action == "rewind":
                 self.engine.rewind(target, new_future)
+                if new_future:
+                    self.history.delete_from(market_day(target))
                 self.broker.rewind(target)
             elif action == "forward":
                 await self._fast_forward(target)
             self.clock.set_time(target)
             self.save()
+            self.timeline += 1
         finally:
             self._jumping = False
+            if action == "reset":
+                self.start_history()
             # Always end with full state (even after an error) so clients leave the
             # fast-forward state; never drop it for a full queue.
             self.publish_all()
@@ -186,12 +212,13 @@ class MarketService:
         t = self.engine.time
         # Session by session: generate it, match working orders against it while its
         # price path is still cached, and yield so progress keeps flowing.
-        for i, day in enumerate(self.engine.advance_iter(target), start=1):
-            self.broker.process(t, session_open(day))
-            t = session_open(day)
-            if i % PROGRESS_EVERY_DAYS == 0:
-                self.publish({"type": "progress", "done": i, "total": days})
-            await asyncio.sleep(0)
+        with self.history.batch():
+            for i, day in enumerate(self.engine.advance_iter(target), start=1):
+                self.broker.process(t, session_open(day))
+                t = session_open(day)
+                if i % PROGRESS_EVERY_DAYS == 0:
+                    self.publish({"type": "progress", "done": i, "total": days})
+                await asyncio.sleep(0)
         self.broker.process(t, target)
 
     # ----- trading -----------------------------------------------------------------
@@ -219,10 +246,51 @@ class MarketService:
                 log.exception("market tick failed")
             await asyncio.sleep(TICK_SECONDS)
 
+    def start_history(self) -> None:
+        """Build missing chart history in the background (see build_history)."""
+        self._building = True
+        self._history_task = asyncio.create_task(self.build_history())
+
+    async def build_history(self) -> None:
+        """Store bars for finished sessions that have none, and generate the
+        years of history before the market's start if not done yet."""
+        try:
+            missing = self.history.missing_days()
+            backfill = 0 if self.engine.backfilled else self.history_days
+            total, done = len(missing) + backfill, 0
+            with self.history.batch():
+                for day in missing:
+                    self.history.record(day)
+                    done += 1
+                    await self._history_progress(done, total)
+                if backfill:
+                    for day in self.engine.backfill_iter(backfill):
+                        self.history.record(day)
+                        done += 1
+                        await self._history_progress(done, total)
+        except Exception:
+            log.exception("building price history failed")
+        finally:
+            # Clear the flag before announcing, so the final snapshot says it's done.
+            self._building = False
+        self.save()
+        self.timeline += 1
+        self.publish_all()
+
+    async def _history_progress(self, done: int, total: int) -> None:
+        if done % PROGRESS_EVERY_DAYS == 0 or done == total:
+            self.publish({"type": "history", "done": done, "total": total})
+        await asyncio.sleep(0)
+
     def start(self) -> None:
+        self.start_history()
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
+        if self._history_task:
+            self._history_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._history_task
         if self._task:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

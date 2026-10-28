@@ -153,7 +153,7 @@ body {
   min-height: 0;
   display: grid;
   grid-template-columns: 240px 1fr 300px;
-  grid-template-rows: 1fr 220px;
+  grid-template-rows: minmax(0, 1fr) 220px;
   grid-template-areas:
     'watchlist chart ticket'
     'bottom bottom bottom';
@@ -278,46 +278,103 @@ body {
   background: rgba(239, 68, 68, 0.25);
 }
 
-/* Quote detail */
+/* Quote header and chart */
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
 .quote-detail {
-  padding: 16px 20px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
 }
 .quote-head {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .quote-symbol {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
 }
 .quote-name {
   color: var(--muted);
 }
-.quote-price {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin: 6px 0 16px;
-  font-variant-numeric: tabular-nums;
-}
 .quote-last {
-  font-size: 32px;
+  margin-left: 8px;
+  font-size: 20px;
   font-weight: 600;
 }
 .quote-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 12px 24px;
-  margin: 0 0 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 6px 0 0;
   font-variant-numeric: tabular-nums;
+}
+.quote-stats div {
+  display: flex;
+  gap: 6px;
 }
 .quote-stats dt {
   color: var(--muted);
   font-size: 11px;
+  align-self: center;
 }
 .quote-stats dd {
-  margin: 2px 0 0;
+  margin: 0;
+}
+.price-chart {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.seg {
+  display: flex;
+}
+.seg .ctl + .ctl {
+  border-left: none;
+}
+.chart-area {
+  position: relative;
+  flex: 1;
+  min-height: 200px;
+}
+.chart-canvas {
+  position: absolute;
+  inset: 0;
+}
+.chart-legend {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.chart-status {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--muted);
 }
 
 /* Dialogs */

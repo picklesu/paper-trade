@@ -1,3 +1,4 @@
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -6,10 +7,29 @@ from fastapi.testclient import TestClient
 from paper_trade.main import create_app
 
 
+def next_message(ws, kind: str, limit: int = 20) -> dict:
+    """The next stream message of `kind`, skipping others (e.g. history-build progress)."""
+    for _ in range(limit):
+        msg = ws.receive_json()
+        if msg["type"] == kind:
+            return msg
+    pytest.fail(f"no {kind!r} message in {limit} messages")
+
+
+def wait_for_history(c: TestClient) -> TestClient:
+    """Let the startup history build finish, so tests see a settled market and its
+    progress messages don't interleave with what they check."""
+    for _ in range(200):
+        if not c.get("/api/clock").json()["building_history"]:
+            return c
+        time.sleep(0.02)
+    pytest.fail("history build did not finish")
+
+
 @pytest.fixture
 def client(tmp_path) -> Iterator[TestClient]:
-    with TestClient(create_app(db_path=tmp_path / "test.db")) as c:
-        yield c
+    with TestClient(create_app(history_days=5, db_path=tmp_path / "test.db")) as c:
+        yield wait_for_history(c)
 
 
 def test_health(client: TestClient) -> None:
@@ -53,7 +73,7 @@ def test_websocket_streams_ticks(client: TestClient) -> None:
         assert first["type"] == "tick"
         assert first["clock"]["speed"] == 1
         assert {q["symbol"] for q in first["quotes"]} >= {"SPY", "AAPL"}
-        second = ws.receive_json()
+        second = next_message(ws, "tick")
         assert second["clock"]["time"] >= first["clock"]["time"]
 
 
@@ -63,7 +83,7 @@ def test_websocket_sees_clock_changes(client: TestClient) -> None:
         ws.receive_json()
         client.post("/api/clock", json={"speed": 600})
         for _ in range(5):
-            if ws.receive_json()["clock"]["speed"] == 600:
+            if next_message(ws, "tick")["clock"]["speed"] == 600:
                 break
         else:
             pytest.fail("speed change never reached the stream")
@@ -75,7 +95,7 @@ def test_websocket_ignores_client_messages(client: TestClient) -> None:
         ws.receive_json()
         ws.send_bytes(b"\x00")
         ws.send_text("hello")
-        assert ws.receive_json()["type"] == "tick"
+        assert next_message(ws, "tick")["type"] == "tick"
 
 
 def test_goto_preview_and_jump(client: TestClient) -> None:
@@ -162,7 +182,7 @@ def test_rewind_preview_lists_trades_to_erase(client: TestClient) -> None:
 
 def test_state_survives_restart(tmp_path) -> None:
     db = tmp_path / "restart.db"
-    with TestClient(create_app(db_path=db)) as c:
+    with TestClient(create_app(history_days=5, db_path=db)) as c:
         c.post("/api/clock", json={"paused": True, "speed": 60})
         c.post("/api/clock/goto", json={"time": "2027-02-01T11:00"})
         c.post("/api/orders", json={"symbol": "MSFT", "side": "buy", "qty": 7, "type": "market"})
@@ -171,9 +191,11 @@ def test_state_survives_restart(tmp_path) -> None:
         quotes = c.get("/api/quotes").json()
         clock = c.get("/api/clock").json()
 
-    with TestClient(create_app(db_path=db)) as c:
+    with TestClient(create_app(history_days=5, db_path=db)) as c:
         # The market resumes where it stopped, not at the real-world time.
-        assert c.get("/api/clock").json() == clock
+        volatile = ("timeline", "building_history")  # per-run counters, not saved state
+        strip = lambda d: {k: v for k, v in d.items() if k not in volatile}  # noqa: E731
+        assert strip(c.get("/api/clock").json()) == strip(clock)
         assert c.get("/api/quotes").json() == quotes
         assert c.get("/api/account").json() == account
         assert len(c.get("/api/orders").json()) == 2
@@ -182,11 +204,11 @@ def test_state_survives_restart(tmp_path) -> None:
 def test_websocket_sends_orders_and_account(client: TestClient) -> None:
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json() == {"type": "orders", "orders": []}
-        assert ws.receive_json()["account"]["cash"] == 100_000
+        assert next_message(ws, "tick")["account"]["cash"] == 100_000
         client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 1, "type": "market"})
         for _ in range(10):
-            msg = ws.receive_json()
-            if msg["type"] == "orders" and msg["orders"]:
+            msg = next_message(ws, "orders")
+            if msg["orders"]:
                 assert msg["orders"][0]["status"] == "filled"
                 break
         else:
@@ -212,7 +234,7 @@ def test_pause_saves_the_current_market_time(tmp_path) -> None:
     from paper_trade.store import Store
 
     db = tmp_path / "pause.db"
-    with TestClient(create_app(db_path=db)) as c:
+    with TestClient(create_app(history_days=5, db_path=db)) as c:
         c.post("/api/clock", json={"speed": 600})
         time.sleep(0.3)  # about 3 market-minutes; the engine may lag the clock by a tick
         c.post("/api/clock", json={"paused": True})

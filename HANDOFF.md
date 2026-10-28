@@ -6,29 +6,25 @@ _Last updated: 2026-10-27, after Phase 2b was merged._
 
 | Phase | Status | PR |
 |---|---|---|
-| 0. Skeleton | Merged (committed directly to `main`) | — |
-| 1. Market engine + live watchlist | Merged, tested by the user on their Mac | #1 |
-| `server.sh` on/off script | Merged | #2 |
-| 2a. Market sessions + date/time control | Merged. Not confirmed by the user yet. | #7 |
-| 2b. Persistence, account and orders | Merged. Not confirmed by the user yet. | #8 |
-| 3. Order preview and order history | Merged. **Not tested by the user yet**: ask how it went. | #9 |
-| **4. Candlestick charts** | **Next. Not started.** | — |
+| 0–3. Skeleton, market engine, sessions, time travel, account, orders, order review | Merged; the user confirmed 2a–3 work | #1–#9 |
+| CI (GitHub Actions: tests, build, lint on every PR) | Merged | #10 |
+| 4. Interactive charts + 5 years of history | Merged | #11 |
+| **5. Indicators** | **Next. Not started.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-1. Ask the user whether Phases 2a, 2b and 3 work on their Mac (`./server.sh restart`). Fix
-   anything they report in a follow-up PR first.
-2. Then **Phase 4: candlestick charts** (TradingView `lightweight-charts`, planned since Phase 0)
-   in the Chart panel, replacing the placeholder under `QuoteDetail`. Notes:
-   - History bars: build OHLCV for any past session from `engine.day_prices(day)` (per-second
-     prices) and per-minute volume (`_DayPath.minute_volume`). Paths are reproducible, so bars
-     can be generated on request; cache or store them if that's slow for long ranges.
-   - Timeframes (1m, 5m, 15m, 1h, 1D) and a live-updating last bar from ticks.
-   - Mark the user's fills on the chart (from the orders list).
-   - History starts at the market's `origin`; after a reset there is little history.
-   - Agree the details with the user first (timeframes, how far back, indicators are Phase 5).
+**Phase 5: indicators** on the chart (README roadmap: SMA, EMA, VWAP, RSI, MACD, Bollinger
+Bands). Agree the details with the user first: which indicators, overlays vs separate panes
+(lightweight-charts v5 supports panes via `addSeries(..., paneIndex)`), and settings (periods).
+Computing them on the frontend from the loaded bars is simplest; they need some extra history
+before the visible range, so load a little more than shown.
+
+User preferences so far: a **fully interactive** chart; ranges from 1 minute to 5 years; zoom to
+see less/more history. **The user is not QA**: verify everything (tests, build, lint with
+`--deny-warnings`, a headless-browser check, green CI) before merging, and don't ask them to test
+each phase.
 
 ## Going back in time (decided by the user; built in 2a + 2b)
 
@@ -64,7 +60,18 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     volatility calibrated to 252 trading days. Paths are cached for 4 sessions. A
     "new future" is a new epoch `(start, seed)`: draws after `start` come from the new seed.
     The previous close is the last price shown (row S-1). The regime shown is the one that
-    drove the latest move.
+    drove the latest move. `backfill_iter(days)` generates history before the origin, newest
+    first: each day's path comes from a start of 1.0, scaled so it closes at the next day's
+    previous close. Paths are multiplicative, so replaying forward gives the same prices, and
+    going back in time works the same inside this history. `minute_bars(day, through)` gives OHLCV
+    per minute.
+  - `market/history.py`: `History`, the chart bars. Finished sessions are stored as 30-minute
+    bars in a `bars30` table (recorded via `engine.on_day_complete`, in batches during long
+    jumps and the history build). `bars(symbol, interval, end, count)` serves 30m/1h/1D/1W from
+    the table, plus today's live bars, and serves 1m/5m/15m from the engine's paths (looking back
+    60/252/252 sessions). Paging back with `end` never splits a bar or a week. A replay rewind
+    hides later stored days (`day < today`); a new future deletes them (`delete_from`); a reset
+    clears everything.
   - `market/symbols.py`: 10 symbols (SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, META, TSLA, AMD).
     Prices are synthetic.
   - `market/service.py`: `MarketService` owns the clock, engine, store and `Broker`. A
@@ -74,7 +81,13 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     jump or clock change. It skips ticks while paused or during a jump. `goto()` handles
     forward (sessions, then order matching, both yielding), rewind (engine + broker) and reset
     (engine + broker). The final state after a jump is always sent with `force=True`.
-    `goto_details()` builds the rewind/reset confirmation contents.
+    `goto_details()` builds the rewind/reset confirmation contents. `build_history()` runs in the
+    background at startup and after a reset: it records missing finished sessions and backfills
+    `HISTORY_DAYS` (5 years) if `engine.backfilled` is false (about 8s), sending `history`
+    progress messages. The backfill commits all at once at the end, so an interrupted build
+    leaves the market unchanged and simply runs again on the next start. Jumps are refused (409) while it runs. `clock_state` includes
+    `session_open`, `timeline` (bumped on every jump and when history is done, so charts reload)
+    and `building_history`.
   - `trading/broker.py`: `Broker`, the cash account. `_build` validates (buying power, shares,
     prices; when replacing, that order's reserved cash or shares count as free). `preview`
     (no side effects: estimated price and total, buying power, cash, position, average cost,
@@ -89,12 +102,16 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     rules are in the module docstring.
   - `trading/orders.py`: the `Order` dataclass. Every status change is time-stamped
     (`created_at`, `triggered_at`, `filled_at`, `closed_at`).
-  - `store.py`: SQLite. A `meta` table holds JSON for `market` (`engine.to_state()` without
+  - `store.py`: SQLite in WAL mode with `synchronous=NORMAL` (a plain commit cost about 60ms on
+    disk). A `meta` table holds JSON for `market` (`engine.to_state()` without
     `starts`, saved about every 5s), `market_starts` (written only when
     `engine.starts_version` changes), `clock` and `starting_cash`; an `orders` table holds
     one JSON row per order. Startup
     (`main.load_market`) resumes from it, and `MarketService` rolls back any order newer than
     the saved market time.
+  - `api/stream.py`: the WebSocket handler runs its send and receive halves in an **anyio task
+    group**. Bare `asyncio.create_task` halves made the tests flaky (about 1 in 5 runs on `main`
+    too), because cancellation from the server or test client didn't reach them.
   - `api/`: `GET /api/health`, `GET /api/quotes`, `GET|POST /api/clock` (409 during a jump),
     `GET /api/clock/goto?time=` (preview: forward / rewind / reset / none, plus the snapped
     target), `POST /api/clock/goto {time, future: replay|new}`, WebSocket `/ws`. Times without a
@@ -102,7 +119,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     years. `api/deps.py`: `market` (read-only) and `idle_market` (409 during a jump) for
     anything that syncs or changes state. Trading (`api/trading.py`): `GET /api/account`, `POST /api/account/reset`,
     `GET|POST /api/orders`, `POST /api/orders/preview`, `PATCH /api/orders/{id}` (replace),
-    `DELETE /api/orders/{id}`; 422 responses carry a user-readable
+    `DELETE /api/orders/{id}`, `GET /api/bars?symbol&interval&end&count`; 422 responses carry a user-readable
     `detail`; 409 during a jump. **Endpoints that touch market state must be `async def`** so
     they run on the event loop's thread; a plain `def` runs in a worker thread and races the
     tick loop.
@@ -121,8 +138,15 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     (`statusText`, `describeOrder`), time-in-force labels, and the replacement lookup.
     Order ids are never reused (`last_order_id` in the store), even after a rewind. The top bar
     shows net liq, buying power and day P&L.
+  - `components/PriceChart.tsx`: lightweight-charts v5 (candles + volume histogram on an overlay
+    scale, series markers for fills, ET time labels via formatters). Range presets pick a bar
+    size and visible range. Older pages load when the visible logical range nears the start.
+    Live ticks fold into the last bar (`lib/bars.ts` `bucketStart`/`applyTick`), and the last 2
+    bars resync from the server every 1.5s for exact volume. Data loads again when
+    `clock.timeline` changes. Pure logic is in `lib/bars.ts`. Tests use a recording stand-in for
+    the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 131 (pytest), frontend 41 (Vitest + Testing Library).
+- Tests: backend 163 (pytest), frontend 60 (Vitest + Testing Library). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -150,9 +174,6 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - The ledger is rebuilt from all fills when it changes. That's fine for thousands of trades;
   revisit if history grows very large.
 - No exchange holidays; weekends only.
-- Phase 4 charts need history bars. They can be built from `_path(day)` (per-second prices and
-  per-minute volume) for any past session, since paths are reproducible. Consider caching
-  per-minute bars in SQLite once 2b adds it.
 - Reset (going before the history) starts at the spec prices. A new market always begins at
   the same prices whatever the date.
 - `dev.sh` (foreground) still exists alongside `server.sh` (background). Keep it or remove it.

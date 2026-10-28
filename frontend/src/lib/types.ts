@@ -20,6 +20,12 @@ export interface ClockState {
   speeds: number[]
   /** Earliest market time with price history; going before it starts a new market. */
   origin: string
+  /** Today's 9:30 AM open, for aligning chart bars. */
+  session_open: string
+  /** Changes whenever market time jumps or history changes: charts reload. */
+  timeline: number
+  /** The years of history before the market's start are still being generated. */
+  building_history: boolean
 }
 
 export type Regime = 'calm' | 'normal' | 'volatile'
@@ -114,7 +120,14 @@ export interface ProgressMessage {
   total: number
 }
 
+/** Sent while building chart history in the background. */
+export interface HistoryMessage {
+  type: 'history'
+  done: number
+  total: number
+}
+
 // Messages pushed by the backend.
-export type StreamMessage = TickMessage | ProgressMessage | OrdersMessage
+export type StreamMessage = TickMessage | ProgressMessage | OrdersMessage | HistoryMessage
 
 export type GotoAction = 'forward' | 'rewind' | 'reset' | 'none'

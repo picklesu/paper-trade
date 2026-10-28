@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { BottomTabs } from './components/BottomTabs'
 import { OrderTicket } from './components/OrderTicket'
+import { PriceChart } from './components/PriceChart'
 import { Panel, Placeholder } from './components/Panel'
 import { QuoteDetail } from './components/QuoteDetail'
 import { TopBar } from './components/TopBar'
@@ -8,7 +9,7 @@ import { Watchlist } from './components/Watchlist'
 import { useStream } from './lib/stream'
 
 export default function App() {
-  const { status, tick, progress, orders } = useStream()
+  const { status, tick, progress, orders, history } = useStream()
   const [selected, setSelected] = useState('SPY')
   const quotes = tick?.quotes ?? []
   const quote = quotes.find((q) => q.symbol === selected)
@@ -31,7 +32,14 @@ export default function App() {
           )}
         </Panel>
         <Panel title="Chart" className="chart">
-          {quote ? <QuoteDetail quote={quote} /> : <Placeholder text="Waiting for market data…" />}
+          {quote && tick ? (
+            <div className="chart-panel">
+              <QuoteDetail quote={quote} />
+              <PriceChart quote={quote} clock={tick.clock} orders={orders} history={history} />
+            </div>
+          ) : (
+            <Placeholder text="Waiting for market data…" />
+          )}
         </Panel>
         <Panel title="Order Entry" className="ticket">
           {quote && tick ? (

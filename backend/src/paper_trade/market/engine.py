@@ -14,11 +14,14 @@ variance arrives as an overnight gap at the open.
 Going back in time either replays the same future or starts a new one. A new
 future is a new "epoch": random draws after its start time come from a new
 seed, while everything before it is unchanged.
+
+Each market also gets years of history before its start (`backfill_iter`),
+generated backward so that it ends exactly at the starting prices.
 """
 
 import math
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -29,6 +32,7 @@ from paper_trade.market.calendar import (
     SESSION_SECONDS,
     market_day,
     next_trading_day,
+    previous_trading_day,
     session_close,
     session_open,
     session_seconds,
@@ -45,6 +49,7 @@ GAP_SHARE = 0.2
 REGIMES = (("calm", 0.6, 12.0), ("normal", 1.0, 24.0), ("volatile", 2.0, 4.0))
 
 VOLUME_NOISE = 0.5  # lognormal sigma of per-minute volume
+HISTORY_DAYS = TRADING_DAYS_PER_YEAR * 5  # history generated before a market's start
 PATH_CACHE_DAYS = 4
 
 _S = SESSION_SECONDS
@@ -135,6 +140,8 @@ class MarketEngine:
         self._mults = np.array([m for _, m, _ in REGIMES])
         self._seed = seed
         self._seeds_used = 0
+        # Called with each session as the engine moves past it (its path is final then).
+        self.on_day_complete: Callable[[date], None] | None = None
         self._reset(start, seed)
 
     # ----- time travel -------------------------------------------------------
@@ -165,6 +172,8 @@ class MarketEngine:
             # The close is the last price shown in the session (one second before 4:00).
             self._starts[nxt] = _DayStart(path.prices[_S - 1].copy(), int(path.regimes[-1]))
             self.starts_version += 1
+            if self.on_day_complete:
+                self.on_day_complete(last)
             last = nxt
             yield last
         self._time = t
@@ -226,6 +235,76 @@ class MarketEngine:
         r = self._starts[day].regime if s == 0 else self._path(day).regimes[(s - 1) // 60]
         return REGIMES[r][0]
 
+    def backfill_iter(self, days: int = HISTORY_DAYS) -> Iterator[date]:
+        """Generate `days` sessions of history before the origin, newest first,
+        yielding each finished session (its path is cached, ready to read).
+
+        Each day's path is generated from a start of 1.0 and then scaled so its
+        close equals the next day's previous close. Paths are multiplicative, so
+        that is exactly the path a forward replay from the scaled start produces.
+
+        Nothing is committed until the end: the origin and session starts change
+        all at once, so an interrupted build leaves the market as it was (and
+        saving mid-build stays consistent).
+        """
+        normal = next(i for i, (name, _, _) in enumerate(REGIMES) if name == "normal")
+        pending: dict[date, _DayStart] = {}
+        day = market_day(self.origin)
+        for _ in range(days):
+            prev = previous_trading_day(day)
+            target = (pending.get(day) or self._starts[day]).prev_close
+            # Generate the unit path with a temporary start, then take it back out.
+            self._starts[prev] = _DayStart(np.ones(len(self.specs)), normal)
+            self._paths.pop(prev, None)
+            try:
+                unit = self._path(prev)
+            finally:
+                del self._starts[prev]
+            scale = target / unit.prices[_S - 1]
+            pending[prev] = _DayStart(scale, normal)
+            self._cache_path(
+                prev,
+                _DayPath(
+                    prices=unit.prices * scale,
+                    high=unit.high * scale,
+                    low=unit.low * scale,
+                    minute_volume=unit.minute_volume,
+                    volume=unit.volume,
+                    regimes=unit.regimes,
+                ),
+            )
+            day = prev
+            yield prev
+        self._starts.update(pending)
+        if pending:
+            self.origin = session_open(day)
+            self.starts_version += 1
+        self.backfilled = True
+
+    def minute_bars(self, day: date, through: int | None = None) -> np.ndarray:
+        """(minutes, N, 5) one-minute [open, high, low, close, volume] bars for a
+        session, for the whole day or only through second `through`."""
+        path = self._path(day)
+        n = len(self.specs)
+        p = path.prices[:_S].reshape(_M, 60, n)
+        bars = np.empty((_M, n, 5))
+        bars[..., 0] = p[:, 0]
+        bars[..., 1] = p.max(axis=1)
+        bars[..., 2] = p.min(axis=1)
+        bars[..., 3] = p[:, -1]
+        bars[..., 4] = path.minute_volume
+        if through is None:
+            return bars
+        m, sec = divmod(min(through, _S - 1), 60)
+        bars = bars[: m + 1].copy()
+        part = path.prices[60 * m : 60 * m + sec + 1]
+        bars[m, :, 0] = part[0]
+        bars[m, :, 1] = part.max(axis=0)
+        bars[m, :, 2] = part.min(axis=0)
+        bars[m, :, 3] = part[-1]
+        bars[m, :, 4] = path.minute_volume[m] * sec / 60
+        return bars
+
     def day_prices(self, day: date) -> np.ndarray:
         """(S, N) per-second prices for a session already reached; row s is s
         seconds after the open. Read-only."""
@@ -251,12 +330,14 @@ class MarketEngine:
             "starts": {d.isoformat(): [s.prev_close.tolist(), s.regime] for d, s in self._starts.items()},
             "seed": self._seed,
             "seeds_used": self._seeds_used,
+            "backfilled": self.backfilled,
         }
 
     @classmethod
     def from_state(cls, state: dict, specs: tuple[SymbolSpec, ...] = SYMBOLS) -> "MarketEngine":
         engine = cls(datetime.fromisoformat(state["origin"]), seed=state["seed"], specs=specs)
         engine._seeds_used = state["seeds_used"]
+        engine.backfilled = state.get("backfilled", False)
         engine._time = datetime.fromisoformat(state["time"])
         engine._epochs = [(datetime.fromisoformat(start), seed) for start, seed in state["epochs"]]
         engine._starts = {
@@ -276,6 +357,7 @@ class MarketEngine:
             market_day(self.origin): _DayStart(np.array([s.price for s in self.specs]), normal)
         }
         self._paths: OrderedDict[date, _DayPath] = OrderedDict()
+        self.backfilled = False
         # Bumped whenever session start states change, so savers can skip the large part.
         self.starts_version = getattr(self, "starts_version", 0) + 1
 
@@ -362,7 +444,14 @@ class MarketEngine:
             volume=volume,
             regimes=regimes,
         )
-        self._paths[day] = path
-        if len(self._paths) > PATH_CACHE_DAYS:
-            self._paths.popitem(last=False)
+        self._cache_path(day, path)
         return path
+
+    def _cache_path(self, day: date, path: _DayPath) -> None:
+        """Keep a few recent paths, never evicting the current session's (every tick reads it)."""
+        self._paths[day] = path
+        self._paths.move_to_end(day)
+        current = market_day(self._time)
+        while len(self._paths) > PATH_CACHE_DAYS:
+            oldest = next(d for d in self._paths if d != current)
+            del self._paths[oldest]

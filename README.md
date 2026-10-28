@@ -18,6 +18,13 @@ A paper trading simulator that runs 24/7 on simulated market data.
   - **Before the market's history** starts a brand-new market on that date.
 - **Everything is saved** in `backend/paper_trade.db`: the market picks up where it left off after a restart (time the server was off doesn't count), along with your account and orders. Delete the file to start completely fresh.
 
+## Charts
+
+- Interactive candlestick chart with volume: **drag** to pan, **scroll or pinch** to zoom, hover for the bar's open/high/low/close/volume. Older history loads automatically as you scroll or zoom out.
+- **Ranges:** 1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y, each with a fitting bar size. **Bar sizes:** 1m, 5m, 15m, 30m, 1h, D (daily), W (weekly). 1-minute bars go back 60 sessions, 5- and 15-minute bars a year, and longer bars all the way.
+- Your trades are marked on the chart (B/S arrows). The last bar updates live.
+- **Every market comes with 5 years of history** before its start, generated so it leads exactly into the starting prices. It's built in the background the first time (about 10 seconds); "Go to…" can go back into it like any other past date.
+
 ## Trading
 
 - **Cash account:** $100,000 to start (change it with **Reset account…**). No margin and no short selling: buys need buying power (cash minus what open buy orders have set aside), and you can only sell shares you own.
@@ -56,7 +63,7 @@ cd frontend && npm test
 | 2a | Market sessions (9:30–4:00 ET, jump to next open) and date/time control | Done |
 | 2b | Persistence, account and orders: market/limit/stop, fills, positions, P&L | Done |
 | 3 | Order ticket preview and order history | Done |
-| 4 | Candlestick charts | |
+| 4 | Candlestick charts | Done |
 | 5 | Indicators | |
 | 6 | Watchlists and quotes | |
 | 7 | Options chain with Greeks | |

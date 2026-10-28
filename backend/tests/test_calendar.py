@@ -92,3 +92,10 @@ def test_trading_days_between_far_apart_is_fast() -> None:
     began = time.perf_counter()
     assert trading_days_between(date(2026, 1, 2), date(2126, 1, 2)) > 25_000
     assert time.perf_counter() - began < 0.01
+
+
+def test_previous_trading_day() -> None:
+    from paper_trade.market.calendar import previous_trading_day
+
+    assert previous_trading_day(date(2026, 1, 12)) == date(2026, 1, 9)  # Monday -> Friday
+    assert previous_trading_day(date(2026, 1, 7)) == date(2026, 1, 6)

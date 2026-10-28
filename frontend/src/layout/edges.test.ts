@@ -56,13 +56,13 @@ describe('withHidden, sizes', () => {
 })
 
 describe('savedSizes', () => {
-  it('reads widths in rows and heights in columns', () => {
+  it('reads each group\'s size along its branch and the branch\'s size across', () => {
     const sized = {
       ...layout,
       grid: { ...layout.grid, root: { type: 'branch', size: 1000, data: [branch({ ...leaf('w'), size: 250 }, { ...leaf('c'), size: 450 }), { ...leaf('a'), size: 185 }] } },
     } as unknown as SerializedDockview
     const sizes = savedSizes(sized)
-    expect(sizes.get('w')).toEqual({ width: 250 })
-    expect(sizes.get('a')).toEqual({ height: 185 })
+    expect(sizes.get('w')).toEqual({ width: 250, height: 100 })
+    expect(sizes.get('a')).toEqual({ width: 1000, height: 185 })
   })
 })

@@ -28,8 +28,7 @@ export function ChartView() {
     <Frame label="Chart">
       {quote && tick ? (
         <div className="chart-panel">
-          <QuoteDetail quote={quote} />
-          <PriceChart quote={quote} clock={tick.clock} orders={orders} history={history} />
+          <PriceChart quote={quote} clock={tick.clock} orders={orders} history={history} header={<QuoteDetail quote={quote} />} />
         </div>
       ) : (
         waiting

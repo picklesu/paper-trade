@@ -11,8 +11,7 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchBars } from '../lib/api'
 import {
   applyTick,
@@ -34,7 +33,6 @@ import { compute, DEFAULT_SETTINGS, indicatorLabel, INDICATORS, type IndicatorSe
 import type { ClockState, Order, Quote } from '../lib/types'
 import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
 import { IndicatorMenu } from './IndicatorMenu'
-import { useChartToolbarSlot } from '../layout/chartToolbarSlot'
 
 interface Props {
   quote: Quote
@@ -42,7 +40,14 @@ interface Props {
   orders: Order[]
   /** Progress of the background history build, if running. */
   history?: { done: number; total: number } | null
+  /** Shown at the left of the top row (the quote), with the indicator and Latest controls
+   *  at its right. */
+  header?: ReactNode
 }
+
+/** Below this chart width the range and bar size become drop-downs, so the bottom bar
+ *  keeps to one row. */
+const COMPACT_WIDTH = 520
 
 const UP = '#22c55e'
 const DOWN = '#ef4444'
@@ -83,9 +88,10 @@ function volumeBar(b: Bar) {
 }
 
 /** Interactive candlestick chart: drag to pan, scroll or pinch to zoom, older history loads as you scroll back. */
-export function PriceChart({ quote, clock, orders, history }: Props) {
+export function PriceChart({ quote, clock, orders, history, header }: Props) {
   const box = useRef<HTMLDivElement>(null)
-  const toolbarSlot = useChartToolbarSlot()
+  const root = useRef<HTMLDivElement>(null)
+  const [compact, setCompact] = useState(false)
   const chart = useRef<IChartApi | null>(null)
   const candles = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumes = useRef<ISeriesApi<'Histogram'> | null>(null)
@@ -138,6 +144,14 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     indicators.current?.setData(next)
   }
 
+  // Compact controls when the chart is narrow.
+  useEffect(() => {
+    const el = root.current!
+    const observer = new ResizeObserver(([entry]) => setCompact(entry.contentRect.width > 0 && entry.contentRect.width < COMPACT_WIDTH))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
   // Create the chart once.
   useEffect(() => {
     const el = box.current!
@@ -148,6 +162,9 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: css('--border') || '#2a313c' },
       timeScale: {
+        // No date axis: the legend shows the hovered (or latest) bar's time, and the bottom
+        // bar holds the range and bar size controls instead.
+        visible: false,
         borderColor: css('--border') || '#2a313c',
         timeVisible: true,
         secondsVisible: false,
@@ -362,7 +379,6 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
           values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
         }))
 
-  const compact = toolbarSlot === undefined ? false : (toolbarSlot?.compact ?? true)
   const toolbar = (
     <div className="chart-toolbar">
       {compact ? (
@@ -423,17 +439,18 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
           </div>
         </>
       )}
-      <IndicatorMenu settings={settings} interval={interval} onChange={changeSettings} />
-      <button className="ctl" onClick={() => chart.current?.timeScale().scrollToRealTime()} title="Scroll to the latest bar">
-        Latest ⇥
-      </button>
     </div>
   )
 
   return (
-    <div className="price-chart">
-      {/* In the chart's tab bar when there's room, so the candles get the row. */}
-      {toolbarSlot ? createPortal(toolbar, toolbarSlot.element) : toolbar}
+    <div className="price-chart" ref={root}>
+      <div className="chart-top">
+        <div className="chart-quote">{header}</div>
+        <IndicatorMenu settings={settings} interval={interval} onChange={changeSettings} />
+        <button className="ctl" onClick={() => chart.current?.timeScale().scrollToRealTime()} title="Scroll to the latest bar">
+          Latest ⇥
+        </button>
+      </div>
       <div className="chart-area">
         <div ref={box} className="chart-canvas" data-testid="chart" />
         {legend && (
@@ -471,6 +488,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
           </div>
         )}
       </div>
+      {toolbar}
     </div>
   )
 }

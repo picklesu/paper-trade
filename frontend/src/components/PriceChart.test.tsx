@@ -1,9 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bar } from '../lib/bars'
-import { calls, resetCalls } from '../test/lightweight-charts.mock'
+import { calls, createChart, resetCalls } from '../test/lightweight-charts.mock'
 import type { ClockState, Order, Quote } from '../lib/types'
-import { ChartToolbarSlotContext } from '../layout/chartToolbarSlot'
 import { PriceChart } from './PriceChart'
 
 const OPEN = Date.parse('2026-01-07T14:30:00Z') / 1000
@@ -64,38 +63,43 @@ describe('PriceChart', () => {
     expect(screen.getByRole('button', { name: '5Y' })).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it("moves its toolbar into the chart's tab bar, compact when the chart is narrower", async () => {
+  it('puts range and bar size in drop-downs when the chart is narrow', async () => {
     const fn = serve()
     const loads = () => fn.mock.calls.map(([u]) => new URL(u, 'http://x').searchParams).filter((p) => !p.has('end'))
-    const slot = document.createElement('div')
-    document.body.appendChild(slot)
-    render(
-      <ChartToolbarSlotContext.Provider value={{ element: slot, compact: true }}>
-        <PriceChart quote={quote} clock={clock} orders={[]} />
-      </ChartToolbarSlotContext.Provider>,
-    )
-    await waitFor(() => expect(loads()).toHaveLength(1))
-    const range = screen.getByRole('combobox', { name: 'Range' })
-    expect(slot).toContainElement(range)
-    fireEvent.change(range, { target: { value: '5Y' } })
-    await waitFor(() => expect(loads()).toHaveLength(2))
-    expect(loads()[1].get('interval')).toBe('1W')
-    expect(screen.getByRole('combobox', { name: 'Bar size' })).toHaveValue('1W')
-    fireEvent.change(screen.getByRole('combobox', { name: 'Bar size' }), { target: { value: '15m' } })
-    await waitFor(() => expect(loads()).toHaveLength(3))
-    expect(loads()[2].get('interval')).toBe('15m')
-    slot.remove()
+    // A ResizeObserver that reports a 400px-wide chart.
+    const RO = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      cb: ResizeObserverCallback
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb
+      }
+      observe(el: Element) {
+        this.cb([{ contentRect: { width: 400, height: 300 }, target: el } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+    try {
+      render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+      await waitFor(() => expect(loads()).toHaveLength(1))
+      expect(screen.queryByRole('button', { name: '5Y' })).not.toBeInTheDocument()
+      fireEvent.change(screen.getByRole('combobox', { name: 'Range' }), { target: { value: '5Y' } })
+      await waitFor(() => expect(loads()).toHaveLength(2))
+      expect(loads()[1].get('interval')).toBe('1W')
+      expect(screen.getByRole('combobox', { name: 'Bar size' })).toHaveValue('1W')
+      fireEvent.change(screen.getByRole('combobox', { name: 'Bar size' }), { target: { value: '15m' } })
+      await waitFor(() => expect(loads()).toHaveLength(3))
+      expect(loads()[2].get('interval')).toBe('15m')
+    } finally {
+      globalThis.ResizeObserver = RO
+    }
   })
 
-  it('in the workspace without room in the tab bar, keeps a compact toolbar in the panel', async () => {
+  it('has no date axis: the legend shows the bar time', async () => {
     serve()
-    render(
-      <ChartToolbarSlotContext.Provider value={null}>
-        <PriceChart quote={quote} clock={clock} orders={[]} />
-      </ChartToolbarSlotContext.Provider>,
-    )
-    expect(screen.getByRole('combobox', { name: 'Range' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '5Y' })).not.toBeInTheDocument()
+    render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    const options = (createChart.mock.calls.at(-1) as unknown as [unknown, { timeScale: { visible: boolean } }])[1]
+    expect(options.timeScale.visible).toBe(false)
   })
 
   it('reloads when the timeline changes (a jump or rewind)', async () => {

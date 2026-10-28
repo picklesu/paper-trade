@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { PANEL_IDS, PANELS } from './panels'
+import { PANEL_IDS, PANELS, type PanelState } from './panels'
+
+const CHOICES: [PanelState, string, string][] = [
+  ['open', 'Open', 'Docked beside the chart'],
+  ['collapsed', 'Collapsed', 'A tab on the left edge; click it to look'],
+  ['floating', 'Float', 'A window over the chart'],
+  ['off', 'Off', 'Hidden'],
+]
+// The chart is the main view: always shown, docked or floating.
+const CHART_CHOICES = CHOICES.filter(([state]) => state === 'open' || state === 'floating')
 import { useLayout } from './layoutContext'
 
-/** Top-bar menu to show or hide panels and reset the layout. */
+/** Top-bar menu that places each panel (open, collapsed, floating or off) and resets the layout. */
 export function PanelsMenu() {
   const layout = useLayout()
   const [open, setOpen] = useState(false)
@@ -27,18 +36,25 @@ export function PanelsMenu() {
         Panels ▾
       </button>
       {open && (
-        <div className="menu-panel" role="menu" aria-label="Panels">
+        <div className="menu-panel panels-menu-panel" role="menu" aria-label="Panels">
           {PANEL_IDS.map((id) => (
-            <button
-              key={id}
-              role="menuitemcheckbox"
-              aria-checked={layout.open.has(id)}
-              className="menu-item"
-              onClick={() => layout.toggle(id)}
-            >
-              <span className="check">{layout.open.has(id) ? '✓' : ''}</span>
-              {PANELS[id].title}
-            </button>
+            <div key={id} className="panel-row">
+              <span className="panel-row-name">{PANELS[id].title}</span>
+              <div className="seg" role="radiogroup" aria-label={PANELS[id].title}>
+                {(id === 'chart' ? CHART_CHOICES : CHOICES).map(([state, label, hint]) => (
+                  <button
+                    key={state}
+                    role="radio"
+                    aria-checked={layout.states[id] === state}
+                    className={layout.states[id] === state ? 'ctl active' : 'ctl'}
+                    title={hint}
+                    onClick={() => layout.setState(id, state)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
           <div className="menu-sep" />
           <button
@@ -49,12 +65,11 @@ export function PanelsMenu() {
               setOpen(false)
             }}
           >
-            <span className="check" />
             Reset layout
           </button>
           <p className="menu-hint">
-            Drag a tab to move a panel: drop on an edge to dock it there, or onto another panel to tab them together.
-            ⧉ pops a panel out as a floating window; ⤢ maximizes it; ⇤ ⇥ ⤒ ⤓ collapse it to a strip on that edge.
+            Collapsed panels wait as tabs on the left edge: click one to look, click elsewhere to tuck it away. Floating
+            windows move by their top bar and resize from any edge.
           </p>
         </div>
       )}

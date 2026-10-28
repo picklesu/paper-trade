@@ -264,6 +264,23 @@ describe('workspace', () => {
     expect(panel('Chart').closest('.dv-resize-container')).not.toBeNull()
   })
 
+  it('while the chart floats, a placeholder keeps its place, so collapsed panels stay on the left', async () => {
+    render(<App />)
+    setPanel('Chart', 'Float')
+    setPanel('Watchlist', 'Float')
+    expect(document.querySelector('.chart-space')).not.toBeNull()
+    await waitFor(() => expect(within(strip()!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Order Entry', 'Positions', 'Orders', 'Activity']))
+    expect(screen.queryByRole('toolbar', { name: /Collapsed panels \((top|bottom)\)/ })).not.toBeInTheDocument()
+    // The placeholder isn't a panel you can place.
+    expect(screen.queryByRole('radiogroup', { name: '' })).not.toBeInTheDocument()
+
+    // Docking the chart takes the placeholder's place.
+    setPanel('Chart', 'Open')
+    expect(panel('Chart').closest('.dv-resize-container')).toBeNull()
+    await waitFor(() => expect(document.querySelector('.chart-space')).toBeNull())
+    expect(group('Order Entry').compareDocumentPosition(group('Chart')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('a strip tab peeks at a collapsed panel until a click elsewhere; Open in the menu keeps it', () => {
     render(<App />)
     const tab = stripTab('Watchlist')

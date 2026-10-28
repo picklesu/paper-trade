@@ -37,6 +37,15 @@ export function ChartView() {
   )
 }
 
+/** Holds the chart's place in the grid while it floats (see `CHART_SPACE`). */
+export function ChartSpaceView() {
+  return (
+    <div className="chart-space">
+      <p>The chart is floating. To dock it again: Panels ▾ → Chart → Open.</p>
+    </div>
+  )
+}
+
 export function WatchlistView() {
   const { tick, selected, setSelected } = useAppData()
   return (

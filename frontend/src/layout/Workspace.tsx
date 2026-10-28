@@ -15,7 +15,7 @@ import { EdgeStrip } from './EdgeStrip'
 import { type Edge, edgeOf, savedSizes, withHidden } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
 import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
-import { buildDefaultLayout, COMPONENTS, dockPanel, floatGroup, PANEL_IDS, type PanelId, panelState, type PanelState, sideColumnTidier } from './panels'
+import { buildDefaultLayout, COMPONENTS, dockPanel, floatGroup, keepChartSpace, mainGroup, PANEL_IDS, type PanelId, panelState, type PanelState, sideColumnTidier } from './panels'
 import { snapFloatingResizes } from './floatingResize'
 import { snapPosition } from './snap'
 import { useEdgeStrips } from './useEdgeStrips'
@@ -195,12 +195,14 @@ export const Workspace = memo(function Workspace() {
         labelFloatingWindow(g)
       }
     }
+    keepChartSpace(api)
     tidy()
     const tidyColumn = sideColumnTidier(api)
     disposeTidy.current()
     const subs = [
       api.onDidAddGroup(tidy),
       api.onDidLayoutChange(() => {
+        keepChartSpace(api)
         tidy()
         tidyColumn()
       }),
@@ -238,8 +240,7 @@ export const Workspace = memo(function Workspace() {
 
 /** The layout to save: a group the user is only peeking at is saved collapsed. */
 function snapshot(api: DockviewApi, peeking: string | null) {
-  const chart = api.getPanel('chart')?.group
-  return withHidden(api.toJSON(), new Set(peeking ? [peeking] : []), chart?.api.location.type === 'grid' ? chart.id : undefined)
+  return withHidden(api.toJSON(), new Set(peeking ? [peeking] : []), mainGroup(api)?.id)
 }
 
 type Size = { width: number; height: number }
@@ -257,8 +258,8 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     )
   let before = gridSizes()
   const restore = (now: Map<DockviewGroupPanel, Size>) => {
-    const chart = api.getPanel('chart')?.group
-    if (!chart || chart.api.location.type !== 'grid') return
+    const chart = mainGroup(api)
+    if (!chart) return
     const layout = api.toJSON()
     for (const [g] of now) {
       const size = before.get(g)
@@ -285,8 +286,8 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
   observer.observe(host)
   // A saved layout is scaled to the workspace's size now; give the side panels back the sizes
   // they were saved with.
-  const chart = api.getPanel('chart')?.group
-  if (saved && chart?.api.location.type === 'grid') {
+  const chart = mainGroup(api)
+  if (saved && chart) {
     const sizes = savedSizes(saved)
     const layout = api.toJSON()
     for (const g of api.groups) {

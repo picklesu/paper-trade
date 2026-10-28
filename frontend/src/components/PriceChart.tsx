@@ -362,7 +362,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
           values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
         }))
 
-  const compact = toolbarSlot?.compact ?? false
+  const compact = toolbarSlot === undefined ? false : (toolbarSlot?.compact ?? true)
   const toolbar = (
     <div className="chart-toolbar">
       {compact ? (

@@ -54,13 +54,18 @@ body {
 .account {
   display: flex;
   gap: 20px;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
+  flex: 1;
 }
-/* On a narrower window the name goes first; the account figures and controls stay. */
+/* On a narrower window the name goes first, then the clock's date and the connection's
+   wording (its dot stays); the account figures and controls stay. */
 @media (max-width: 1240px) {
   .brand {
+    display: none;
+  }
+}
+@media (max-width: 1080px) {
+  .clock-date,
+  .conn-text {
     display: none;
   }
 }

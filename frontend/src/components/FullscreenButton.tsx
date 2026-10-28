@@ -9,9 +9,10 @@ export function FullscreenButton() {
   const [full, setFull] = useState(() => typeof document !== 'undefined' && !!document.fullscreenElement)
 
   useEffect(() => {
+    if (!supported()) return
     const onChange = () => setFull(!!document.fullscreenElement)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'f' || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return
+      if (e.key.toLowerCase() !== 'f' || e.repeat || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return
       e.preventDefault()
       toggle()
     }
@@ -23,7 +24,7 @@ export function FullscreenButton() {
     }
   }, [])
 
-  if (typeof document === 'undefined' || !document.fullscreenEnabled) return null
+  if (!supported()) return null
   return (
     <button className="ctl icon-ctl" onClick={toggle} title={full ? 'Exit full screen (F)' : 'Full screen (F)'} aria-label={full ? 'Exit full screen' : 'Full screen'} aria-pressed={full}>
       {full ? '⤡' : '⛶'}
@@ -31,7 +32,11 @@ export function FullscreenButton() {
   )
 }
 
+const supported = () =>
+  typeof document !== 'undefined' && document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function'
+
 function toggle() {
-  if (document.fullscreenElement) void document.exitFullscreen()
+  // Either can be refused (for example without a user gesture); then nothing changes.
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
   else void document.documentElement.requestFullscreen().catch(() => {})
 }

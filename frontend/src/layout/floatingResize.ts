@@ -30,12 +30,13 @@ export function snapFloatingResizes(api: DockviewApi): () => void {
       bottom: direction.includes('bottom'),
     }
     api.groups.find((g) => g.api.location.type === 'floating' && overlay.contains(g.element))?.activePanel?.api.setActive()
+    // Nothing else moves during a resize, so the other windows are measured once.
+    const area = container.getBoundingClientRect()
+    const others = [...container.querySelectorAll(':scope > .dv-resize-container')]
+      .filter((o) => o !== overlay && !o.classList.contains('dv-hidden'))
+      .map((o) => relative(o, area))
 
     const onMove = () => {
-      const area = container.getBoundingClientRect()
-      const others = [...container.querySelectorAll(':scope > .dv-resize-container')]
-        .filter((o) => o !== overlay && !o.classList.contains('dv-hidden'))
-        .map((o) => relative(o, area))
       const box = relative(overlay, area)
       const snapped = snapResize(box, edges, area, others)
       if (snapped.left === box.left && snapped.top === box.top && snapped.width === box.width && snapped.height === box.height) return

@@ -246,32 +246,47 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
   }
 }
 
-/** Chart widths at which its toolbar fits beside its tab: every button, or the compact form.
- *  Narrower than that, it stays in the panel. */
-const TOOLBAR_FULL_MIN_WIDTH = 760
-const TOOLBAR_COMPACT_MIN_WIDTH = 440
+/** The chart toolbar's width with every button, and in its compact form (measured), plus a
+ *  little room to grab the tab bar. */
+const TOOLBAR_FULL_WIDTH = 660
+const TOOLBAR_COMPACT_WIDTH = 320
+const DRAG_ROOM = 40
 
+/** Whether the chart's toolbar fits in its tab bar beside the tabs and the buttons at the
+ *  right: with every button, compact, or not at all (it stays in the panel). Tab widths are
+ *  estimated from their titles: measuring them would include the toolbar's own squeeze. */
 function toolbarFit(group: DockviewGroupPanel): 'full' | 'compact' | null {
-  if (group.activePanel?.id !== 'chart' || group.width < TOOLBAR_COMPACT_MIN_WIDTH) return null
-  return group.width >= TOOLBAR_FULL_MIN_WIDTH ? 'full' : 'compact'
+  if (group.activePanel?.id !== 'chart') return null
+  const tabs = group.panels.reduce((w, p) => w + (p.title ?? p.id).length * 7 + 40, 0)
+  const actions = group.element.querySelector<HTMLElement>('.dv-right-actions-container')?.offsetWidth ?? 0
+  const room = group.width - tabs - actions - DRAG_ROOM
+  return room >= TOOLBAR_FULL_WIDTH ? 'full' : room >= TOOLBAR_COMPACT_WIDTH ? 'compact' : null
 }
 
 /** In the chart's tab bar, after the tabs: the spot the chart's toolbar moves into while the
  *  chart is the group's visible panel and the group is wide enough. */
-function ChartToolbarSlot({ group }: IDockviewHeaderActionsProps) {
+function ChartToolbarSlot({ group, containerApi }: IDockviewHeaderActionsProps) {
   const setSlot = useContext(SetChartToolbarSlotContext)
   const [fit, setFit] = useState(() => toolbarFit(group))
   const [element, setElement] = useState<HTMLElement | null>(null)
   useEffect(() => {
     const update = () => setFit(toolbarFit(group))
     update()
-    const subs = [group.api.onDidActivePanelChange(update), group.api.onDidDimensionsChange(update)]
+    const subs = [
+      group.api.onDidActivePanelChange(update),
+      group.api.onDidDimensionsChange(update),
+      // Tabs joining or leaving the group change the room left.
+      containerApi.onDidAddPanel(update),
+      containerApi.onDidRemovePanel(update),
+      containerApi.onDidMovePanel(update),
+    ]
     return () => subs.forEach((s) => s.dispose())
-  }, [group])
+  }, [group, containerApi])
   useEffect(() => {
     if (!element || !fit) return
     setSlot({ element, compact: fit === 'compact' })
-    return () => setSlot(null)
+    // Only clear our own slot: the chart may already have moved to another group's.
+    return () => setSlot((current) => (current?.element === element ? null : current))
   }, [element, fit, setSlot])
   return fit ? <div className="chart-toolbar-slot" ref={setElement} /> : null
 }

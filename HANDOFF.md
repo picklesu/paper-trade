@@ -178,7 +178,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     hidden by container queries on narrow charts), account tabs 180px by default, and
     `FullscreenButton` (F). The chart's toolbar is portaled (`chartToolbarSlot.ts`) into a
     `ChartToolbarSlot` rendered by dockview's `leftHeaderActionsComponent` in the chart's
-    group: full buttons from 760px wide, compact drop-downs from 440px, in the panel below that.
+    group when the room left beside its tabs (estimated from titles) and buttons allows: every
+    button (660px), or compact drop-downs (320px); otherwise in the panel, compact. Outside the
+    workspace (context undefined, as in its tests) it shows every button in the panel.
   - `floatingResize.ts`: dockview's floating-window resize has no snapping hook and doesn't
     raise the window. A window-level pointerdown (bubbling, so it runs after the handle's own
     listener) activates the group (which raises it) and adds a pointermove that runs after
@@ -227,7 +229,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 112 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 113 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

@@ -35,9 +35,9 @@ export function TopBar({ status, clock, regime, progress, account }: Props) {
       <ClockControls clock={clock} regime={regime} progress={progress} />
       <PanelsMenu />
       <FullscreenButton />
-      <div className={`conn conn-${status}`} role="status">
+      <div className={`conn conn-${status}`} role="status" title={STATUS_LABEL[status]}>
         <span className="dot" />
-        {STATUS_LABEL[status]}
+        <span className="conn-text">{STATUS_LABEL[status]}</span>
       </div>
     </header>
   )

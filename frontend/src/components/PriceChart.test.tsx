@@ -87,6 +87,17 @@ describe('PriceChart', () => {
     slot.remove()
   })
 
+  it('in the workspace without room in the tab bar, keeps a compact toolbar in the panel', async () => {
+    serve()
+    render(
+      <ChartToolbarSlotContext.Provider value={null}>
+        <PriceChart quote={quote} clock={clock} orders={[]} />
+      </ChartToolbarSlotContext.Provider>,
+    )
+    expect(screen.getByRole('combobox', { name: 'Range' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '5Y' })).not.toBeInTheDocument()
+  })
+
   it('reloads when the timeline changes (a jump or rewind)', async () => {
     const fn = serve()
     const loads = () => fn.mock.calls.filter(([u]) => !String(u).includes('end=')).length

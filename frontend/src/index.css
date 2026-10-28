@@ -627,3 +627,62 @@ body {
   gap: 4px;
   justify-content: flex-end;
 }
+
+/* Indicators */
+.indicator-menu {
+  position: relative;
+}
+.indicator-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  width: 300px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.indicator-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+.indicator-row.disabled .indicator-name {
+  opacity: 0.5;
+}
+.indicator-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.swatch {
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+}
+.indicator-params {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.param {
+  width: 52px;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.legend-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-basis: 100%;
+}

@@ -106,6 +106,32 @@ describe('PriceChart', () => {
   })
 })
 
+describe('PriceChart history paging', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    resetCalls()
+  })
+
+  it('keeps the same dates in view when older bars are added on the left', async () => {
+    const older: Bar[] = [[OPEN - 600, 1, 1, 1, 1, 1], [OPEN - 300, 1, 1, 1, 1, 1]]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.includes('end=') ? { bars: older, more: false } : { bars, more: true }),
+      })),
+    )
+    render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(calls.candleData).toHaveLength(2))
+    const view = { from: OPEN, to: OPEN + 300 }
+    calls.visibleRange = view
+    act(() => calls.onRangeChange!({ from: 0, to: 2 }))
+    await waitFor(() => expect(calls.candleData).toHaveLength(4))
+    expect(calls.visibleRange).toEqual(view) // restored after the older bars went in
+  })
+})
+
 describe('PriceChart races', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()

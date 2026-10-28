@@ -1,4 +1,4 @@
-import type { Account, ClockState, GotoAction, Order, OrderType, Side, TimeInForce } from './types'
+import type { Account, ClockState, GotoAction, Order, OrderPreview, OrderType, Side, TimeInForce } from './types'
 
 export async function updateClock(update: { speed?: number; paused?: boolean }): Promise<ClockState> {
   const resp = await fetch('/api/clock', {
@@ -71,6 +71,22 @@ export interface OrderRequest {
 
 export function placeOrder(order: OrderRequest): Promise<Order> {
   return send('/api/orders', 'POST', order)
+}
+
+export function previewOrder(order: OrderRequest): Promise<OrderPreview> {
+  return send('/api/orders/preview', 'POST', order)
+}
+
+export interface OrderChange {
+  qty?: number
+  limit_price?: number
+  stop_price?: number
+  tif?: TimeInForce
+}
+
+/** Cancel/replace a working order; resolves to the new order. */
+export function replaceOrder(id: number, change: OrderChange): Promise<Order> {
+  return send(`/api/orders/${id}`, 'PATCH', change)
 }
 
 export function cancelOrder(id: number): Promise<Order> {

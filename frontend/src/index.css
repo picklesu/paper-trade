@@ -533,3 +533,40 @@ body {
 .error.inline {
   margin: 8px 12px;
 }
+
+/* Phase 3: order review, filters, row actions */
+.order-review h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+.review-headline {
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.review-warnings {
+  margin: 12px 0 0;
+  padding: 8px 10px 8px 26px;
+  border-left: 3px solid var(--warn);
+  background: rgba(234, 179, 8, 0.08);
+  line-height: 1.45;
+}
+.small {
+  font-size: 11px;
+}
+.ticket-result.info {
+  color: var(--text);
+}
+.ticket-result.error {
+  color: var(--down);
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 12px;
+}
+.row-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}

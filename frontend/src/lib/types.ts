@@ -65,6 +65,32 @@ export interface Order {
   fill_price: number | null
   closed_at: string | null
   reason: string | null
+  /** The order this one replaced (cancel/replace). */
+  replaces: number | null
+}
+
+/** What placing an order would do, from POST /api/orders/preview. */
+export interface OrderPreview {
+  symbol: string
+  side: Side
+  qty: number
+  type: OrderType
+  tif: TimeInForce
+  limit_price: number | null
+  stop_price: number | null
+  fills_now: boolean
+  estimated_price: number
+  estimated_total: number
+  commission: number
+  buying_power_before: number
+  buying_power_after: number
+  cash_before: number
+  cash_after: number
+  position_before: number
+  position_after: number
+  avg_cost_after: number
+  estimated_realized: number | null
+  warnings: string[]
 }
 
 export interface TickMessage {

@@ -35,7 +35,7 @@ export default function App() {
         </Panel>
         <Panel title="Order Entry" className="ticket">
           {quote && tick ? (
-            <OrderTicket quote={quote} account={tick.account} />
+            <OrderTicket quote={quote} account={tick.account} orders={orders} />
           ) : (
             <Placeholder text="Waiting for market data…" />
           )}

@@ -10,25 +10,25 @@ _Last updated: 2026-10-27, after Phase 2b was merged._
 | 1. Market engine + live watchlist | Merged, tested by the user on their Mac | #1 |
 | `server.sh` on/off script | Merged | #2 |
 | 2a. Market sessions + date/time control | Merged. Not confirmed by the user yet. | #7 |
-| 2b. Persistence, account and orders | Merged. **Not tested by the user yet**: ask how it went. | #8 |
-| **3. Order preview and order history** | **Next. Not started.** | — |
+| 2b. Persistence, account and orders | Merged. Not confirmed by the user yet. | #8 |
+| 3. Order preview and order history | Merged. **Not tested by the user yet**: ask how it went. | #9 |
+| **4. Candlestick charts** | **Next. Not started.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-1. Ask the user whether Phases 2a and 2b work for them (`./server.sh restart`). Fix anything they
-   report in a follow-up PR first.
-2. Then Phase 3 (see README roadmap). Phase 2b already has an order ticket with an estimated
-   cost and the Orders/Activity tabs, so Phase 3 should focus on the following. Agree the scope
-   with the user first.
-   - A **preview/confirm step** before sending: estimated cost or proceeds, buying power before
-     and after, and position after. Optionally commissions (currently $0).
-   - **Ticket feedback:** the result message ("Order #2 is working") goes stale once the order
-     fills. Follow the order's status from the stream instead.
-   - **Order history:** filters (working / filled / canceled), and details such as the time
-     triggered and the time closed with a reason.
-   - Possibly **replace/modify** a working order.
+1. Ask the user whether Phases 2a, 2b and 3 work on their Mac (`./server.sh restart`). Fix
+   anything they report in a follow-up PR first.
+2. Then **Phase 4: candlestick charts** (TradingView `lightweight-charts`, planned since Phase 0)
+   in the Chart panel, replacing the placeholder under `QuoteDetail`. Notes:
+   - History bars: build OHLCV for any past session from `engine.day_prices(day)` (per-second
+     prices) and per-minute volume (`_DayPath.minute_volume`). Paths are reproducible, so bars
+     can be generated on request; cache or store them if that's slow for long ranges.
+   - Timeframes (1m, 5m, 15m, 1h, 1D) and a live-updating last bar from ticks.
+   - Mark the user's fills on the chart (from the orders list).
+   - History starts at the market's `origin`; after a reset there is little history.
+   - Agree the details with the user first (timeframes, how far back, indicators are Phase 5).
 
 ## Going back in time (decided by the user; built in 2a + 2b)
 
@@ -75,8 +75,12 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     forward (sessions, then order matching, both yielding), rewind (engine + broker) and reset
     (engine + broker). The final state after a jump is always sent with `force=True`.
     `goto_details()` builds the rewind/reset confirmation contents.
-  - `trading/broker.py`: `Broker`, the cash account. `place`/`cancel` validate buying power and
-    shares and fill at once when marketable. `process_iter(t0, t1)` scans each session's
+  - `trading/broker.py`: `Broker`, the cash account. `_build` validates (buying power, shares,
+    prices; when replacing, that order's reserved cash or shares count as free). `preview`
+    (no side effects: estimated price and total, buying power, cash, position, average cost,
+    realized P&L, warnings), `place`, `replace` (cancel/replace: the old order is canceled with
+    "Replaced by #N"; the new one has `replaces`), and `cancel`. `_immediate` is the pure "what
+    happens right now" check used by both `_activate` and `preview`. `process_iter(t0, t1)` scans each session's
     per-second path (`engine.day_prices`) for every working order and handles events in time
     order. It expires day orders at each close. The ledger (cash, positions, average cost,
     realized P&L) is rebuilt from filled orders and cached. `summary()` gives net liq, buying
@@ -97,7 +101,8 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     UTC offset are New York wall-clock time; years 1900–2999; forward jumps are capped at 5
     years. `api/deps.py`: `market` (read-only) and `idle_market` (409 during a jump) for
     anything that syncs or changes state. Trading (`api/trading.py`): `GET /api/account`, `POST /api/account/reset`,
-    `GET|POST /api/orders`, `DELETE /api/orders/{id}`; 422 responses carry a user-readable
+    `GET|POST /api/orders`, `POST /api/orders/preview`, `PATCH /api/orders/{id}` (replace),
+    `DELETE /api/orders/{id}`; 422 responses carry a user-readable
     `detail`; 409 during a jump. **Endpoints that touch market state must be `async def`** so
     they run on the event loop's thread; a plain `def` runs in a worker thread and races the
     tick loop.
@@ -108,12 +113,14 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
   - `components/`: `TopBar`, `ClockControls` (Go to…, pause, speeds from `clock.speeds`,
     regime badge or progress), `GoToDialog` (picker with ±day/week shortcuts → preview → forward
     immediately / rewind confirmation with replay or new future / new-market warning),
-    `Watchlist` (tick flashes), `QuoteDetail`, `OrderTicket` (side, quantity, type,
-    limit/stop, time in force, estimated cost, result), `BottomTabs` (Positions / Orders with
-    Cancel / Activity, plus "Reset account…"), `ResetAccountDialog`, `Panel`. The top bar
+    `Watchlist` (tick flashes), `QuoteDetail`, `OrderTicket` (form → `OrderReview` from the
+    server preview → place; `OrderStatusLine` follows the placed order through the stream,
+    including replacements), `BottomTabs` (Positions / Orders with filters, Modify
+    (`ModifyOrderDialog`) and Cancel / Activity, plus "Reset account…"),
+    `ResetAccountDialog`, `Panel`. `lib/orders.ts`: `latestVersion`, `describeOrder`. The top bar
     shows net liq, buying power and day P&L.
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 114 (pytest), frontend 30 (Vitest + Testing Library).
+- Tests: backend 127 (pytest), frontend 35 (Vitest + Testing Library).
 
 ## Decisions already made (don't reopen without a reason)
 

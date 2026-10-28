@@ -48,6 +48,17 @@ class OrderRequest(BaseModel):
     stop_price: float | None = None
 
 
+@router.post("/orders/preview")
+async def preview_order(body: OrderRequest, request: Request) -> dict:
+    """Estimated price, totals, buying power and position after, and warnings."""
+    svc = market(request)
+    svc.sync()
+    try:
+        return svc.broker.preview(**body.model_dump())
+    except OrderError as e:
+        raise HTTPException(422, str(e)) from None
+
+
 @router.post("/orders")
 async def place_order(body: OrderRequest, request: Request) -> dict:
     svc = market(request)
@@ -66,6 +77,26 @@ async def cancel_order(order_id: int, request: Request) -> dict:
     svc.sync()  # it may have filled since the last tick
     try:
         order = svc.broker.cancel(order_id)
+    except OrderError as e:
+        raise HTTPException(422, str(e)) from None
+    svc.after_trade()
+    return order.to_dict()
+
+
+class OrderChange(BaseModel):
+    qty: int | None = None
+    limit_price: float | None = None
+    stop_price: float | None = None
+    tif: Literal["day", "gtc"] | None = None
+
+
+@router.patch("/orders/{order_id}")
+async def replace_order(order_id: int, body: OrderChange, request: Request) -> dict:
+    """Change a working order (cancel/replace): returns the new order."""
+    svc = market(request)
+    svc.sync()  # it may have filled since the last tick
+    try:
+        order = svc.broker.replace(order_id, **body.model_dump())
     except OrderError as e:
         raise HTTPException(422, str(e)) from None
     svc.after_trade()

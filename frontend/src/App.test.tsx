@@ -51,6 +51,7 @@ function order(overrides: Partial<Order>): Order {
     fill_price: null,
     closed_at: null,
     reason: null,
+    replaces: null,
     ...overrides,
   }
 }
@@ -152,6 +153,11 @@ describe('App', () => {
     expect(within(panel).getByText('Filled at 580.03')).toBeInTheDocument()
     fireEvent.click(within(panel).getByRole('button', { name: 'Cancel order 2' }))
     expect(fetchMock).toHaveBeenCalledWith('/api/orders/2', expect.objectContaining({ method: 'DELETE' }))
+
+    // Filters narrow the list.
+    fireEvent.click(within(panel).getByRole('button', { name: 'Filled (1)' }))
+    expect(within(panel).queryByText('Limit 570.00')).not.toBeInTheDocument()
+    expect(within(panel).getByText('Filled at 580.03')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
     expect(within(screen.getByRole('tabpanel')).getByText('-$5,800.30')).toBeInTheDocument()

@@ -230,3 +230,21 @@ def test_rejects_infinite_prices(client: TestClient) -> None:
     )
     assert resp.status_code == 422
     assert client.get("/api/orders").json() == []
+
+
+def test_preview_and_replace_endpoints(client: TestClient) -> None:
+    body = {"symbol": "SPY", "side": "buy", "qty": 2, "type": "limit", "limit_price": 100, "tif": "gtc"}
+    preview = client.post("/api/orders/preview", json=body).json()
+    assert preview["fills_now"] is False and preview["estimated_total"] == 200
+    assert client.get("/api/orders").json() == []
+
+    order = client.post("/api/orders", json=body).json()
+    new = client.patch(f"/api/orders/{order['id']}", json={"limit_price": 101}).json()
+    assert new["replaces"] == order["id"] and new["limit_price"] == 101
+    statuses = {o["id"]: o["status"] for o in client.get("/api/orders").json()}
+    assert statuses == {order["id"]: "canceled", new["id"]: "working"}
+
+    resp = client.patch(f"/api/orders/{order['id']}", json={"qty": 3})
+    assert resp.status_code == 422 and "already canceled" in resp.json()["detail"]
+    resp = client.post("/api/orders/preview", json={**body, "side": "sell"})
+    assert resp.status_code == 422 and "Short selling" in resp.json()["detail"]

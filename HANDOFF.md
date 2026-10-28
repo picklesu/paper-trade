@@ -14,6 +14,7 @@ _Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 | 5.5b. Collapse panels to edge strips (peek, pin; side panels keep their size) | Merged | #16 |
 | 5.5b fixes from the user's testing: chart space (one-line quote, toolbar in the chart's tab bar, thinner bars, full screen), tab-overflow menu while peeking, resize snapping and bring-to-front | Merged | #17 |
 | 5.5b redesign from the user's review: chart-first default (side panels collapsed on the left), no tab bars, Panels menu places panels, no date axis, range/bar size at the bottom | Merged | #18 |
+| Fixes: divider drags snapping back on market ticks; Reset layout showing nothing after floating | Merged | #19 |
 | **5.5c. Workspace, next steps** | **Next.** See below. | — |
 | 6. Watchlists and quotes | After 5.5. | — |
 
@@ -171,6 +172,16 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     height above/below it, and the chart takes the difference; groups are tracked as objects
     because a new layout reuses ids; a ResizeObserver handles resizes, which raise no layout
     change; a saved layout gets its side widths back on load via `savedSizes`).
+  - **Two dockview traps (#19):** DockviewReact passes any changed *option* prop (such as
+    `transformFloatingGroupDrag`) to `updateOptions`, which lays the grid out again from the
+    sizes saved before a divider drag. A new function on every render (the shell re-renders
+    on each market tick) snapped panels back mid-drag and sometimes undid the resize. Keep
+    option props stable (module-level functions) and `Workspace` memoized; `App.test` checks
+    ticks never call `updateOptions`. And `api.clear()` keeps the old grid's root, and with a
+    floating window open dockview reported width 0 while rebuilding, so Reset built
+    everything 0px wide (dockview's `fromJSON` lays out at 0 when replacing floating windows): `buildDefaultLayout` starts from `fromJSON` of an empty grid, and
+    `onReady` registers (before the first load) a relayout at the host's `clientWidth` and
+    `clientHeight` after every `fromJSON`. Reset also drops any peek first (ids are reused).
   - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `collapseContext.ts`, `edges.ts`): a
     collapsed group is a hidden grid group (`group.api.setVisible(false)`; dockview saves
     `visible` in the layout JSON, so it survives reloads). `edgeOf` picks the edge from the
@@ -235,7 +246,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 109 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 113 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

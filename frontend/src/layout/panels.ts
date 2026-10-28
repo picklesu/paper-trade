@@ -1,4 +1,4 @@
-import type { AddPanelOptions, DockviewApi, DockviewGroupPanel, IDockviewPanel } from 'dockview-react'
+import { type AddPanelOptions, type DockviewApi, type DockviewGroupPanel, type IDockviewPanel, Orientation } from 'dockview-react'
 import type { FunctionComponent } from 'react'
 import { ActivityView, ChartView, OrdersView, PositionsView, TicketView, WatchlistView } from './PanelViews'
 
@@ -31,7 +31,10 @@ export const SIDE_WIDTH = 300
  *  They're docked in a column left of the chart, each hidden; showing one or several
  *  stacks them in that column. */
 export function buildDefaultLayout(api: DockviewApi): void {
-  api.clear()
+  // Start from an empty grid, not `api.clear()`: that keeps the old grid's root branch, and
+  // after floating windows the panels below were wrapped in an extra branch 0px tall, so
+  // Reset layout showed nothing.
+  api.fromJSON({ grid: { root: { type: 'branch', data: [] }, orientation: Orientation.HORIZONTAL, width: api.width, height: api.height }, panels: {} })
   api.addPanel({ id: 'chart', component: 'chart', title: PANELS.chart.title })
   let above: PanelId | null = null
   for (const id of SIDE_PANELS) {

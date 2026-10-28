@@ -24,9 +24,14 @@ function dropUnknownPanels(layout: SerializedDockview, known: ReadonlySet<string
     .filter(([, p]) => !known.has((p as { contentComponent?: string }).contentComponent ?? ''))
     .map(([id]) => id)
   if (!gone.length) return layout
+  // Groups left with no panels go, and so do references to them.
+  const removed = new Set<string>()
   const keep = (data: Leaf): Leaf | null => {
     const views = data.views.filter((v) => !gone.includes(v))
-    if (!views.length) return null
+    if (!views.length) {
+      removed.add(data.id)
+      return null
+    }
     return { ...data, views, activeView: data.activeView && views.includes(data.activeView) ? data.activeView : views[0] }
   }
   const prune = (node: Node): Node | null => {
@@ -39,13 +44,21 @@ function dropUnknownPanels(layout: SerializedDockview, known: ReadonlySet<string
   }
   const panels = Object.fromEntries(Object.entries(layout.panels).filter(([id]) => !gone.includes(id)))
   const root = prune(layout.grid.root) ?? { type: 'branch', data: [] }
-  const floatingGroups = layout.floatingGroups
-    ?.map((f) => {
-      const data = keep(f.data as unknown as Leaf)
-      return data ? { ...f, data: data as unknown as typeof f.data } : null
-    })
-    .filter((f): f is NonNullable<typeof f> => f !== null)
-  return { ...layout, panels, grid: { ...layout.grid, root }, ...(floatingGroups ? { floatingGroups } : {}) }
+  const windows = <T extends { data?: unknown }>(list: T[] | undefined) =>
+    list
+      ?.map((f) => {
+        if (!f.data) return f
+        const data = keep(f.data as Leaf)
+        return data ? { ...f, data: data as T['data'] } : null
+      })
+      .filter((f): f is T => f !== null)
+  const floatingGroups = windows(layout.floatingGroups)
+  const popoutGroups = windows(layout.popoutGroups)
+  const out: SerializedDockview = { ...layout, panels, grid: { ...layout.grid, root } }
+  if (floatingGroups) out.floatingGroups = floatingGroups
+  if (popoutGroups) out.popoutGroups = popoutGroups
+  if (out.activeGroup && removed.has(out.activeGroup)) delete out.activeGroup
+  return out
 }
 
 export function saveLayout(layout: SerializedDockview): void {

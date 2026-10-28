@@ -81,14 +81,17 @@ export function Orders({ orders }: { orders: Order[] }) {
   if (!orders.length) return <Placeholder text="No orders yet." />
 
   const match = FILTERS.find((f) => f.id === filter)!.match
-  // Working orders first, then the rest newest first (the server sends newest first).
-  const shown = [...orders.filter((o) => o.status === 'working'), ...orders.filter((o) => o.status !== 'working')].filter(
-    match,
-  )
+  // Working orders first, then the rest newest first (the server sends newest placed first).
+  // Filled lists the trades in the order they filled, latest first: a GTC order placed
+  // earlier can fill after later ones.
+  const shown =
+    filter === 'filled'
+      ? orders.filter(match).sort((a, b) => b.filled_at!.localeCompare(a.filled_at!) || b.id - a.id)
+      : [...orders.filter((o) => o.status === 'working'), ...orders.filter((o) => o.status !== 'working')].filter(match)
 
-  // Shown with the Filled filter, where every row is a fill.
-  const sells = shown.filter((o) => o.realized !== null)
-  const realizedTotal = filter === 'filled' && sells.length ? sells.reduce((sum, o) => sum + o.realized!, 0) : null
+  // The total of the sells shown (buys realize nothing).
+  const sells = shown.filter((o) => o.realized != null)
+  const realizedTotal = sells.length ? sells.reduce((sum, o) => sum + o.realized!, 0) : null
 
   const cancel = (id: number) => {
     setError(null)
@@ -166,7 +169,7 @@ export function Orders({ orders }: { orders: Order[] }) {
         {realizedTotal !== null && (
           <tfoot>
             <tr>
-              <td colSpan={8}>Realized P/L on these sells</td>
+              <td colSpan={8}>Realized P/L of the sells shown</td>
               <td className={`num ${direction(realizedTotal)}`}>{signedDollars(realizedTotal)}</td>
               <td colSpan={2} />
             </tr>
@@ -186,7 +189,8 @@ export function Orders({ orders }: { orders: Order[] }) {
 /** What a filled order made or lost. A sell realizes P/L against the average cost; a buy only
  *  opens (or adds to) a position, whose open P/L is in Positions. */
 function PnlCell({ order }: { order: Order }) {
-  if (order.realized !== null) return <td className={`num ${direction(order.realized)}`}>{signedDollars(order.realized)}</td>
+  // `!= null`: a server from before `realized` sends none.
+  if (order.realized != null) return <td className={`num ${direction(order.realized)}`}>{signedDollars(order.realized)}</td>
   if (order.status === 'filled')
     return (
       <td className="num muted" title="A buy opens a position: its P/L is realized when you sell (open P/L is in Positions)">

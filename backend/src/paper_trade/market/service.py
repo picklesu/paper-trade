@@ -162,7 +162,7 @@ class MarketService:
         if action == "reset":
             fills = [o for o in self.broker.orders.values() if o.status == "filled"]
             return {
-                "erased_fills": [o.to_dict() for o in sorted(fills, key=lambda o: o.filled_at)],
+                "erased_fills": [self.broker.order_dict(o) for o in sorted(fills, key=lambda o: o.filled_at)],
                 "erased_orders": len(self.broker.orders),
                 "starting_cash": self.broker.starting_cash,
             }

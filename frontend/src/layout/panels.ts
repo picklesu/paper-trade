@@ -55,18 +55,35 @@ export function keepChartSpace(api: DockviewApi, relayout: () => void): void {
   }
 }
 
+const dockedSide = (api: DockviewApi) =>
+  SIDE_PANELS.map((p) => api.getPanel(p)?.group).filter((g): g is DockviewGroupPanel => !!g && g.api.location.type === 'grid')
+
+/** Collapse a side column that shows nothing but still has width, to no width: show one of
+ *  its panels at the usual width and hide it again, as only hiding gives the space back
+ *  (and the panel then comes back at that width). */
+function collapseSideColumn(docked: DockviewGroupPanel[]): void {
+  if (!docked.length) return
+  docked[0].api.setVisible(true)
+  docked[0].api.setSize({ width: SIDE_WIDTH })
+  docked[0].api.setVisible(false)
+}
+
 /** Put the side column back to its usual width; if nothing in it is showing, collapsed to no
- *  width (showing one panel at that width and hiding it again, as only hiding gives the
- *  space back). For a grid rebuilt around the column, where it had any share of the width. */
+ *  width. For a grid rebuilt around the column, where it had any share of the width. */
 function resetSideColumn(api: DockviewApi): void {
-  const docked = SIDE_PANELS.map((p) => api.getPanel(p)?.group).filter((g): g is DockviewGroupPanel => !!g && g.api.location.type === 'grid')
+  const docked = dockedSide(api)
   const shown = docked.find((g) => g.api.isVisible)
   if (shown) shown.api.setSize({ width: SIDE_WIDTH })
-  else if (docked.length) {
-    docked[0].api.setVisible(true)
-    docked[0].api.setSize({ width: SIDE_WIDTH })
-    docked[0].api.setVisible(false)
-  }
+  else collapseSideColumn(docked)
+}
+
+/** After loading a saved layout: a column whose only shown panel was dropped (Activity, when
+ *  it was removed) keeps its width, empty. */
+export function collapseEmptySideColumn(api: DockviewApi): void {
+  const docked = dockedSide(api)
+  const main = mainGroup(api)
+  if (docked.some((g) => g.api.isVisible) || !main || main.width >= api.width - 1) return
+  collapseSideColumn(docked)
 }
 
 /** The panels beside the chart, top to bottom in their column at the left. */

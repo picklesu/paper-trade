@@ -115,9 +115,9 @@ class Broker:
 
     def order_dict(self, order: Order) -> dict:
         """An order as the API sends it: its stored fields plus `realized`, the P&L a filled sell
-        realized against the average cost (None for buys and unfilled orders)."""
-        realized = self.ledger().realized_by_order.get(order.id)
-        return {**order.to_dict(), "realized": None if realized is None else round(realized, 2)}
+        realized against the average cost (None for buys and unfilled orders). Not rounded, so
+        sums of them match the account's realized P&L; the frontend rounds for display."""
+        return {**order.to_dict(), "realized": self.ledger().realized_by_order.get(order.id)}
 
     def working(self) -> list[Order]:
         return [o for o in self.orders.values() if o.status == "working"]
@@ -532,7 +532,7 @@ class Broker:
         prices_then = self.engine.prices_at(t)
         quotes_now = self.engine.quotes
         return {
-            "erased_fills": [o.to_dict() for o in erased],
+            "erased_fills": [self.order_dict(o) for o in erased],
             "erased_orders": sum(1 for o in self.orders.values() if o.created_at > t),
             "cash_now": round(self.ledger().cash, 2),
             "cash_then": round(then.cash, 2),

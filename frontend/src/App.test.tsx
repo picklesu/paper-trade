@@ -165,7 +165,8 @@ describe('App', () => {
             order({ id: 4, status: 'working', type: 'limit', limit_price: 570 }),
             order({ id: 3, side: 'sell', qty: 4, status: 'filled', fill_price: 585.5, filled_at: '2026-01-05T15:20:00Z', realized: 21.88 }),
             order({ id: 2, side: 'sell', qty: 2, status: 'filled', fill_price: 575, filled_at: '2026-01-05T15:10:00Z', realized: -10.06 }),
-            order({ id: 1, status: 'filled', fill_price: 580.03, filled_at: '2026-01-05T15:00:00Z' }),
+            // A GTC buy placed first that filled last.
+            order({ id: 1, tif: 'gtc', status: 'filled', fill_price: 580.03, filled_at: '2026-01-05T15:30:00Z' }),
           ],
         }),
       })
@@ -184,12 +185,16 @@ describe('App', () => {
     expect(within(row(2)).getByText('-$10.06')).toHaveClass('down')
     expect(within(row(1)).getByText('—')).toBeInTheDocument()
 
-    // Filters narrow the list; Filled adds up what the sells realized.
-    expect(within(orders).queryByText('Realized P/L on these sells')).not.toBeInTheDocument()
+    // The sells shown are added up.
+    expect(within(orders).getByText('Realized P/L of the sells shown').closest('tr')).toHaveTextContent('+$11.82')
+
+    // Filters narrow the list; Filled lists trades in the order they filled, latest first.
     fireEvent.click(within(orders).getByRole('button', { name: 'Filled (3)' }))
     expect(within(orders).queryByText('Limit 570.00')).not.toBeInTheDocument()
-    expect(within(orders).getByText('Filled at 580.03')).toBeInTheDocument()
-    expect(within(orders).getByText('Realized P/L on these sells').closest('tr')).toHaveTextContent('+$11.82')
+    const ids = () => within(orders).getAllByRole('row').slice(1, -1).map((r) => r.querySelector('td')?.textContent)
+    expect(ids()).toEqual(['1', '3', '2'])
+    fireEvent.click(within(orders).getByRole('button', { name: 'Working (1)' }))
+    expect(within(orders).queryByText('Realized P/L of the sells shown')).not.toBeInTheDocument()
   })
 
   it('selecting a watchlist row updates the chart and order entry', () => {
@@ -455,6 +460,7 @@ describe('workspace', () => {
     const column = saved.grid.root.data[0]
     column.data.push({ type: 'leaf', data: { views: ['activity'], activeView: 'activity', id: '99', hideHeader: true }, size: 100, visible: false })
     saved.panels.activity = { id: 'activity', contentComponent: 'activity', title: 'Activity' }
+    saved.activeGroup = '99' // it was the active group
     localStorage.setItem('paper-trade.layout.v2', JSON.stringify(saved))
 
     render(<App />)

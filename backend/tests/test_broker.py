@@ -84,11 +84,11 @@ def test_each_filled_sell_reports_its_realized_pnl_against_average_cost() -> Non
     move(b, et(2026, 1, 5, 13, 0))
     sell2 = b.place("MSFT", "sell", 25, "market")
     assert b.order_dict(buy1)["realized"] is None
-    assert b.order_dict(sell1)["realized"] == pytest.approx(round(15 * (sell1.fill_price - avg), 2))
-    assert b.order_dict(sell2)["realized"] == pytest.approx(round(25 * (sell2.fill_price - avg), 2))
-    # Together they make up the position's realized P&L.
+    assert b.order_dict(sell1)["realized"] == pytest.approx(15 * (sell1.fill_price - avg))
+    assert b.order_dict(sell2)["realized"] == pytest.approx(25 * (sell2.fill_price - avg))
+    # Together they make up the position's realized P&L, exactly (not rounded per order).
     total = b.order_dict(sell1)["realized"] + b.order_dict(sell2)["realized"]
-    assert total == pytest.approx(b.ledger().positions["MSFT"].realized, abs=0.01)
+    assert total == pytest.approx(b.ledger().positions["MSFT"].realized)
     # A working sell has realized nothing yet.
     b.place("MSFT", "buy", 5, "market")
     working = b.place("MSFT", "sell", 5, "limit", limit_price=10_000)

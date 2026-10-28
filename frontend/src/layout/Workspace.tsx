@@ -15,7 +15,7 @@ import { EdgeStrip } from './EdgeStrip'
 import { type Edge, edgeOf, savedSizes, withHidden } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
 import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
-import { buildDefaultLayout, COMPONENTS, dockPanel, floatGroup, keepChartSpace, mainGroup, PANEL_IDS, type PanelId, panelState, type PanelState, sideColumnTidier } from './panels'
+import { buildDefaultLayout, collapseEmptySideColumn, COMPONENTS, dockPanel, floatGroup, keepChartSpace, mainGroup, PANEL_IDS, type PanelId, panelState, type PanelState, sideColumnTidier } from './panels'
 import { snapFloatingResizes } from './floatingResize'
 import { snapPosition } from './snap'
 import { useEdgeStrips } from './useEdgeStrips'
@@ -185,6 +185,7 @@ export const Workspace = memo(function Workspace() {
     }
     // Before the side sizes are restored, which are relative to the chart's place.
     keepChartSpace(api, relayout)
+    if (saved) collapseEmptySideColumn(api)
     // StrictMode's development double-mount readies a second dockview on the same element.
     disposeSizes.current()
     if (host.current) disposeSizes.current = keepSidePanelSizes(api, host.current, saved)

@@ -162,6 +162,98 @@ body {
   position: absolute;
   inset: 0;
 }
+/* Edge strips (collapsed panels) around the dockview area; an edge without any takes no space. */
+.workspace-frame {
+  display: grid;
+  grid-template: 'top top top' auto 'left dock right' 1fr 'bottom bottom bottom' auto / auto 1fr auto;
+}
+.dock-host {
+  grid-area: dock;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+.dock-host > div {
+  position: absolute;
+  inset: 0;
+}
+.edge-strip {
+  display: flex;
+  gap: 10px;
+  padding: 4px 2px;
+  background: var(--bg);
+  border-color: var(--border);
+  border-style: solid;
+  border-width: 0;
+}
+.edge-left,
+.edge-right {
+  flex-direction: column;
+}
+.edge-left {
+  grid-area: left;
+  border-right-width: 1px;
+}
+.edge-right {
+  grid-area: right;
+  border-left-width: 1px;
+}
+.edge-top {
+  grid-area: top;
+  padding: 2px 4px;
+  border-bottom-width: 1px;
+}
+.edge-bottom {
+  grid-area: bottom;
+  padding: 2px 4px;
+  border-top-width: 1px;
+}
+.strip-group {
+  display: flex;
+  flex-direction: inherit;
+  gap: 2px;
+}
+.strip-tab {
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.edge-left .strip-tab,
+.edge-right .strip-tab {
+  padding: 8px 3px;
+  writing-mode: vertical-rl;
+}
+/* On the left, read from bottom to top, like VS Code and most IDEs. */
+.edge-left .strip-tab {
+  transform: rotate(180deg);
+}
+.strip-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+.strip-tab[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+/* A collapsed panel shown for now: outlined, so it's clear it will tuck away again. (An
+   overlay, because dockview sets an inline `outline: none` on groups.) */
+.workspace .dv-groupview.peeking {
+  position: relative;
+}
+.workspace .dv-groupview.peeking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border: 1px solid var(--accent);
+  pointer-events: none;
+}
 /* Match dockview's dark theme to the app's palette (more specific than the theme's own
    `.dockview-theme-dark` block, which sits on dockview's shell element). */
 .workspace .dockview-theme-dark {

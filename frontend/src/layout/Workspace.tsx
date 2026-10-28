@@ -1,5 +1,6 @@
 import {
   type DockviewApi,
+  type DockviewGroupPanel,
   type DockviewReadyEvent,
   DockviewReact,
   type FloatingGroupDragContext,
@@ -9,10 +10,14 @@ import {
 import 'dockview-react/dist/styles/dockview.css'
 import { type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppData } from './appDataContext'
+import { CollapseContext, useCollapse } from './collapseContext'
+import { EdgeStrip } from './EdgeStrip'
+import { type Edge, edgeOf, withHidden } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
 import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
 import { buildDefaultLayout, COMPONENTS, dockGroup, PANEL_IDS, type PanelId, reopenPanel } from './panels'
 import { snapPosition } from './snap'
+import { useEdgeStrips } from './useEdgeStrips'
 
 /** Holds the dockview API so the Panels menu (outside the workspace) can drive it. */
 export function LayoutProvider({ children }: { children: ReactNode }) {
@@ -70,12 +75,18 @@ const FLOAT_SIZE = { width: 340, height: 440 }
 const FLOAT_MIN = { width: 220, height: 180 }
 const CASCADE = 32
 const SAVE_DELAY_MS = 300
+const EDGES: Edge[] = ['top', 'left', 'right', 'bottom']
+const COLLAPSE_ICON: Record<Edge, string> = { left: '⇤', right: '⇥', top: '⤒', bottom: '⤓' }
 
 /** The dockable, floatable workspace that holds every panel. */
 export function Workspace() {
   const setApi = useContext(ApiSetterContext)
   const apiRef = useRef<DockviewApi | null>(null)
+  const [api, setLocalApi] = useState<DockviewApi | null>(null)
+  const frame = useRef<HTMLDivElement>(null)
+  const host = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<number | undefined>(undefined)
+  const { peekRef, ...collapse } = useEdgeStrips(api, frame)
 
   // Save right away when the page is closing: a delayed save would be lost, and dockview
   // reports layout changes a moment later, so there may not even be one pending yet.
@@ -87,7 +98,7 @@ export function Workspace() {
       window.clearTimeout(saveTimer.current)
       saveTimer.current = undefined
       try {
-        if (apiRef.current) saveLayout(apiRef.current.toJSON())
+        if (apiRef.current) saveLayout(snapshot(apiRef.current, peekRef.current))
       } catch {
         // The workspace was already torn down; its last state was saved before.
       }
@@ -97,7 +108,7 @@ export function Workspace() {
       window.removeEventListener('pagehide', save)
       if (saveTimer.current !== undefined) save()
     }
-  }, [])
+  }, [peekRef])
 
   const onReady = (event: DockviewReadyEvent) => {
     const api = event.api
@@ -111,60 +122,97 @@ export function Workspace() {
       clearLayout()
       buildDefaultLayout(api)
     }
-    keepSidePanelSizes(api)
+    if (host.current) keepSidePanelSizes(api, host.current)
     // Save shortly after any change (moves, resizes, floats, closes).
     api.onDidLayoutChange(() => {
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(() => {
         saveTimer.current = undefined
-        saveLayout(api.toJSON())
+        saveLayout(snapshot(api, peekRef.current))
       }, SAVE_DELAY_MS)
     })
     setApi(api)
+    setLocalApi(api)
   }
 
   return (
-    <DockviewReact
-      theme={themeDark}
-      components={COMPONENTS}
-      rightHeaderActionsComponent={GroupActions}
-      onReady={onReady}
-      floatingGroupBounds="boundedWithinViewport"
-      // Floating windows snap to the workspace edges and to each other.
-      transformFloatingGroupDrag={(ctx: FloatingGroupDragContext) => snapPosition(ctx.proposed, ctx.container, ctx.others)}
-    />
+    <CollapseContext.Provider value={collapse}>
+      <div className="workspace-frame" ref={frame}>
+        {EDGES.map((edge) => (
+          <EdgeStrip key={edge} edge={edge} />
+        ))}
+        <div className="dock-host" ref={host}>
+          <DockviewReact
+            theme={themeDark}
+            components={COMPONENTS}
+            rightHeaderActionsComponent={GroupActions}
+            onReady={onReady}
+            floatingGroupBounds="boundedWithinViewport"
+            // Floating windows snap to the workspace edges and to each other.
+            transformFloatingGroupDrag={(ctx: FloatingGroupDragContext) => snapPosition(ctx.proposed, ctx.container, ctx.others)}
+          />
+        </div>
+      </div>
+    </CollapseContext.Provider>
   )
+}
+
+/** The layout to save: a group the user is only peeking at is saved collapsed. */
+function snapshot(api: DockviewApi, peeking: string | null) {
+  return withHidden(api.toJSON(), new Set(peeking ? [peeking] : []))
 }
 
 type Size = { width: number; height: number }
 
-/** When a panel leaves the grid (popped out or closed), the freed space would be shared
- *  among all remaining panels, so a side panel balloons. Instead, put the other panels
- *  back to their sizes from just before and let the chart's group take up the slack.
- *  (Only while the chart is docked, and never from a maximized layout, where the hidden
- *  groups report collapsed sizes.) */
-function keepSidePanelSizes(api: DockviewApi): void {
+/** dockview shares out any change in space among all the panels, so a side panel balloons
+ *  when a neighbour is popped out, closed or collapsed, gives way when a collapsed one comes
+ *  back, and grows with the window or when an edge strip comes or goes. Instead, put the
+ *  other panels back to their width (beside the chart) or height (above or below it) from
+ *  just before and let the chart's group take up the difference. (Only while the chart is
+ *  docked, and never from a maximized layout, where the hidden groups report collapsed
+ *  sizes.) Groups are tracked as objects, not ids: a new layout reuses ids. */
+function keepSidePanelSizes(api: DockviewApi, host: HTMLElement): void {
   const gridSizes = () =>
-    new Map<string, Size>(api.groups.filter((g) => g.api.location.type === 'grid').map((g) => [g.id, { width: g.width, height: g.height }]))
+    new Map<DockviewGroupPanel, Size>(
+      api.groups.filter((g) => g.api.location.type === 'grid' && g.api.isVisible).map((g) => [g, { width: g.width, height: g.height }]),
+    )
   let before = gridSizes()
+  const restore = (now: Map<DockviewGroupPanel, Size>) => {
+    const chart = api.getPanel('chart')?.group
+    if (!chart || chart.api.location.type !== 'grid') return
+    const layout = api.toJSON()
+    for (const [g] of now) {
+      const size = before.get(g)
+      if (g === chart || !size) continue
+      const edge = edgeOf(layout, g.id, chart.id)
+      g.api.setSize(edge === 'left' || edge === 'right' ? { width: size.width } : { height: size.height })
+    }
+  }
   api.onDidLayoutChange(() => {
     if (api.hasMaximizedGroup()) return // keep the pre-maximize sizes as the reference
     const now = gridSizes()
-    const lost = [...before.keys()].some((id) => !now.has(id))
-    const chart = api.getPanel('chart')?.group
-    if (lost && chart && chart.api.location.type === 'grid') {
-      for (const g of api.groups) {
-        const size = before.get(g.id)
-        if (g !== chart && g.api.location.type === 'grid' && size) g.api.setSize(size)
-      }
-      // Those setSize calls raise another (batched) layout change, which records the result.
-    }
+    // Those setSize calls raise another (batched) layout change, which records the result.
+    if (now.size !== before.size || [...now.keys()].some((g) => !before.has(g))) restore(now)
     before = gridSizes()
   })
+  // A resize of the workspace doesn't raise a layout change. Lay dockview out at the new
+  // size right away (it would on its own a moment later) and put the side panels back.
+  const observer = new ResizeObserver(([entry]) => {
+    const { width, height } = entry.contentRect
+    if (!width || !height || (width === api.width && height === api.height)) return
+    api.layout(width, height)
+    if (api.hasMaximizedGroup()) return
+    restore(gridSizes())
+    before = gridSizes()
+  })
+  // Like the subscription, it lasts as long as the workspace's elements.
+  observer.observe(host)
 }
 
-/** Buttons at the right of each group's tab bar: float or dock it, maximize or restore it. */
+/** Buttons at the right of each group's tab bar: collapse it to an edge (or pin it open),
+ *  float or dock it, maximize or restore it. */
 function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
+  const collapse = useCollapse()
   const [floating, setFloating] = useState(group.api.location.type === 'floating')
   const [maximized, setMaximized] = useState(group.api.isMaximized())
 
@@ -191,8 +239,27 @@ function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
     containerApi.addFloatingGroup(group, { x, y, width, height })
   }
 
+  // The chart is the main view, so its group doesn't collapse.
+  const edge = !floating && !maximized && !group.panels.some((p) => p.id === 'chart') ? collapse?.edges.get(group.id) : undefined
+  const peeking = collapse?.peeking === group.id
+
   return (
     <div className="group-actions">
+      {peeking && (
+        <button className="group-action" title="Keep open" aria-label="Pin panel open" onClick={() => collapse?.pin()}>
+          <PinIcon />
+        </button>
+      )}
+      {edge && (
+        <button
+          className="group-action"
+          title={`Collapse to the ${edge} edge`}
+          aria-label="Collapse panel"
+          onClick={() => collapse?.collapse(group)}
+        >
+          {COLLAPSE_ICON[edge]}
+        </button>
+      )}
       {!floating && (
         <button
           className="group-action"
@@ -212,5 +279,13 @@ function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
         {floating ? '⇲' : '⧉'}
       </button>
     </div>
+  )
+}
+
+function PinIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <path d="M10.5 1.5 14.5 5.5 13 6l-2.5 2.5.5 3-1.5 1.5L7 10.5 3 14.5 1.5 13l4-4L3 6.5 4.5 5l3 .5L10 3z" />
+    </svg>
   )
 }

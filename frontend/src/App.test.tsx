@@ -315,6 +315,77 @@ describe('workspace', () => {
     unmount()
   })
 
+  it('collapses a side panel to an edge strip, peeks at it, and pins it open', () => {
+    render(<App />)
+    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
+    // The chart is the main view: it doesn't collapse.
+    expect(within(group('Chart')).queryByRole('button', { name: 'Collapse panel' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Collapse panel' }))
+    const strip = screen.getByRole('toolbar', { name: 'Collapsed panels (left)' })
+    const tab = within(strip).getByRole('button', { name: 'Watchlist' })
+    expect(tab).toHaveAttribute('aria-pressed', 'false')
+
+    // Peek: shown until a click elsewhere in the workspace.
+    fireEvent.click(tab)
+    expect(tab).toHaveAttribute('aria-pressed', 'true')
+    expect(group('Watchlist')).toHaveClass('peeking')
+    fireEvent.pointerDown(panel('Chart'))
+    expect(tab).toHaveAttribute('aria-pressed', 'false')
+    expect(group('Watchlist')).not.toHaveClass('peeking')
+
+    // A click outside the workspace (the top bar) leaves it open; pinning keeps it.
+    fireEvent.click(tab)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Panels ▾' }))
+    expect(tab).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Pin panel open' }))
+    expect(screen.queryByRole('toolbar', { name: /Collapsed panels/ })).not.toBeInTheDocument()
+    fireEvent.pointerDown(panel('Chart'))
+    expect(group('Watchlist')).not.toHaveClass('peeking')
+  })
+
+  it('puts each collapsed panel on its own edge, with one tab per panel in a group', () => {
+    render(<App />)
+    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
+    fireEvent.click(within(group('Order Entry')).getByRole('button', { name: 'Collapse panel' }))
+    fireEvent.click(within(group('Positions')).getByRole('button', { name: 'Collapse panel' }))
+    expect(within(screen.getByRole('toolbar', { name: 'Collapsed panels (right)' })).getByRole('button', { name: 'Order Entry' })).toBeInTheDocument()
+    const bottom = screen.getByRole('toolbar', { name: 'Collapsed panels (bottom)' })
+    expect(within(bottom).getAllByRole('button').map((b) => b.textContent)).toEqual(['Positions', 'Orders', 'Activity'])
+
+    // A tab brings its own panel to the front.
+    fireEvent.click(within(bottom).getByRole('button', { name: 'Orders' }))
+    expect(within(bottom).getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-pressed', 'true')
+    // The same tab again collapses it.
+    fireEvent.click(within(bottom).getByRole('button', { name: 'Orders' }))
+    expect(within(bottom).getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('saves collapsed panels as collapsed, even one being peeked at', async () => {
+    const { unmount } = render(<App />)
+    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
+    fireEvent.click(within(group('Watchlist')).getByRole('button', { name: 'Collapse panel' }))
+    fireEvent.click(within(screen.getByRole('toolbar', { name: /left/ })).getByRole('button', { name: 'Watchlist' }))
+    window.dispatchEvent(new Event('pagehide'))
+    unmount()
+
+    render(<App />)
+    const tab = within(screen.getByRole('toolbar', { name: 'Collapsed panels (left)' })).getByRole('button', { name: 'Watchlist' })
+    expect(tab).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('a panel picked in the Panels menu expands its collapsed group', async () => {
+    render(<App />)
+    const group = (name: string) => panel(name).closest('.dv-groupview') as HTMLElement
+    fireEvent.click(within(group('Positions')).getByRole('button', { name: 'Collapse panel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Panels ▾' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ })) // close it
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Activity/ })) // reopen: joins Positions
+    // dockview reports the layout change a moment later.
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: /Collapsed panels/ })).not.toBeInTheDocument())
+    expect(within(group('Activity')).getByText('Positions')).toBeInTheDocument() // tabbed with it
+  })
+
   it('ignores a corrupted saved layout', () => {
     localStorage.setItem('paper-trade.layout.v1', '{"grid": "nonsense"}')
     render(<App />)

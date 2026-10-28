@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-27, after Phase 2b was merged._
+_Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 
 ## Where things stand
 
@@ -11,7 +11,8 @@ _Last updated: 2026-10-27, after Phase 2b was merged._
 | 4. Interactive charts + 5 years of history | Merged | #11 |
 | 5. Indicators | Merged | #12 |
 | 5.5a. Customizable workspace (dockview): docking, floating windows, snapping, resize, maximize, Panels menu, saved layout | Merged | #13 |
-| **5.5b. Workspace, next steps** | **Next.** See below. | — |
+| 5.5b. Collapse panels to edge strips (peek, pin; side panels keep their size) | Merged | #16 |
+| **5.5c. Workspace, next steps** | **Next.** See below. | — |
 | 6. Watchlists and quotes | After 5.5. | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
@@ -25,16 +26,13 @@ be smooth and intuitive. Their decisions: **in-app floating windows first (dockv
 multiple copies of a view**; otherwise follow Claude's recommendations (docked panels shrink the
 chart and floating ones cover it; layout saved per browser; laptop/desktop first).
 
-Step 1 (done, #13): see Architecture → `layout/`. Next steps, smallest first:
-1. **Collapse panels to edge strips**: a thin tab on the left/right/bottom edge that expands
-   on click and can be pinned, like VS Code. dockview's auto-hide edge groups are in its paid
-   enterprise package, so build this ourselves, e.g. hide the group
-   (`group.api.setVisible(false)`) and render our own edge strip of buttons.
-2. **Layout presets**: "Default", "Chart focus" (side panels collapsed), "Trading", plus saving
+Step 1 (#13) and step 2, edge strips (#16): see Architecture → `layout/`. Next steps,
+smallest first:
+1. **Layout presets**: "Default", "Chart focus" (side panels collapsed), "Trading", plus saving
    the current layout under a name.
-3. **Separate browser windows** (dockview `addPopoutGroup`), optional, for second monitors.
+2. **Separate browser windows** (dockview `addPopoutGroup`), optional, for second monitors.
    The OS places them; the web page can't snap them to screen edges.
-4. **Narrow screens**: stacked tabs instead of floating windows.
+3. **Narrow screens**: stacked tabs instead of floating windows.
 Then Phase 6 (watchlists and quotes) adds its views as panels.
 
 **The user is not QA**: verify everything (tests, build, lint with `--deny-warnings`, a
@@ -152,11 +150,26 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     the API ref in effect cleanup: StrictMode's dev double-mount broke saving that way, and
     `App.test` covers it under StrictMode; snapping through
     `transformFloatingGroupDrag` → `snap.ts`), `keepSidePanelSizes` (when a group leaves the
-    grid, the others go back to their previous sizes and the chart takes the space), and
+    grid, is collapsed or comes back, or the workspace resizes, the other groups go back to
+    their previous width beside the chart or height above/below it, and the chart takes the
+    difference; groups are tracked as objects because a new layout reuses ids; a
+    ResizeObserver handles resizes, which raise no layout change), and
     `GroupActions` (⤢ maximize; ⧉ float, cascading new windows 32px apart; ⇲ dock back via
     `dockGroup`, which uses the same `dockSpot` rules as `reopenPanel`: floating panels never
     count as a reference, and docking the chart restores the side widths). `PanelsMenu.tsx`: show or hide panels, Reset
     layout.
+  - **Edge strips** (`useEdgeStrips.ts`, `EdgeStrip.tsx`, `collapseContext.ts`, `edges.ts`): a
+    collapsed group is a hidden grid group (`group.api.setVisible(false)`; dockview saves
+    `visible` in the layout JSON, so it survives reloads, and maximize leaves hidden groups
+    hidden). `edgeOf` picks the edge from the serialized grid: where the group's path and the
+    chart's split, the branch orientation and order give left/right/top/bottom. Strips sit in
+    a CSS grid around `.dock-host`. A strip tab **peeks** (shows the group, outlined via
+    `.peeking::after`, because dockview sets an inline `outline: none`); a pointerdown
+    elsewhere inside the workspace collapses it, clicks outside it (top bar, dialogs) don't;
+    the pin button keeps it open. Saving uses `withHidden` so a peeked group is saved
+    collapsed. `reopenPanel`/`dockGroup` expand a collapsed group a panel lands in. The chart's
+    group never collapses. dockview's `onDidLayoutChange` arrives a moment after
+    `setVisible`, so tests `waitFor` it.
   - **Layering:** `.topbar` has z-index 1 over `.workspace` (`isolation: isolate`). Dialogs go
     through `components/Modal.tsx`, a portal to `<body>` at z-index 100. **dockview 8.5 CSS
     bug:** `.dv-resize-container { --dv-overlay-z-index: var(--dv-overlay-z-index, 999) }` refers
@@ -200,7 +213,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 96 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 104 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

@@ -22,7 +22,7 @@ class FakeTime:
 def make_service() -> tuple[MarketService, FakeTime]:
     real = FakeTime()
     clock = SimClock(start=START, real_time=real)
-    return MarketService(clock, MarketEngine(START), Store(":memory:")), real
+    return MarketService(clock, MarketEngine(START), Store(":memory:"), history_days=5), real
 
 
 def test_tick_publishes_only_when_time_moves() -> None:

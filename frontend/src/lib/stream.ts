@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Order, ProgressMessage, StreamMessage, TickMessage } from './types'
+import type { HistoryMessage, Order, ProgressMessage, StreamMessage, TickMessage } from './types'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -16,6 +16,7 @@ export function useStream() {
   const [tick, setTick] = useState<TickMessage | null>(null)
   const [progress, setProgress] = useState<ProgressMessage | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
+  const [history, setHistory] = useState<HistoryMessage | null>(null)
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -35,6 +36,8 @@ export function useStream() {
           setProgress(msg)
         } else if (msg.type === 'orders') {
           setOrders(msg.orders)
+        } else if (msg.type === 'history') {
+          setHistory(msg.done < msg.total ? msg : null)
         }
       }
       ws.onclose = () => {
@@ -52,5 +55,5 @@ export function useStream() {
     }
   }, [])
 
-  return { status, tick, progress, orders }
+  return { status, tick, progress, orders, history }
 }

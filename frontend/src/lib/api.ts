@@ -1,3 +1,4 @@
+import type { Bar, Interval } from './bars'
 import type { Account, ClockState, GotoAction, Order, OrderPreview, OrderType, Side, TimeInForce } from './types'
 
 export async function updateClock(update: { speed?: number; paused?: boolean }): Promise<ClockState> {
@@ -106,4 +107,17 @@ export function cancelOrder(id: number): Promise<Order> {
 
 export function resetAccount(startingCash: number): Promise<Account> {
   return send('/api/account/reset', 'POST', { starting_cash: startingCash })
+}
+
+export interface BarsPage {
+  bars: Bar[]
+  /** Whether older bars exist before the first one. */
+  more: boolean
+}
+
+/** Chart bars, oldest first: the latest `count`, or those before `end` (Unix seconds). */
+export function fetchBars(symbol: string, interval: Interval, end?: number, count = 500): Promise<BarsPage> {
+  const params = new URLSearchParams({ symbol, interval, count: String(count) })
+  if (end !== undefined) params.set('end', new Date(end * 1000).toISOString())
+  return send(`/api/bars?${params}`, 'GET')
 }

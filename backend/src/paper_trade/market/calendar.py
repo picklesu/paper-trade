@@ -32,6 +32,11 @@ def next_trading_day(d: date) -> date:
     return np.busday_offset(np.datetime64(d, "D") + ONE_DAY, 0, roll="forward").astype(object)
 
 
+def previous_trading_day(d: date) -> date:
+    """The last trading day before `d`."""
+    return np.busday_offset(np.datetime64(d, "D") - ONE_DAY, 0, roll="backward").astype(object)
+
+
 def session_open(d: date) -> datetime:
     return datetime.combine(d, OPEN, tzinfo=MARKET_TZ).astimezone(UTC)
 

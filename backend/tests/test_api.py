@@ -8,7 +8,7 @@ from paper_trade.main import create_app
 
 @pytest.fixture
 def client(tmp_path) -> Iterator[TestClient]:
-    with TestClient(create_app(db_path=tmp_path / "test.db")) as c:
+    with TestClient(create_app(history_days=5, db_path=tmp_path / "test.db")) as c:
         yield c
 
 
@@ -162,7 +162,7 @@ def test_rewind_preview_lists_trades_to_erase(client: TestClient) -> None:
 
 def test_state_survives_restart(tmp_path) -> None:
     db = tmp_path / "restart.db"
-    with TestClient(create_app(db_path=db)) as c:
+    with TestClient(create_app(history_days=5, db_path=db)) as c:
         c.post("/api/clock", json={"paused": True, "speed": 60})
         c.post("/api/clock/goto", json={"time": "2027-02-01T11:00"})
         c.post("/api/orders", json={"symbol": "MSFT", "side": "buy", "qty": 7, "type": "market"})
@@ -171,9 +171,11 @@ def test_state_survives_restart(tmp_path) -> None:
         quotes = c.get("/api/quotes").json()
         clock = c.get("/api/clock").json()
 
-    with TestClient(create_app(db_path=db)) as c:
+    with TestClient(create_app(history_days=5, db_path=db)) as c:
         # The market resumes where it stopped, not at the real-world time.
-        assert c.get("/api/clock").json() == clock
+        volatile = ("timeline", "building_history")  # per-run counters, not saved state
+        strip = lambda d: {k: v for k, v in d.items() if k not in volatile}  # noqa: E731
+        assert strip(c.get("/api/clock").json()) == strip(clock)
         assert c.get("/api/quotes").json() == quotes
         assert c.get("/api/account").json() == account
         assert len(c.get("/api/orders").json()) == 2
@@ -212,7 +214,7 @@ def test_pause_saves_the_current_market_time(tmp_path) -> None:
     from paper_trade.store import Store
 
     db = tmp_path / "pause.db"
-    with TestClient(create_app(db_path=db)) as c:
+    with TestClient(create_app(history_days=5, db_path=db)) as c:
         c.post("/api/clock", json={"speed": 600})
         time.sleep(0.3)  # about 3 market-minutes; the engine may lag the clock by a tick
         c.post("/api/clock", json={"paused": True})

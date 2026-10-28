@@ -83,8 +83,20 @@ async def goto(body: Goto, request: Request) -> dict:
     svc = market(request)
     try:
         action, target = await svc.goto(parse_market_time(body.time), new_future=body.future == "new")
-    except BusyError:
-        raise HTTPException(409, "a time jump is already in progress") from None
+    except BusyError as e:
+        raise HTTPException(409, str(e)) from None
     except ValueError as e:
         raise HTTPException(422, str(e)) from None
     return {"action": action, "target": target.isoformat(), "clock": svc.clock_state()}
+
+
+@router.get("/bars")
+async def get_bars(request: Request, symbol: str, interval: str = "5m", end: str | None = None, count: int = 500) -> dict:
+    """Chart bars: up to `count` before `end` (default now, including the live bar), oldest first."""
+    svc = market(request)
+    if symbol not in svc.engine.quotes:
+        raise HTTPException(422, f"Unknown symbol {symbol}")
+    try:
+        return svc.history.bars(symbol, interval, parse_market_time(end) if end else None, count)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None

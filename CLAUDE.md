@@ -41,11 +41,16 @@ the same folder. Installed dependencies are platform-specific:
 - For visual checks: install Playwright and Chromium in a scratchpad folder, run the app
   (backend on 8000, mirrored Vite on another port such as 5199), and take a screenshot.
 
+- **Adding a frontend package:** run `npm install <pkg>` in the scratchpad mirror, then copy
+  `package.json` and `package-lock.json` back into `frontend/`. `server.sh on/restart`
+  reinstalls on the Mac when the lockfile is newer than `node_modules/.package-lock.json`.
+- CI (`.github/workflows/ci.yml`) must be green before merging: `gh pr checks <N> --watch`.
+
 ## Commands
 
 ```bash
 ./server.sh on|off|restart|status|logs   # user's one-command control (background)
 cd backend && uv run pytest              # backend tests
 cd frontend && npm test                  # frontend tests (from a mirror if in the sandbox)
-cd frontend && npm run build && npx oxlint
+cd frontend && npm run build && npx oxlint --deny-warnings   # CI treats warnings as errors
 ```

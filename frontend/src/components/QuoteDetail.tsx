@@ -1,6 +1,7 @@
 import { direction, percent, price, signed, volume } from '../lib/format'
 import type { Quote } from '../lib/types'
 
+/** One-line quote header above the chart. */
 export function QuoteDetail({ quote }: { quote: Quote }) {
   const dir = direction(quote.change)
   return (
@@ -8,8 +9,6 @@ export function QuoteDetail({ quote }: { quote: Quote }) {
       <div className="quote-head">
         <span className="quote-symbol">{quote.symbol}</span>
         <span className="quote-name">{quote.name}</span>
-      </div>
-      <div className="quote-price">
         <span className="quote-last">{price(quote.last)}</span>
         <span className={dir}>
           {signed(quote.change)} ({percent(quote.change_pct)})
@@ -24,7 +23,6 @@ export function QuoteDetail({ quote }: { quote: Quote }) {
         <Stat label="Prev Close" value={price(quote.prev_close)} />
         <Stat label="Volume" value={volume(quote.volume)} />
       </dl>
-      <p className="muted">Candlestick chart arrives in Phase 4.</p>
     </div>
   )
 }

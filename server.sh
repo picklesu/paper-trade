@@ -96,8 +96,10 @@ stop_one() {
 
 cmd_on() {
   echo "Turning on Paper Trade…"
-  if [ ! -d "$ROOT/frontend/node_modules" ]; then
-    echo "  installing frontend packages (first run)…"
+  # Install frontend packages on the first run, and again whenever the package list changed.
+  if [ ! -f "$ROOT/frontend/node_modules/.package-lock.json" ] ||
+    [ "$ROOT/frontend/package-lock.json" -nt "$ROOT/frontend/node_modules/.package-lock.json" ]; then
+    echo "  installing frontend packages…"
     (cd "$ROOT/frontend" && npm install --silent) || { echo "npm install failed"; return 1; }
   fi
 

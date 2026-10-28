@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLayout } from './layoutContext'
-import { PANEL_IDS, PANELS, type PanelState } from './panels'
+import type { Edge } from './edges'
+import { PANELS, SIDE_PANELS } from './panels'
 
-const CHOICES: [PanelState, string, string][] = [
-  ['open', 'Open', 'Docked beside the chart'],
-  ['collapsed', 'Collapsed', 'A tab on the left edge; click it to look'],
-  ['floating', 'Float', 'A window over the chart'],
-  ['off', 'Off', 'Hidden'],
+const EDGES: [Edge, string, string][] = [
+  ['left', '◀', 'Left edge'],
+  ['right', '▶', 'Right edge'],
+  ['top', '▲', 'Top edge'],
+  ['bottom', '▼', 'Bottom edge'],
 ]
-// The chart is the main view: always shown, docked or floating.
-const CHART_CHOICES = CHOICES.filter(([state]) => state === 'open' || state === 'floating')
 
-/** Top-bar menu that places each panel (open, collapsed, floating or off) and resets the layout. */
+/** Top-bar menu that places each panel on an edge, turns it on or off, and resets the layout.
+ *  The chart is always in the middle; opening and collapsing is the edge tabs' job. */
 export function PanelsMenu() {
   const layout = useLayout()
   const [open, setOpen] = useState(false)
@@ -37,25 +37,38 @@ export function PanelsMenu() {
       </button>
       {open && (
         <div className="menu-panel panels-menu-panel" role="menu" aria-label="Panels">
-          {PANEL_IDS.map((id) => (
-            <div key={id} className="panel-row">
-              <span className="panel-row-name">{PANELS[id].title}</span>
-              <div className="seg" role="radiogroup" aria-label={PANELS[id].title}>
-                {(id === 'chart' ? CHART_CHOICES : CHOICES).map(([state, label, hint]) => (
-                  <button
-                    key={state}
-                    role="radio"
-                    aria-checked={layout.states[id] === state}
-                    className={layout.states[id] === state ? 'ctl active' : 'ctl'}
-                    title={hint}
-                    onClick={() => layout.setState(id, state)}
-                  >
-                    {label}
-                  </button>
-                ))}
+          {SIDE_PANELS.map((id) => {
+            const place = layout.places[id]
+            return (
+              <div key={id} className="panel-row" role="group" aria-label={PANELS[id].title}>
+                <span className="panel-row-name">{PANELS[id].title}</span>
+                <div className="seg" role="radiogroup" aria-label={`${PANELS[id].title} edge`}>
+                  {EDGES.map(([edge, icon, name]) => (
+                    <button
+                      key={edge}
+                      role="radio"
+                      aria-checked={place.edge === edge}
+                      aria-label={name}
+                      title={name}
+                      className={place.edge === edge ? 'ctl icon-ctl active' : 'ctl icon-ctl'}
+                      onClick={() => layout.setEdge(id, edge)}
+                    >
+                      {icon}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={place.state !== 'off'}
+                  aria-label={`${PANELS[id].title} on`}
+                  className={place.state !== 'off' ? 'ctl onoff active' : 'ctl onoff'}
+                  onClick={() => layout.setOn(id, place.state === 'off')}
+                >
+                  {place.state !== 'off' ? 'On' : 'Off'}
+                </button>
               </div>
-            </div>
-          ))}
+            )
+          })}
           <div className="menu-sep" />
           <button
             role="menuitem"
@@ -68,8 +81,7 @@ export function PanelsMenu() {
             Reset layout
           </button>
           <p className="menu-hint">
-            Collapsed panels wait as tabs on the left edge: click one to look, click elsewhere to tuck it away. Floating
-            windows move by their top bar and resize from any edge.
+            Put each panel on any edge. Its tab on that edge opens or collapses it. Drag the dividers to resize.
           </p>
         </div>
       )}

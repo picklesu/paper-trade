@@ -201,7 +201,7 @@ body {
 }
 .edge-strip {
   display: flex;
-  gap: 10px;
+  gap: 2px;
   padding: 4px 2px;
   background: var(--bg);
   border-color: var(--border);
@@ -229,11 +229,6 @@ body {
   grid-area: bottom;
   padding: 2px 4px;
   border-top-width: 1px;
-}
-.strip-group {
-  display: flex;
-  flex-direction: inherit;
-  gap: 2px;
 }
 .strip-tab {
   padding: 3px 6px;
@@ -279,19 +274,6 @@ body {
   border-color: var(--accent);
   color: var(--text);
 }
-/* A collapsed panel shown for now: outlined, so it's clear it will tuck away again. (An
-   overlay, because dockview sets an inline `outline: none` on groups.) */
-.workspace .dv-groupview.peeking {
-  position: relative;
-}
-.workspace .dv-groupview.peeking::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  border: 1px solid var(--accent);
-  pointer-events: none;
-}
 /* Match dockview's dark theme to the app's palette (more specific than the theme's own
    `.dockview-theme-dark` block, which sits on dockview's shell element). */
 .workspace .dockview-theme-dark {
@@ -316,41 +298,6 @@ body {
   --dv-tabs-and-actions-container-height: 30px;
   --dv-floating-box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
   --dv-floating-titlebar-background-color: var(--bg);
-}
-/* dockview 8.5's CSS sets `--dv-overlay-z-index: var(--dv-overlay-z-index, 999)` on floating
-   windows: a self-reference, which browsers treat as invalid, so floating windows and their
-   resize handles lose their stacking order (the left handle ends up under the content).
-   Set it plainly. */
-.workspace .dv-resize-container,
-.workspace .dv-render-overlay {
-  --dv-overlay-z-index: 999;
-}
-/* The bar above a floating window's tabs moves it. */
-.workspace .dv-floating-titlebar {
-  display: flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 0 8px;
-  cursor: grab;
-}
-/* The panel's name, set by the workspace (`data-title`). */
-.workspace .dv-floating-titlebar::before {
-  content: attr(data-title);
-  color: var(--muted);
-  font-size: 11px;
-  pointer-events: none;
-}
-.workspace .dv-floating-titlebar:active {
-  cursor: grabbing;
-}
-.chart-space {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  background: var(--bg);
-  color: var(--muted);
-  font-size: 12px;
 }
 .dock-panel {
   height: 100%;
@@ -405,7 +352,17 @@ body {
   background: var(--border);
 }
 .panels-menu-panel {
-  width: 330px;
+  width: 400px;
+}
+.panel-row-name {
+  flex: 1;
+}
+.panel-row .onoff {
+  min-width: 40px;
+}
+.panel-row .icon-ctl {
+  min-width: 24px;
+  font-size: 10px;
 }
 .panel-row {
   display: flex;

@@ -2,8 +2,8 @@ import type { SerializedDockview } from 'dockview-react'
 
 // Bump when panel ids or the default arrangement change incompatibly: old saved
 // layouts are then ignored instead of half-applied. (v2: no tab bars, one panel per group,
-// side panels collapsed to the left by default.)
-const KEY = 'paper-trade.layout.v2'
+// side panels collapsed to the left by default. v3: no floating windows; panels on any edge.)
+const KEY = 'paper-trade.layout.v3'
 
 /** The saved layout for this browser, if any (storage can be unavailable), without panels
  *  that no longer exist (`known` are the component names; e.g. Activity was removed). */

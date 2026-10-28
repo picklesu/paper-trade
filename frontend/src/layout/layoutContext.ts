@@ -1,11 +1,15 @@
 import type { DockviewApi } from 'dockview-react'
 import { createContext, useContext } from 'react'
-import type { PanelId, PanelState } from './panels'
+import type { Edge } from './edges'
+import type { PanelId, PanelPlace } from './panels'
 
 export interface LayoutControls {
-  /** How each panel is shown: open (docked), collapsed to the edge strip, floating, or off. */
-  states: Record<PanelId, PanelState>
-  setState: (id: PanelId, state: PanelState) => void
+  /** Where each panel is: open or collapsed on an edge, or off. */
+  places: Record<PanelId, PanelPlace>
+  /** Turn a panel on (it opens on its edge) or off. */
+  setOn: (id: PanelId, on: boolean) => void
+  /** Move a panel to an edge, keeping it open or collapsed (an off panel comes back collapsed). */
+  setEdge: (id: PanelId, edge: Edge) => void
   reset: () => void
 }
 

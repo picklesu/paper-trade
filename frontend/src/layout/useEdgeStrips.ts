@@ -1,120 +1,45 @@
 import type { DockviewApi } from 'dockview-react'
-import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CollapseControls, CollapsedGroup } from './collapseContext'
+import { useEffect, useMemo, useState } from 'react'
+import type { StripControls, StripTab } from './collapseContext'
 import { edgeOf } from './edges'
-import { mainGroup, PANELS, type PanelId, showGroup } from './panels'
+import { PANELS, type PanelId, SIDE_PANELS, showGroup } from './panels'
 
-const titleOf = (id: string) => PANELS[id as PanelId]?.title ?? id
-// Not api.getGroup: its type lacks the group's element.
-const groupOf = (api: DockviewApi, id: string) => api.groups.find((g) => g.id === id)
-
-/** Collapsing docked groups to edge strips, like VS Code's side bars. A collapsed group is
- *  a hidden grid group (dockview saves that with the layout, so it stays collapsed across
- *  reloads); peeking shows it until the next click elsewhere in the workspace. */
-export function useEdgeStrips(
-  api: DockviewApi | null,
-  frame: RefObject<HTMLElement | null>,
-  // Kept up to date with the peeked group's id, for the workspace to read when saving.
-  peekRef: RefObject<string | null>,
-  // Pinning changes what gets saved without changing the layout, so it asks for a save.
-  onPinned: () => void,
-): CollapseControls {
-  const [collapsed, setCollapsed] = useState<CollapsedGroup[]>([])
-  const [peeking, setPeeking] = useState<string | null>(null)
-  const sync = useRef<() => void>(() => {})
-  const pinned = useRef(onPinned)
-  useEffect(() => {
-    pinned.current = onPinned
-  })
-
-  const setPeek = useCallback(
-    (id: string | null) => {
-      peekRef.current = id
-      setPeeking(id)
-    },
-    [peekRef],
-  )
+/** The edge strips, like VS Code's side bars: a tab for every panel on an edge, which opens
+ *  or collapses it. A collapsed panel is a hidden grid group (dockview saves that with the
+ *  layout, so it stays collapsed across reloads). */
+export function useEdgeStrips(api: DockviewApi | null): StripControls {
+  const [tabs, setTabs] = useState<StripTab[]>([])
 
   useEffect(() => {
     if (!api) return
-    sync.current = () => {
+    const sync = () => {
       const layout = api.toJSON()
-      const chartId = mainGroup(api)?.id
-      const next: CollapsedGroup[] = []
-      for (const g of api.groups) {
-        if (g.api.location.type !== 'grid') continue
-        if (!g.api.isVisible || g.id === peekRef.current) {
-          next.push({ id: g.id, edge: edgeOf(layout, g.id, chartId), panels: g.panels.map((p) => ({ id: p.id, title: titleOf(p.id) })), activePanel: g.activePanel?.id })
-        }
+      const chartId = api.getPanel('chart')?.group.id
+      const next: StripTab[] = []
+      for (const id of SIDE_PANELS) {
+        const group = api.getPanel(id)?.group
+        if (!group || group.api.location.type !== 'grid') continue
+        next.push({ groupId: group.id, panelId: id, title: PANELS[id as PanelId].title, edge: edgeOf(layout, group.id, chartId), open: group.api.isVisible })
       }
-      if (peekRef.current && !next.some((c) => c.id === peekRef.current)) setPeek(null)
-      setCollapsed(next)
+      // Only when something changed: layout changes come in on every divider drag.
+      setTabs((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next))
     }
-    sync.current()
-    const run = () => sync.current()
-    const subs = [
-      api.onDidLayoutChange(run),
-      api.onDidAddPanel(run),
-      api.onDidRemovePanel(run),
-      api.onDidActivePanelChange(run),
-      api.onDidLayoutFromJSON(run),
-    ]
+    sync()
+    const subs = [api.onDidLayoutChange(sync), api.onDidAddPanel(sync), api.onDidRemovePanel(sync), api.onDidLayoutFromJSON(sync)]
     return () => subs.forEach((s) => s.dispose())
-  }, [api, peekRef, setPeek])
+  }, [api])
 
-  // A click anywhere else in the workspace collapses the peeked group again. Clicks outside
-  // the workspace (the top bar, dialogs) leave it open.
-  useEffect(() => {
-    if (!api || !peeking) return
-    const onDown = (e: PointerEvent) => {
-      const target = e.target as Element
-      const group = groupOf(api, peeking)
-      // Dragging a divider (dockview's sash) resizes the peeked group.
-      if (!frame.current?.contains(target) || group?.element.contains(target) || target.closest('.edge-strip, .dv-sash')) return
-      setPeek(null)
-      group?.api.setVisible(false)
-      sync.current()
-    }
-    document.addEventListener('pointerdown', onDown, true)
-    const element = groupOf(api, peeking)?.element
-    element?.classList.add('peeking')
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true)
-      element?.classList.remove('peeking')
-    }
-  }, [api, peeking, frame, setPeek])
-
-  const controls = useMemo<CollapseControls>(
+  return useMemo<StripControls>(
     () => ({
-      collapsed,
-      peeking,
-      collapse: (group) => {
-        if (peekRef.current === group.id) setPeek(null)
-        group.api.setVisible(false)
-        sync.current()
-      },
-      peek: (groupId, panelId) => {
-        const group = api && groupOf(api, groupId)
+      tabs,
+      toggle: (groupId) => {
+        // Not api.getGroup: its type lacks what showGroup needs.
+        const group = api?.groups.find((g) => g.id === groupId)
         if (!api || !group) return
-        if (peekRef.current === groupId && group.activePanel?.id === panelId) {
-          // The same tab again: collapse.
-          setPeek(null)
-          group.api.setVisible(false)
-        } else {
-          if (peekRef.current && peekRef.current !== groupId) groupOf(api, peekRef.current)?.api.setVisible(false)
-          setPeek(groupId)
-          showGroup(api, group)
-          api.getPanel(panelId)?.api.setActive()
-        }
-        sync.current()
-      },
-      pin: () => {
-        setPeek(null)
-        sync.current()
-        pinned.current()
+        if (group.api.isVisible) group.api.setVisible(false)
+        else showGroup(api, group)
       },
     }),
-    [api, collapsed, peeking, peekRef, setPeek],
+    [api, tabs],
   )
-  return controls
 }

@@ -17,7 +17,7 @@ describe('loadLayout', () => {
       floatingGroups: [{ data: { id: '4', views: ['activity', 'orders'], activeView: 'activity' }, position: {} }],
       popoutGroups: [{ data: { id: '5', views: ['activity'], activeView: 'activity' } }],
     }
-    localStorage.setItem('paper-trade.layout.v2', JSON.stringify(saved))
+    localStorage.setItem('paper-trade.layout.v3', JSON.stringify(saved))
     const out = loadLayout(new Set(['watchlist', 'chart', 'orders']))!
     expect(Object.keys(out.panels)).toEqual(['watchlist', 'chart', 'orders'])
     const column = (out.grid.root.data as { data: { data: { id: string } }[] }[])[0].data
@@ -29,7 +29,7 @@ describe('loadLayout', () => {
 
   it('leaves a layout with only known panels as it is', () => {
     const saved = { grid: { root: { type: 'branch', data: [leaf('1', 'chart')] }, orientation: 'HORIZONTAL', width: 1, height: 1 }, panels: { chart: { id: 'chart', contentComponent: 'chart' } }, activeGroup: '1' }
-    localStorage.setItem('paper-trade.layout.v2', JSON.stringify(saved))
+    localStorage.setItem('paper-trade.layout.v3', JSON.stringify(saved))
     expect(loadLayout(new Set(['chart']))).toEqual(saved)
   })
 })

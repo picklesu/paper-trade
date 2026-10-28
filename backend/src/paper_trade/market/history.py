@@ -17,9 +17,11 @@ from datetime import date, datetime, timedelta
 import numpy as np
 
 from paper_trade.market.calendar import (
+    is_trading_day,
     market_day,
     next_trading_day,
     previous_trading_day,
+    session_close,
     session_open,
     session_seconds,
 )
@@ -107,7 +109,14 @@ class History:
             self._pending = []
 
     def _write(self, rows: list[tuple]) -> None:
-        self.db.executemany("INSERT OR REPLACE INTO bars30 VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        # One transaction: the connection autocommits, which would otherwise commit every row.
+        self.db.execute("BEGIN")
+        try:
+            self.db.executemany("INSERT OR REPLACE INTO bars30 VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+        self.db.execute("COMMIT")
 
     def stored_days(self) -> set[date]:
         self.flush()
@@ -137,32 +146,43 @@ class History:
     # ----- queries ---------------------------------------------------------------------
 
     def bars(self, symbol: str, interval: str, end: datetime | None = None, count: int = 500) -> dict:
-        """Up to `count` bars before `end` (default: now, including the live bar),
-        oldest first, and whether older bars exist."""
+        """Up to `count` bars, oldest first, and whether older bars exist.
+
+        Without `end`: the latest bars, including the live (unfinished) one. With
+        `end`: only bars that finished by then, so a page never includes prices from
+        after `end` (paging back with `end` = the oldest bar's start fits exactly).
+        """
         if interval not in INTERVALS:
             raise ValueError(f"interval must be one of {', '.join(INTERVALS)}")
         count = max(1, min(count, MAX_COUNT))
         col = self.engine.symbol_index(symbol)
         now = self.engine.time
-        cutoff = min(end, now) if end else now
+        limit = end.timestamp() if end is not None and end < now else None
+        cutoff = end if limit is not None else now
         if interval in FINE_MINUTES:
-            bars, more = self._fine(col, interval, cutoff, include_cutoff=end is None, count=count)
+            timed, more = self._fine(col, interval, cutoff, count)
         else:
-            bars, more = self._stored(symbol, col, interval, cutoff, include_cutoff=end is None, count=count)
-        return {"bars": bars, "more": more}
+            timed, more = self._stored(symbol, col, interval, cutoff, count)
+        bars = [row for row, ends in timed if limit is None or ends <= limit]
+        more = more or len(bars) > count
+        return {"bars": bars[-count:], "more": more}
 
-    def _today(self, col: int, minutes: int | None) -> list[tuple[datetime, np.ndarray]]:
-        """Live bars for the current session: `minutes` per bar, or one bar for the day."""
-        now = self.engine.time
-        day = market_day(now)
-        mb = self.engine.minute_bars(day, through=int(session_seconds(now)))[:, col, :]
-        open_ = session_open(day)
-        if minutes is None:
-            return [(open_, aggregate(mb, mb.shape[0])[0])]
-        agg = aggregate(mb, minutes)
-        return [(open_ + timedelta(minutes=minutes * i), agg[i]) for i in range(agg.shape[0])]
+    def _session_bars(self, day: date, col: int, minutes: int) -> list[tuple[Bar, float]]:
+        """`minutes`-minute bars for a session (live through now if it's today), with end times."""
+        live = day == market_day(self.engine.time)
+        mb = self.engine.minute_bars(day, through=int(session_seconds(self.engine.time)) if live else None)
+        return self._timed(day, aggregate(mb[:, col, :], minutes), minutes)
 
-    def _fine(self, col: int, interval: str, cutoff: datetime, include_cutoff: bool, count: int) -> tuple[list[Bar], bool]:
+    @staticmethod
+    def _timed(day: date, agg: np.ndarray, minutes: int) -> list[tuple[Bar, float]]:
+        open_, close = session_open(day), session_close(day).timestamp()
+        out = []
+        for i in range(agg.shape[0]):
+            start = open_ + timedelta(minutes=minutes * i)
+            out.append((_row(start, agg[i]), min(start.timestamp() + minutes * 60, close)))
+        return out
+
+    def _fine(self, col: int, interval: str, cutoff: datetime, count: int) -> tuple[list[tuple[Bar, float]], bool]:
         k = FINE_MINUTES[interval]
         today = market_day(self.engine.time)
         origin_day = market_day(self.engine.origin)
@@ -172,27 +192,19 @@ class History:
                 break
             oldest_allowed = previous_trading_day(oldest_allowed)
 
-        out: list[Bar] = []
+        out: list[tuple[Bar, float]] = []
         day = market_day(cutoff)
-        while day >= oldest_allowed and len(out) < count:
-            if day == today:
-                rows = [_row(t, b) for t, b in self._today(col, k)]
-            else:
-                agg = aggregate(self.engine.minute_bars(day)[:, col, :], k)
-                open_ = session_open(day)
-                rows = [_row(open_ + timedelta(minutes=k * i), agg[i]) for i in range(agg.shape[0])]
-            limit = cutoff.timestamp()
-            rows = [r for r in rows if r[0] < limit or (include_cutoff and r[0] <= limit)]
-            out = rows + out
+        if not is_trading_day(day):
             day = previous_trading_day(day)
-        more = day >= oldest_allowed or len(out) > count
-        return out[-count:], more
+        while day >= oldest_allowed and len(out) <= count:
+            out = [b for b in self._session_bars(day, col, k) if b[0][0] < cutoff.timestamp() or day == today] + out
+            day = previous_trading_day(day)
+        return out, day >= oldest_allowed
 
     def _stored(
-        self, symbol: str, col: int, interval: str, cutoff: datetime, include_cutoff: bool, count: int
-    ) -> tuple[list[Bar], bool]:
+        self, symbol: str, col: int, interval: str, cutoff: datetime, count: int
+    ) -> tuple[list[tuple[Bar, float]], bool]:
         today = market_day(self.engine.time)
-        origin_day = market_day(self.engine.origin)
         last_day = market_day(cutoff)
         per_day = {"30m": 13, "1h": 7, "1D": 1, "1W": 0.2}[interval]
         span = int(count / per_day) + 6
@@ -215,24 +227,22 @@ class History:
             mb = self.engine.minute_bars(today, through=int(session_seconds(self.engine.time)))[:, col, :]
             sessions.append((today, aggregate(mb, STORED_MINUTES)))
 
-        out: list[Bar] = []
+        out: list[tuple[Bar, float]] = []
         if interval in ("30m", "1h"):
             k = 1 if interval == "30m" else 2
             for d, b30 in sessions:
-                agg = aggregate(b30, k)
-                open_ = session_open(d)
-                out += [_row(open_ + timedelta(minutes=30 * k * i), agg[i]) for i in range(agg.shape[0])]
+                out += self._timed(d, aggregate(b30, k), 30 * k)
         elif interval == "1D":
-            out = [_row(session_open(d), aggregate(b30, b30.shape[0])[0]) for d, b30 in sessions]
+            out = [(_row(session_open(d), aggregate(b30, b30.shape[0])[0]), session_close(d).timestamp()) for d, b30 in sessions]
         else:
             weeks: dict[date, list[tuple[date, np.ndarray]]] = {}
             for d, b30 in sessions:
                 weeks.setdefault(week_start(d), []).append((d, b30))
             for group in weeks.values():
                 stacked = np.concatenate([b for _, b in group])
-                out.append(_row(session_open(group[0][0]), aggregate(stacked, stacked.shape[0])[0]))
+                bar = _row(session_open(group[0][0]), aggregate(stacked, stacked.shape[0])[0])
+                out.append((bar, session_close(group[-1][0]).timestamp()))
 
-        limit = cutoff.timestamp()
-        out = [r for r in out if r[0] < limit or (include_cutoff and r[0] <= limit)]
-        more = first_day > origin_day or len(out) > count
-        return out[-count:], more
+        (earliest,) = self.db.execute("SELECT MIN(day) FROM bars30 WHERE symbol = ?", (symbol,)).fetchone()
+        more = earliest is not None and date.fromisoformat(earliest) < first_day
+        return out, more

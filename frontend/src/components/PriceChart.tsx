@@ -75,6 +75,10 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
   const barsRef = useRef<Bar[]>([])
   const moreRef = useRef(true)
   const loadingOlder = useRef(false)
+  // Bumped on every full load; late responses from an earlier load are ignored.
+  const generation = useRef(0)
+  // Which view (symbol|interval|timeline) the bars on screen belong to.
+  const shownView = useRef<string | null>(null)
 
   const symbol = quote.symbol
   const now = Date.parse(clock.time) / 1000
@@ -145,15 +149,17 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
   useEffect(() => {
     let cancelled = false
     const key = `${symbol}|${interval}|${clock.timeline}`
+    const gen = ++generation.current
     // The preset chose this bar size; read it via the ref so changing only the preset
     // moves the view (choosePreset) instead of reloading.
     const preset = presetRef.current
     const count = preset ? (PRESET_COUNT[preset.label] ?? PAGE) : PAGE
     fetchBars(symbol, interval, undefined, count)
       .then((page) => {
-        if (cancelled) return
+        if (cancelled || gen !== generation.current) return
         moreRef.current = page.more
         show(page.bars)
+        shownView.current = key
         setLoaded({ key, error: null })
         const ts = chart.current?.timeScale()
         if (!ts || !page.bars.length) return
@@ -178,11 +184,10 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
       if (!range || range.from > 20 || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
       loadingOlder.current = true
       const first = barsRef.current[0][0]
-      const forSymbol = symbol
-      const forInterval = intervalRef.current
-      fetchBars(forSymbol, forInterval, first, PAGE)
+      const gen = generation.current
+      fetchBars(symbol, intervalRef.current, first, PAGE)
         .then((page) => {
-          if (forSymbol !== symbol || forInterval !== intervalRef.current) return
+          if (gen !== generation.current) return // the chart reloaded meanwhile (symbol, size, jump)
           moreRef.current = page.more
           show(mergeBars(page.bars, barsRef.current))
         })
@@ -200,7 +205,8 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
   // Live: fold each tick into the last bar right away...
   useEffect(() => {
     const current = barsRef.current
-    if (!current.length || !candles.current) return
+    // Only once the bars on screen are this view's (not while a new size or timeline loads).
+    if (shownView.current !== viewKey || !current.length || !candles.current) return
     const last = current[current.length - 1]
     const bucket = bucketStart(interval, now, sessionOpen, last[0])
     const next = applyTick(current, bucket, quote.last)
@@ -210,26 +216,26 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     candles.current.update(candle(bar))
     volumes.current?.update(volumeBar(bar))
     if (next.length !== current.length) setBars(next)
-  }, [quote.last, now, sessionOpen, interval])
+  }, [quote.last, now, sessionOpen, interval, viewKey])
 
   // ...and resync the latest two bars from the server now and then, for exact volume
   // and the bar that just closed.
   useEffect(() => {
     if (clock.paused) return
     const id = window.setInterval(() => {
-      const current = barsRef.current
-      if (!current.length) return
-      const forInterval = intervalRef.current
-      fetchBars(symbol, forInterval, undefined, 2)
+      if (!barsRef.current.length) return
+      const gen = generation.current
+      fetchBars(symbol, intervalRef.current, undefined, 2)
         .then((page) => {
-          if (forInterval !== intervalRef.current || barsRef.current !== current) return // stale
+          if (gen !== generation.current) return // the chart reloaded meanwhile
+          // Merge into whatever is on screen now (ticks may have updated it since).
+          const current = barsRef.current
           const fresh = page.bars.filter((b) => b[0] >= current[0][0])
-          const merged = mergeBars(current, fresh)
           const changed = fresh.some((b) => {
             const mine = current.find((c) => c[0] === b[0])
             return !mine || mine.some((v, i) => v !== b[i])
           })
-          if (changed) show(merged)
+          if (changed) show(mergeBars(current, fresh))
         })
         .catch(() => {})
     }, RESYNC_MS)

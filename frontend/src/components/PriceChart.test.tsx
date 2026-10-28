@@ -105,3 +105,57 @@ describe('PriceChart', () => {
     expect(await screen.findByText('Building 5 years of price history… 50%')).toBeInTheDocument()
   })
 })
+
+describe('PriceChart races', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    resetCalls()
+  })
+
+  it('ignores an older page that arrives after switching symbols', async () => {
+    let resolveOlder: (v: unknown) => void = () => {}
+    const fn = vi.fn((url: string) => {
+      const u = new URL(url, 'http://x')
+      if (u.searchParams.get('symbol') === 'SPY' && u.searchParams.has('end')) {
+        return new Promise((r) => (resolveOlder = r)) // SPY's older page answers late
+      }
+      const page = u.searchParams.get('symbol') === 'SPY' ? { bars, more: true } : { bars: [[OPEN, 1, 1, 1, 1, 1]], more: false }
+      return Promise.resolve({ ok: true, status: 200, json: async () => page })
+    })
+    vi.stubGlobal('fetch', fn)
+    const { rerender } = render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(calls.candleData).toHaveLength(2))
+    act(() => calls.onRangeChange!({ from: 0, to: 50 })) // scrolled back: load older SPY bars
+    await waitFor(() => expect(fn.mock.calls.some(([u]) => String(u).includes('end='))).toBe(true))
+
+    rerender(<PriceChart quote={{ ...quote, symbol: 'AAPL' }} clock={clock} orders={[]} />)
+    await waitFor(() => expect(calls.candleData).toHaveLength(1))
+    resolveOlder({ ok: true, status: 200, json: async () => ({ bars: [[OPEN - 300, 2, 2, 2, 2, 2]], more: true }) })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls.candleData).toHaveLength(1) // still only AAPL's bar, no SPY bars mixed in
+  })
+
+  it('does not fold ticks into bars of a different bar size while reloading', async () => {
+    let hold: (v: unknown) => void = () => {}
+    let first = true
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        if (first) {
+          first = false
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ bars, more: true }) })
+        }
+        return new Promise((r) => (hold = r)) // the 1m reload is slow
+      }),
+    )
+    const { rerender } = render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(calls.candleData).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: '1-minute bars' }))
+    const updatesBefore = calls.updates.length
+    act(() => {
+      rerender(<PriceChart quote={{ ...quote, last: 590 }} clock={{ ...clock, time: '2026-01-07T15:03:00Z' }} orders={[]} />)
+    })
+    expect(calls.updates.length).toBe(updatesBefore) // no 1m bar glued onto the 5m series
+    hold({ ok: true, status: 200, json: async () => ({ bars, more: true }) })
+  })
+})

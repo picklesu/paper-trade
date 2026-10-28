@@ -1,3 +1,4 @@
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -6,10 +7,29 @@ from fastapi.testclient import TestClient
 from paper_trade.main import create_app
 
 
+def next_message(ws, kind: str, limit: int = 20) -> dict:
+    """The next stream message of `kind`, skipping others (e.g. history-build progress)."""
+    for _ in range(limit):
+        msg = ws.receive_json()
+        if msg["type"] == kind:
+            return msg
+    pytest.fail(f"no {kind!r} message in {limit} messages")
+
+
+def wait_for_history(c: TestClient) -> TestClient:
+    """Let the startup history build finish, so tests see a settled market and its
+    progress messages don't interleave with what they check."""
+    for _ in range(200):
+        if not c.get("/api/clock").json()["building_history"]:
+            return c
+        time.sleep(0.02)
+    pytest.fail("history build did not finish")
+
+
 @pytest.fixture
 def client(tmp_path) -> Iterator[TestClient]:
     with TestClient(create_app(history_days=5, db_path=tmp_path / "test.db")) as c:
-        yield c
+        yield wait_for_history(c)
 
 
 def test_health(client: TestClient) -> None:
@@ -53,7 +73,7 @@ def test_websocket_streams_ticks(client: TestClient) -> None:
         assert first["type"] == "tick"
         assert first["clock"]["speed"] == 1
         assert {q["symbol"] for q in first["quotes"]} >= {"SPY", "AAPL"}
-        second = ws.receive_json()
+        second = next_message(ws, "tick")
         assert second["clock"]["time"] >= first["clock"]["time"]
 
 
@@ -63,7 +83,7 @@ def test_websocket_sees_clock_changes(client: TestClient) -> None:
         ws.receive_json()
         client.post("/api/clock", json={"speed": 600})
         for _ in range(5):
-            if ws.receive_json()["clock"]["speed"] == 600:
+            if next_message(ws, "tick")["clock"]["speed"] == 600:
                 break
         else:
             pytest.fail("speed change never reached the stream")
@@ -75,7 +95,7 @@ def test_websocket_ignores_client_messages(client: TestClient) -> None:
         ws.receive_json()
         ws.send_bytes(b"\x00")
         ws.send_text("hello")
-        assert ws.receive_json()["type"] == "tick"
+        assert next_message(ws, "tick")["type"] == "tick"
 
 
 def test_goto_preview_and_jump(client: TestClient) -> None:
@@ -184,11 +204,11 @@ def test_state_survives_restart(tmp_path) -> None:
 def test_websocket_sends_orders_and_account(client: TestClient) -> None:
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json() == {"type": "orders", "orders": []}
-        assert ws.receive_json()["account"]["cash"] == 100_000
+        assert next_message(ws, "tick")["account"]["cash"] == 100_000
         client.post("/api/orders", json={"symbol": "SPY", "side": "buy", "qty": 1, "type": "market"})
         for _ in range(10):
-            msg = ws.receive_json()
-            if msg["type"] == "orders" and msg["orders"]:
+            msg = next_message(ws, "orders")
+            if msg["orders"]:
                 assert msg["orders"][0]["status"] == "filled"
                 break
         else:

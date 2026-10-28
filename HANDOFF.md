@@ -83,8 +83,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     (engine + broker). The final state after a jump is always sent with `force=True`.
     `goto_details()` builds the rewind/reset confirmation contents. `build_history()` runs in the
     background at startup and after a reset: it records missing finished sessions and backfills
-    `HISTORY_DAYS` (5 years) if `engine.backfilled` is false (about 10s), sending `history`
-    progress messages. Jumps are refused (409) while it runs. `clock_state` includes
+    `HISTORY_DAYS` (5 years) if `engine.backfilled` is false (about 8s), sending `history`
+    progress messages. The backfill commits all at once at the end, so an interrupted build
+    leaves the market unchanged and simply runs again on the next start. Jumps are refused (409) while it runs. `clock_state` includes
     `session_open`, `timeline` (bumped on every jump and when history is done, so charts reload)
     and `building_history`.
   - `trading/broker.py`: `Broker`, the cash account. `_build` validates (buying power, shares,
@@ -108,6 +109,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     one JSON row per order. Startup
     (`main.load_market`) resumes from it, and `MarketService` rolls back any order newer than
     the saved market time.
+  - `api/stream.py`: the WebSocket handler runs its send and receive halves in an **anyio task
+    group**. Bare `asyncio.create_task` halves made the tests flaky (about 1 in 5 runs on `main`
+    too), because cancellation from the server or test client didn't reach them.
   - `api/`: `GET /api/health`, `GET /api/quotes`, `GET|POST /api/clock` (409 during a jump),
     `GET /api/clock/goto?time=` (preview: forward / rewind / reset / none, plus the snapped
     target), `POST /api/clock/goto {time, future: replay|new}`, WebSocket `/ws`. Times without a
@@ -142,7 +146,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `clock.timeline` changes. Pure logic is in `lib/bars.ts`. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 153 (pytest), frontend 58 (Vitest + Testing Library). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 60 (Vitest + Testing Library). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

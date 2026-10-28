@@ -47,6 +47,7 @@ class MarketService:
         self._ticks_since_save = 0
         self._saved_starts_version: int | None = None
         self._history_task: asyncio.Task | None = None
+        self._building = False
         # Bumped whenever market time jumps or history changes, so charts reload.
         self.timeline = 0
         self.history_days = history_days
@@ -57,7 +58,7 @@ class MarketService:
 
     @property
     def building_history(self) -> bool:
-        return self._history_task is not None and not self._history_task.done()
+        return self._building
 
     # ----- messages ----------------------------------------------------------------
 
@@ -247,6 +248,7 @@ class MarketService:
 
     def start_history(self) -> None:
         """Build missing chart history in the background (see build_history)."""
+        self._building = True
         self._history_task = asyncio.create_task(self.build_history())
 
     async def build_history(self) -> None:
@@ -256,8 +258,6 @@ class MarketService:
             missing = self.history.missing_days()
             backfill = 0 if self.engine.backfilled else self.history_days
             total, done = len(missing) + backfill, 0
-            if not total:
-                return
             with self.history.batch():
                 for day in missing:
                     self.history.record(day)
@@ -268,11 +268,14 @@ class MarketService:
                         self.history.record(day)
                         done += 1
                         await self._history_progress(done, total)
-            self.save()
-            self.timeline += 1
-            self.publish_all()
         except Exception:
             log.exception("building price history failed")
+        finally:
+            # Clear the flag before announcing, so the final snapshot says it's done.
+            self._building = False
+        self.save()
+        self.timeline += 1
+        self.publish_all()
 
     async def _history_progress(self, done: int, total: int) -> None:
         if done % PROGRESS_EVERY_DAYS == 0 or done == total:

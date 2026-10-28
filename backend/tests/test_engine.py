@@ -338,3 +338,22 @@ def market_day_of(t: datetime) -> date:
     from paper_trade.market.calendar import market_day
 
     return market_day(t)
+
+
+def test_interrupted_backfill_changes_nothing() -> None:
+    engine = MarketEngine(START)
+    before = (engine.origin, dict(engine._starts), engine.starts_version)
+    it = engine.backfill_iter(20)
+    for _ in range(7):
+        next(it)
+    it.close()  # e.g. the server stopped mid-build
+    assert (engine.origin, dict(engine._starts), engine.starts_version) == before
+    assert not engine.backfilled
+
+
+def test_backfill_keeps_todays_path_cached() -> None:
+    engine = at(et(2026, 1, 5, 11, 0))
+    today = engine._path(date(2026, 1, 5))
+    for _ in engine.backfill_iter(30):
+        pass
+    assert engine._paths.get(date(2026, 1, 5)) is today

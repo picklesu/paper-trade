@@ -158,3 +158,27 @@ def test_bars_endpoint(tmp_path) -> None:
         assert c.get("/api/bars", params={"symbol": "SPY", "interval": "7m"}).status_code == 422
         clock = c.get("/api/clock").json()
         assert {"session_open", "timeline", "building_history"} <= set(clock)
+
+
+def test_weekend_end_returns_fridays_bars(h: History) -> None:
+    saturday = et(2026, 2, 28, 12, 0)
+    page = h.bars("SPY", "5m", end=saturday, count=5)
+    last = datetime.fromtimestamp(page["bars"][-1][0], MARKET_TZ)
+    assert last.date() == date(2026, 2, 27) and last.hour == 15 and last.minute == 55
+
+
+@pytest.mark.parametrize("interval", ["5m", "30m", "1h", "1D", "1W"])
+def test_bars_before_a_mid_session_end_never_include_later_prices(h: History, interval: str) -> None:
+    end = et(2026, 2, 25, 11, 47)  # a Wednesday, mid-morning
+    page = h.bars("SPY", interval, end=end, count=50)
+    durations = {"5m": 300, "30m": 1800, "1h": 3600}
+    for t, *_ in page["bars"]:
+        if interval in durations:
+            assert t + durations[interval] <= end.timestamp()
+        else:  # the day (or week) containing `end` isn't finished, so it's left out
+            assert datetime.fromtimestamp(t, MARKET_TZ).date() < (date(2026, 2, 25) if interval == "1D" else date(2026, 2, 23))
+
+
+def test_more_is_false_when_everything_fits(h: History) -> None:
+    assert h.bars("SPY", "1W", count=500)["more"] is False
+    assert h.bars("SPY", "1D", count=5)["more"] is True

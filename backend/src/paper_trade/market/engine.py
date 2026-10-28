@@ -237,33 +237,48 @@ class MarketEngine:
 
     def backfill_iter(self, days: int = HISTORY_DAYS) -> Iterator[date]:
         """Generate `days` sessions of history before the origin, newest first,
-        yielding each finished session. The origin moves back with it.
+        yielding each finished session (its path is cached, ready to read).
 
         Each day's path is generated from a start of 1.0 and then scaled so its
         close equals the next day's previous close. Paths are multiplicative, so
         that is exactly the path a forward replay from the scaled start produces.
+
+        Nothing is committed until the end: the origin and session starts change
+        all at once, so an interrupted build leaves the market as it was (and
+        saving mid-build stays consistent).
         """
         normal = next(i for i, (name, _, _) in enumerate(REGIMES) if name == "normal")
+        pending: dict[date, _DayStart] = {}
         day = market_day(self.origin)
         for _ in range(days):
             prev = previous_trading_day(day)
-            target = self._starts[day].prev_close
+            target = (pending.get(day) or self._starts[day]).prev_close
+            # Generate the unit path with a temporary start, then take it back out.
             self._starts[prev] = _DayStart(np.ones(len(self.specs)), normal)
-            unit = self._path(prev)
+            self._paths.pop(prev, None)
+            try:
+                unit = self._path(prev)
+            finally:
+                del self._starts[prev]
             scale = target / unit.prices[_S - 1]
-            self._starts[prev] = _DayStart(scale, normal)
-            self._paths[prev] = _DayPath(
-                prices=unit.prices * scale,
-                high=unit.high * scale,
-                low=unit.low * scale,
-                minute_volume=unit.minute_volume,
-                volume=unit.volume,
-                regimes=unit.regimes,
+            pending[prev] = _DayStart(scale, normal)
+            self._cache_path(
+                prev,
+                _DayPath(
+                    prices=unit.prices * scale,
+                    high=unit.high * scale,
+                    low=unit.low * scale,
+                    minute_volume=unit.minute_volume,
+                    volume=unit.volume,
+                    regimes=unit.regimes,
+                ),
             )
-            self.origin = session_open(prev)
-            self.starts_version += 1
             day = prev
             yield prev
+        self._starts.update(pending)
+        if pending:
+            self.origin = session_open(day)
+            self.starts_version += 1
         self.backfilled = True
 
     def minute_bars(self, day: date, through: int | None = None) -> np.ndarray:
@@ -429,7 +444,14 @@ class MarketEngine:
             volume=volume,
             regimes=regimes,
         )
-        self._paths[day] = path
-        if len(self._paths) > PATH_CACHE_DAYS:
-            self._paths.popitem(last=False)
+        self._cache_path(day, path)
         return path
+
+    def _cache_path(self, day: date, path: _DayPath) -> None:
+        """Keep a few recent paths, never evicting the current session's (every tick reads it)."""
+        self._paths[day] = path
+        self._paths.move_to_end(day)
+        current = market_day(self._time)
+        while len(self._paths) > PATH_CACHE_DAYS:
+            oldest = next(d for d in self._paths if d != current)
+            del self._paths[oldest]

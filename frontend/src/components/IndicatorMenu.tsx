@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Interval } from '../lib/bars'
-import { clampParam, type IndicatorId, INDICATORS, type IndicatorSettings } from '../lib/indicators'
+import { clampParam, type IndicatorId, INDICATORS, type IndicatorSettings, normalizeParams } from '../lib/indicators'
 import { applicable, lineColor } from './IndicatorLayer'
 
 interface Props {
@@ -13,7 +13,8 @@ interface Props {
 export function IndicatorMenu({ settings, interval, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
-  const count = INDICATORS.filter((i) => settings[i.id].on).length
+  // Count what's drawn: VWAP, for one, doesn't apply to daily or weekly bars.
+  const count = INDICATORS.filter((i) => settings[i.id].on && applicable(i.id, interval)).length
 
   // Close when clicking elsewhere or pressing Escape.
   useEffect(() => {
@@ -43,7 +44,7 @@ export function IndicatorMenu({ settings, interval, onChange }: Props) {
           {INDICATORS.map((info) => {
             const s = settings[info.id]
             const usable = applicable(info.id, interval)
-            const label = info.name === 'Bollinger Bands' ? 'Bollinger Bands' : info.name
+            const label = info.name
             return (
               <div key={info.id} className={usable ? 'indicator-row' : 'indicator-row disabled'}>
                 <label className="indicator-name">
@@ -53,13 +54,14 @@ export function IndicatorMenu({ settings, interval, onChange }: Props) {
                     onChange={(e) => set(info.id, { on: e.target.checked })}
                     aria-label={`${label}${s.params.length ? ` ${s.params.join(' ')}` : ''}`}
                   />
-                  <span className="swatch" style={{ background: lineColor(info.id, info.id === 'macd' ? 'macd' : info.id === 'bb' ? 'upper' : 'value') }} />
+                  <span className="swatch" style={{ background: lineColor(info.id, info.lines[0]) }} />
                   {label}
                 </label>
                 <span className="indicator-params">
                   {info.paramNames.map((name, i) => (
                     <input
-                      key={name}
+                      // Keyed by value so the box shows a corrected value (e.g. MACD lengths swapped).
+                      key={`${name}-${s.params[i]}`}
                       type="number"
                       className="param"
                       title={name}
@@ -68,8 +70,9 @@ export function IndicatorMenu({ settings, interval, onChange }: Props) {
                       defaultValue={s.params[i]}
                       onBlur={(e) => {
                         const v = clampParam(info.id, i, e.target.value, s.params[i])
-                        e.target.value = String(v)
-                        if (v !== s.params[i]) set(info.id, { params: s.params.map((p, j) => (j === i ? v : p)) })
+                        const params = normalizeParams(info.id, s.params.map((p, j) => (j === i ? v : p)))
+                        e.target.value = String(params[i])
+                        if (params.some((p, j) => p !== s.params[j])) set(info.id, { params })
                       }}
                       onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
                     />

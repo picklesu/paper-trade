@@ -74,7 +74,8 @@ export function rsi(bars: Bar[], n = 14): Values {
       gain = (gain * (n - 1) + g) / n
       loss = (loss * (n - 1) + l) / n
     }
-    out[i] = loss === 0 ? 100 : 100 - 100 / (1 + gain / loss)
+    // No movement at all is neutral (50), not "overbought".
+    out[i] = loss === 0 ? (gain === 0 ? 50 : 100) : 100 - 100 / (1 + gain / loss)
   }
   return out
 }
@@ -90,9 +91,12 @@ export function macd(bars: Bar[], fast = 12, slow = 26, signal = 9): { macd: Val
   return { macd: line, signal: sig, histogram }
 }
 
+// One formatter, reused: creating one per call (toLocaleDateString with a time zone) is slow.
+const NY_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' })
+
 /** Session key (New York date) of a bar time, so VWAP restarts each day. */
 function sessionKey(t: number): string {
-  return new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+  return NY_DATE.format(t * 1000)
 }
 
 /** Volume-weighted average price of the typical price (H+L+C)/3, restarting each session. */
@@ -133,6 +137,8 @@ export interface IndicatorInfo {
   name: string
   /** Names of the editable lengths. */
   paramNames: string[]
+  /** The lines it draws, in the order `compute` returns them. */
+  lines: string[]
   /** Drawn on the price chart, or in its own pane below. */
   pane: 'price' | 'own'
   /** Only meaningful for intraday bars. */
@@ -140,15 +146,15 @@ export interface IndicatorInfo {
 }
 
 export const INDICATORS: IndicatorInfo[] = [
-  { id: 'sma20', name: 'SMA', paramNames: ['Length'], pane: 'price' },
-  { id: 'sma50', name: 'SMA', paramNames: ['Length'], pane: 'price' },
-  { id: 'sma200', name: 'SMA', paramNames: ['Length'], pane: 'price' },
-  { id: 'ema9', name: 'EMA', paramNames: ['Length'], pane: 'price' },
-  { id: 'ema21', name: 'EMA', paramNames: ['Length'], pane: 'price' },
-  { id: 'vwap', name: 'VWAP', paramNames: [], pane: 'price', intradayOnly: true },
-  { id: 'bb', name: 'Bollinger Bands', paramNames: ['Length', 'Std dev'], pane: 'price' },
-  { id: 'rsi', name: 'RSI', paramNames: ['Length'], pane: 'own' },
-  { id: 'macd', name: 'MACD', paramNames: ['Fast', 'Slow', 'Signal'], pane: 'own' },
+  { id: 'sma20', name: 'SMA', paramNames: ['Length'], lines: ['value'], pane: 'price' },
+  { id: 'sma50', name: 'SMA', paramNames: ['Length'], lines: ['value'], pane: 'price' },
+  { id: 'sma200', name: 'SMA', paramNames: ['Length'], lines: ['value'], pane: 'price' },
+  { id: 'ema9', name: 'EMA', paramNames: ['Length'], lines: ['value'], pane: 'price' },
+  { id: 'ema21', name: 'EMA', paramNames: ['Length'], lines: ['value'], pane: 'price' },
+  { id: 'vwap', name: 'VWAP', paramNames: [], lines: ['value'], pane: 'price', intradayOnly: true },
+  { id: 'bb', name: 'Bollinger Bands', paramNames: ['Length', 'Std dev'], lines: ['upper', 'middle', 'lower'], pane: 'price' },
+  { id: 'rsi', name: 'RSI', paramNames: ['Length'], lines: ['value'], pane: 'own' },
+  { id: 'macd', name: 'MACD', paramNames: ['Fast', 'Slow', 'Signal'], lines: ['macd', 'signal'], pane: 'own' },
 ]
 
 export const DEFAULT_SETTINGS: IndicatorSettings = {
@@ -220,7 +226,7 @@ export function sanitize(raw: unknown): IndicatorSettings {
     if (!s) continue
     if (typeof s.on === 'boolean') out[id].on = s.on
     if (Array.isArray(s.params) && s.params.length === out[id].params.length) {
-      out[id].params = s.params.map((p, i) => clampParam(id, i, p, out[id].params[i]))
+      out[id].params = normalizeParams(id, s.params.map((p, i) => clampParam(id, i, p, out[id].params[i])))
     }
   }
   return out
@@ -231,4 +237,16 @@ export function clampParam(id: IndicatorId, index: number, value: unknown, fallb
   if (!Number.isFinite(n)) return fallback
   if (id === 'bb' && index === 1) return Math.min(5, Math.max(0.5, Math.round(n * 10) / 10))
   return Math.min(500, Math.max(1, Math.round(n)))
+}
+
+/** Fix combinations that don't make sense: MACD's fast length must be shorter than its slow one. */
+export function normalizeParams(id: IndicatorId, params: number[]): number[] {
+  if (id !== 'macd') return params
+  let [fast, slow] = params
+  if (fast > slow) [fast, slow] = [slow, fast]
+  if (fast === slow) {
+    if (slow < 500) slow += 1
+    else fast -= 1
+  }
+  return [fast, slow, params[2]]
 }

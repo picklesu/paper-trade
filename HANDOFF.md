@@ -145,8 +145,11 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     size and visible range. Older pages load when the visible logical range nears the start.
     Live ticks fold into the last bar (`lib/bars.ts` `bucketStart`/`applyTick`), and the last 2
     bars resync from the server every 1.5s for exact volume. Data loads again when
-    `clock.timeline` changes. When older bars are prepended, the visible *dates* are restored
-    (the library keeps bar positions, which slid the view back and chained extra loads). Pure
+    `clock.timeline` changes. When older bars are prepended, the visible logical range is
+    shifted by the number of bars added. The library keeps bar positions on `setData`, which
+    slid the view back in time and chained extra loads. Older pages also wait until a fresh
+    load's visible range has been applied (`settled`, about 80ms, because the chart applies
+    ranges on its next frame), then load once if the view needs it. Pure
     logic is in `lib/bars.ts`.
   - Indicators: `lib/indicators.ts` (pure math: SMA, EMA, Wilder RSI, MACD, Bollinger with
     population SD, session-anchored VWAP; settings, labels, sanitizing).
@@ -154,10 +157,12 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     go in panes 1+ (stretch factor 4:1), and empty panes are removed. The layer recomputes on
     load and updates the last point on each tick. `components/IndicatorMenu.tsx` has toggles and
     lengths, saved in `localStorage` (`paper-trade.indicators`). The legend shows values at the
-    hovered bar. Tests use a recording stand-in for
+    hovered bar, from series computed once per bars and settings. `updateLast` recomputes the
+    full series each tick: about 3.6ms for all 9 indicators over 5,000 bars, which is fine at
+    2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 163 (pytest), frontend 77 (Vitest + Testing Library). CI runs them on every PR.
+- Tests: backend 163 (pytest), frontend 83 (Vitest + Testing Library). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

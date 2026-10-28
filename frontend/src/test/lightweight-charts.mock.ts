@@ -17,6 +17,7 @@ export const calls = {
   volumeData: [] as unknown[],
   markers: [] as unknown[],
   visibleRange: null as unknown,
+  logicalRange: null as unknown,
   updates: [] as unknown[],
   /** The chart's visible-range listener, so tests can simulate scrolling back. */
   onRangeChange: null as ((range: { from: number; to: number }) => void) | null,
@@ -31,6 +32,7 @@ export function resetCalls() {
   calls.volumeData = []
   calls.markers = []
   calls.visibleRange = null
+  calls.logicalRange = null
   calls.updates = []
   calls.onRangeChange = null
   calls.indicators = []
@@ -64,6 +66,7 @@ export const createChart = vi.fn(() => {
             calls.candleData = d
             // Like the real chart, replacing the data doesn't keep the dates in view.
             calls.visibleRange = { moved: true }
+            calls.logicalRange = { moved: true }
           }
           if (kind === 'volume') calls.volumeData = d
         }),
@@ -92,7 +95,8 @@ export const createChart = vi.fn(() => {
     timeScale: () => ({
       setVisibleRange: vi.fn((r: unknown) => (calls.visibleRange = r)),
       getVisibleRange: vi.fn(() => calls.visibleRange),
-      setVisibleLogicalRange: vi.fn((r: unknown) => (calls.visibleRange = r)),
+      setVisibleLogicalRange: vi.fn((r: unknown) => (calls.visibleRange = calls.logicalRange = r)),
+      getVisibleLogicalRange: vi.fn(() => calls.logicalRange),
       subscribeVisibleLogicalRangeChange: vi.fn((cb: (range: { from: number; to: number }) => void) => {
         calls.onRangeChange = cb
       }),

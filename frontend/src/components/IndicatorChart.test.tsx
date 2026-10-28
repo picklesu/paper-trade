@@ -108,3 +108,54 @@ describe('chart indicators', () => {
     expect((lines()[0].updates.at(-1) as { value: number }).value).toBeCloseTo(567.5 + 5)
   })
 })
+
+describe('chart indicators: review fixes', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    resetCalls()
+    localStorage.clear()
+  })
+
+  it('the legend follows live ticks within the same bar', async () => {
+    serve()
+    const { rerender } = render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(screen.getByLabelText('Bar details')).toHaveTextContent('SMA 20 567.50'))
+    act(() => {
+      rerender(<PriceChart quote={{ ...quote, last: 677 }} clock={clock} orders={[]} />)
+    })
+    expect(screen.getByLabelText('Bar details')).toHaveTextContent('C 677.00')
+    expect(screen.getByLabelText('Bar details')).toHaveTextContent('SMA 20 572.50')
+  })
+
+  it("doesn't draw indicators from the old bar size while the new one loads", async () => {
+    let release: (v: unknown) => void = () => {}
+    let n = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        n++ === 0
+          ? Promise.resolve({ ok: true, status: 200, json: async () => ({ bars, more: false }) })
+          : new Promise((r) => (release = r)),
+      ),
+    )
+    render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(lines()[0]?.data).toHaveLength(78))
+    fireEvent.click(screen.getByRole('button', { name: 'Daily bars' }))
+    // New series exist, but stay empty until the daily bars arrive.
+    expect(lines()).toHaveLength(2)
+    expect(lines().every((s) => s.data.length === 0)).toBe(true)
+    release({ ok: true, status: 200, json: async () => ({ bars: bars.slice(0, 30), more: false }) })
+    await waitFor(() => expect(lines()[0].data).toHaveLength(30))
+  })
+
+  it('the menu counts only indicators drawn for this bar size', async () => {
+    serve()
+    render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(lines()).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: /Indicators/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'VWAP' }))
+    expect(screen.getByRole('button', { name: /Indicators/ })).toHaveTextContent('Indicators (3)')
+    fireEvent.click(screen.getByRole('button', { name: 'Daily bars' }))
+    expect(screen.getByRole('button', { name: /Indicators/ })).toHaveTextContent('Indicators (2)')
+  })
+})

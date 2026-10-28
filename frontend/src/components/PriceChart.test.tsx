@@ -112,7 +112,7 @@ describe('PriceChart history paging', () => {
     resetCalls()
   })
 
-  it('keeps the same dates in view when older bars are added on the left', async () => {
+  it('keeps the same bars in view when older bars are added on the left', async () => {
     const older: Bar[] = [[OPEN - 600, 1, 1, 1, 1, 1], [OPEN - 300, 1, 1, 1, 1, 1]]
     vi.stubGlobal(
       'fetch',
@@ -124,11 +124,33 @@ describe('PriceChart history paging', () => {
     )
     render(<PriceChart quote={quote} clock={clock} orders={[]} />)
     await waitFor(() => expect(calls.candleData).toHaveLength(2))
-    const view = { from: OPEN, to: OPEN + 300 }
-    calls.visibleRange = view
-    act(() => calls.onRangeChange!({ from: 0, to: 2 }))
+    calls.logicalRange = { from: 30, to: 35 } // settled view: not near the start yet
+    await new Promise((r) => setTimeout(r, 120))
+    calls.logicalRange = { from: 0.5, to: 5.5 } // the user scrolls back, with a right margin past the last bar
+    act(() => calls.onRangeChange!({ from: 0.5, to: 5.5 }))
     await waitFor(() => expect(calls.candleData).toHaveLength(4))
-    expect(calls.visibleRange).toEqual(view) // restored after the older bars went in
+    // Shifted by the 2 bars added: same dates, same zoom, same margin.
+    expect(calls.logicalRange).toEqual({ from: 2.5, to: 7.5 })
+  })
+})
+
+describe('PriceChart settling', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    resetCalls()
+  })
+
+  it("doesn't load older bars while a fresh view is still being applied, then loads if needed", async () => {
+    const fn = vi.fn(async (_url: string) => ({ ok: true, status: 200, json: async () => ({ bars, more: true }) }))
+    vi.stubGlobal('fetch', fn)
+    render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(calls.candleData).toHaveLength(2))
+    act(() => calls.onRangeChange!({ from: 0, to: 2 })) // a range event fired during the load
+    const older = () => fn.mock.calls.filter(([u]) => String(u).includes('end=')).length
+    expect(older()).toBe(0)
+    // After settling, the applied view starts at the first bar: load older bars once.
+    calls.logicalRange = { from: 0, to: 2 }
+    await waitFor(() => expect(older()).toBe(1))
   })
 })
 

@@ -61,7 +61,7 @@ export class IndicatorLayer {
       const s = settings[info.id]
       if (!s.on || !applicable(info.id, interval)) continue
       const paneIndex = info.pane === 'own' ? pane++ : 0
-      const keys = info.id === 'bb' ? ['upper', 'middle', 'lower'] : info.id === 'macd' ? ['macd', 'signal'] : ['value']
+      const keys = info.lines
       const lines = new Map<string, ISeriesApi<'Line'>>()
       let histogram: ISeriesApi<'Histogram'> | undefined
       if (info.id === 'macd') {

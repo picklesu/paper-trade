@@ -118,3 +118,18 @@ describe('settings', () => {
     }
   })
 })
+
+describe('review fixes', () => {
+  it('a flat market has a neutral RSI of 50', () => {
+    expect(rsi(bars(Array(20).fill(100)), 14).at(-1)).toBe(50)
+  })
+
+  it("MACD's fast length is always shorter than its slow one", async () => {
+    const { normalizeParams } = await import('./indicators')
+    expect(normalizeParams('macd', [26, 12, 9])).toEqual([12, 26, 9])
+    expect(normalizeParams('macd', [12, 12, 9])).toEqual([12, 13, 9])
+    expect(normalizeParams('macd', [500, 500, 9])).toEqual([499, 500, 9])
+    expect(normalizeParams('rsi', [14])).toEqual([14])
+    expect(sanitize({ macd: { on: true, params: [30, 10, 9] } }).macd.params).toEqual([10, 30, 9])
+  })
+})

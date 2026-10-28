@@ -46,6 +46,7 @@ const UP = '#22c55e'
 const DOWN = '#ef4444'
 const PAGE = 500
 const RESYNC_MS = 1500
+const SETTLE_MS = 80
 // Bars per preset load: enough to cover the range in one request.
 const PRESET_COUNT: Record<string, number> = { '1D': 400, '5D': 420, '1M': 300, '3M': 460, '6M': 140, YTD: 260, '1Y': 260, '5Y': 270 }
 
@@ -104,6 +105,10 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
   const generation = useRef(0)
   // Which view (symbol|interval|timeline) the bars on screen belong to.
   const shownView = useRef<string | null>(null)
+  // False from a full load until its visible range has been applied (the chart applies
+  // ranges on its next frame); older pages wait for this so they shift the right view.
+  const settled = useRef(false)
+  const loadOlderIfNeeded = useRef<() => void>(() => {})
 
   const symbol = quote.symbol
   const now = Date.parse(clock.time) / 1000
@@ -172,11 +177,13 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     }
   }, [])
 
-  // Indicator series follow the settings and the bar size (VWAP is intraday only).
+  // Indicator series follow the settings and the bar size (VWAP is intraday only). Their data
+  // comes with the bars: only fill them now if the bars on screen are already this view's.
   useEffect(() => {
     indicators.current?.configure(settings, interval)
-    indicators.current?.setData(barsRef.current)
-  }, [settings, interval])
+    if (shownView.current === `${symbol}|${interval}|${clock.timeline}`) indicators.current?.setData(barsRef.current)
+    // Only settings and bar size reconfigure; symbol and timeline changes reload the bars (show()).
+  }, [settings, interval]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const changeSettings = (next: IndicatorSettings) => {
     setSettings(next)
@@ -188,6 +195,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     let cancelled = false
     const key = `${symbol}|${interval}|${clock.timeline}`
     const gen = ++generation.current
+    settled.current = false
     // The preset chose this bar size; read it via the ref so changing only the preset
     // moves the view (choosePreset) instead of reloading.
     const preset = presetRef.current
@@ -207,6 +215,12 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
         } else {
           ts.setVisibleLogicalRange({ from: page.bars.length - 150, to: page.bars.length + 4 })
         }
+        // Once the chart has applied that range, load older bars if the view needs them.
+        window.setTimeout(() => {
+          if (gen !== generation.current) return
+          settled.current = true
+          loadOlderIfNeeded.current()
+        }, SETTLE_MS)
       })
       .catch((err) => !cancelled && setLoaded({ key, error: err instanceof Error ? err.message : String(err) }))
     return () => {
@@ -219,6 +233,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     const ts = chart.current?.timeScale()
     if (!ts) return
     const onRange = (range: { from: number; to: number } | null) => {
+      if (!settled.current) return // a fresh load's view is still being applied
       if (!range || range.from > 20 || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
       loadingOlder.current = true
       const first = barsRef.current[0][0]
@@ -227,11 +242,15 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
         .then((page) => {
           if (gen !== generation.current) return // the chart reloaded meanwhile (symbol, size, jump)
           moreRef.current = page.more
-          // Inserting bars on the left would slide the view back in time (it keeps bar
-          // positions, not dates), which then triggers yet another load. Keep the dates.
-          const view = chart.current?.timeScale().getVisibleRange()
+          // Inserting bars on the left would slide the view back in time (the chart keeps
+          // bar positions, not dates), which then triggers yet another load. Shift the view
+          // by the number of bars added, which keeps zoom, position and right margin exactly.
+          const ts = chart.current?.timeScale()
+          const view = ts?.getVisibleLogicalRange()
+          const before = barsRef.current.length
           show(mergeBars(page.bars, barsRef.current))
-          if (view) chart.current?.timeScale().setVisibleRange(view)
+          const added = barsRef.current.length - before
+          if (ts && view) ts.setVisibleLogicalRange({ from: view.from + added, to: view.to + added })
         })
         .catch(() => {
           moreRef.current = false
@@ -240,6 +259,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
           loadingOlder.current = false
         })
     }
+    loadOlderIfNeeded.current = () => onRange(ts.getVisibleLogicalRange())
     ts.subscribeVisibleLogicalRangeChange(onRange)
     return () => ts.unsubscribeVisibleLogicalRangeChange(onRange)
   }, [symbol])
@@ -258,7 +278,7 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
     candles.current.update(candle(bar))
     volumes.current?.update(volumeBar(bar))
     indicators.current?.updateLast(next)
-    if (next.length !== current.length) setBars(next)
+    setBars(next) // the legend shows the latest bar and its indicator values
   }, [quote.last, now, sessionOpen, interval, viewKey])
 
   // ...and resync the latest two bars from the server now and then, for exact volume
@@ -318,19 +338,25 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
 
   const legend = hover ?? bars[bars.length - 1] ?? null
 
-  // Indicator values for the legend's bar.
-  const legendIndex = legend ? bars.findIndex((b) => b[0] === legend[0]) : -1
-  const indicatorValues = useMemo(() => {
-    if (legendIndex < 0) return []
-    return INDICATORS.filter((i) => settings[i.id].on && applicable(i.id, interval)).map((info) => {
-      const out = compute(info.id, settings[info.id].params, bars.slice(0, legendIndex + 1))
-      return {
+  // Indicator series computed once per bars/settings; the legend just reads its bar's index.
+  const indicatorSeries = useMemo(
+    () =>
+      INDICATORS.filter((i) => settings[i.id].on && applicable(i.id, interval)).map((info) => ({
         id: info.id,
         label: indicatorLabel(info.id, settings[info.id]),
-        values: out.lines.map(({ key, values }) => ({ key, value: values[values.length - 1], color: lineColor(info.id, key) })),
-      }
-    })
-  }, [bars, legendIndex, settings, interval])
+        lines: compute(info.id, settings[info.id].params, bars).lines,
+      })),
+    [bars, settings, interval],
+  )
+  const legendIndex = legend ? bars.findIndex((b) => b[0] === legend[0]) : -1
+  const indicatorValues =
+    legendIndex < 0
+      ? []
+      : indicatorSeries.map((s) => ({
+          id: s.id,
+          label: s.label,
+          values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
+        }))
 
   return (
     <div className="price-chart">

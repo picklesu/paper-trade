@@ -67,6 +67,7 @@ export function dockSpot(api: DockviewApi, id: PanelId): DockSpot {
 export function reopenPanel(api: DockviewApi, id: PanelId): void {
   const existing = api.getPanel(id)
   if (existing) {
+    showGroup(existing.group)
     existing.api.setActive()
     return
   }
@@ -75,7 +76,13 @@ export function reopenPanel(api: DockviewApi, id: PanelId): void {
     ? { referencePanel: spot.beside, direction: spot.side }
     : { direction: spot.side === 'within' ? 'right' : spot.side }
   const size = spot.size === undefined ? {} : spot.side === 'below' ? { initialHeight: spot.size } : { initialWidth: spot.size }
-  api.addPanel({ id, component: id, title: PANELS[id].title, position, ...size })
+  const panel = api.addPanel({ id, component: id, title: PANELS[id].title, position, ...size })
+  showGroup(panel.group) // it may have joined a collapsed group
+}
+
+/** Expand a group collapsed to an edge strip, so a panel brought to it is seen. */
+function showGroup(group: DockviewGroupPanel): void {
+  if (group.api.location.type === 'grid' && !group.api.isVisible) group.api.setVisible(true)
 }
 
 /** Dock a floating group back at the usual spot of its (first) panel, at its default size. */
@@ -86,6 +93,7 @@ export function dockGroup(api: DockviewApi, group: DockviewGroupPanel): void {
   const toPosition = { left: 'left', right: 'right', below: 'bottom', within: 'center' } as const
   const target = spot.beside ? api.getPanel(spot.beside)?.group : undefined
   group.api.moveTo({ group: target, position: toPosition[spot.side] })
+  if (target && spot.side === 'within') showGroup(target)
   if (spot.size !== undefined && spot.side !== 'within') {
     group.api.setSize(spot.side === 'below' ? { height: spot.size } : { width: spot.size })
   }

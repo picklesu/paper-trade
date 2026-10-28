@@ -11,12 +11,14 @@ import {
 import 'dockview-react/dist/styles/dockview.css'
 import { type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppData } from './appDataContext'
+import { type ChartToolbarSlot as ToolbarSlot, ChartToolbarSlotContext, SetChartToolbarSlotContext } from './chartToolbarSlot'
 import { CollapseContext, useCollapse } from './collapseContext'
 import { EdgeStrip } from './EdgeStrip'
 import { type Edge, edgeOf, savedSizes, withHidden } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
 import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
 import { buildDefaultLayout, COMPONENTS, dockGroup, PANEL_IDS, type PanelId, reopenPanel } from './panels'
+import { snapFloatingResizes } from './floatingResize'
 import { snapPosition } from './snap'
 import { useEdgeStrips } from './useEdgeStrips'
 
@@ -90,6 +92,8 @@ export function Workspace() {
   // The group being peeked at, if any: saved as collapsed.
   const peekRef = useRef<string | null>(null)
   const disposeSizes = useRef<() => void>(() => {})
+  const disposeResizes = useRef<() => void>(() => {})
+  const [toolbarSlot, setToolbarSlot] = useState<ToolbarSlot | null>(null)
 
   const scheduleSave = (api: DockviewApi) => {
     window.clearTimeout(saveTimer.current)
@@ -140,6 +144,8 @@ export function Workspace() {
     // StrictMode's development double-mount readies a second dockview on the same element.
     disposeSizes.current()
     if (host.current) disposeSizes.current = keepSidePanelSizes(api, host.current, saved)
+    disposeResizes.current()
+    disposeResizes.current = snapFloatingResizes(api)
     // Save shortly after any change (moves, resizes, floats, closes).
     api.onDidLayoutChange(() => scheduleSave(api))
     setApi(api)
@@ -148,22 +154,27 @@ export function Workspace() {
 
   return (
     <CollapseContext.Provider value={collapse}>
-      <div className="workspace-frame" ref={frame}>
-        {EDGES.map((edge) => (
-          <EdgeStrip key={edge} edge={edge} />
-        ))}
-        <div className="dock-host" ref={host}>
-          <DockviewReact
-            theme={themeDark}
-            components={COMPONENTS}
-            rightHeaderActionsComponent={GroupActions}
-            onReady={onReady}
-            floatingGroupBounds="boundedWithinViewport"
-            // Floating windows snap to the workspace edges and to each other.
-            transformFloatingGroupDrag={(ctx: FloatingGroupDragContext) => snapPosition(ctx.proposed, ctx.container, ctx.others)}
-          />
-        </div>
-      </div>
+      <ChartToolbarSlotContext.Provider value={toolbarSlot}>
+        <SetChartToolbarSlotContext.Provider value={setToolbarSlot}>
+          <div className="workspace-frame" ref={frame}>
+            {EDGES.map((edge) => (
+              <EdgeStrip key={edge} edge={edge} />
+            ))}
+            <div className="dock-host" ref={host}>
+              <DockviewReact
+                theme={themeDark}
+                components={COMPONENTS}
+                rightHeaderActionsComponent={GroupActions}
+                leftHeaderActionsComponent={ChartToolbarSlot}
+                onReady={onReady}
+                floatingGroupBounds="boundedWithinViewport"
+                // Floating windows snap to the workspace edges and to each other.
+                transformFloatingGroupDrag={(ctx: FloatingGroupDragContext) => snapPosition(ctx.proposed, ctx.container, ctx.others)}
+              />
+            </div>
+          </div>
+        </SetChartToolbarSlotContext.Provider>
+      </ChartToolbarSlotContext.Provider>
     </CollapseContext.Provider>
   )
 }
@@ -233,6 +244,36 @@ function keepSidePanelSizes(api: DockviewApi, host: HTMLElement, saved: Serializ
     sub.dispose()
     observer.disconnect()
   }
+}
+
+/** Chart widths at which its toolbar fits beside its tab: every button, or the compact form.
+ *  Narrower than that, it stays in the panel. */
+const TOOLBAR_FULL_MIN_WIDTH = 760
+const TOOLBAR_COMPACT_MIN_WIDTH = 440
+
+function toolbarFit(group: DockviewGroupPanel): 'full' | 'compact' | null {
+  if (group.activePanel?.id !== 'chart' || group.width < TOOLBAR_COMPACT_MIN_WIDTH) return null
+  return group.width >= TOOLBAR_FULL_MIN_WIDTH ? 'full' : 'compact'
+}
+
+/** In the chart's tab bar, after the tabs: the spot the chart's toolbar moves into while the
+ *  chart is the group's visible panel and the group is wide enough. */
+function ChartToolbarSlot({ group }: IDockviewHeaderActionsProps) {
+  const setSlot = useContext(SetChartToolbarSlotContext)
+  const [fit, setFit] = useState(() => toolbarFit(group))
+  const [element, setElement] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    const update = () => setFit(toolbarFit(group))
+    update()
+    const subs = [group.api.onDidActivePanelChange(update), group.api.onDidDimensionsChange(update)]
+    return () => subs.forEach((s) => s.dispose())
+  }, [group])
+  useEffect(() => {
+    if (!element || !fit) return
+    setSlot({ element, compact: fit === 'compact' })
+    return () => setSlot(null)
+  }, [element, fit, setSlot])
+  return fit ? <div className="chart-toolbar-slot" ref={setElement} /> : null
 }
 
 /** Buttons at the right of each group's tab bar: collapse it to an edge (or pin it open),

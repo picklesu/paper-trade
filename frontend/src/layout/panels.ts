@@ -20,15 +20,16 @@ export const COMPONENTS = Object.fromEntries(PANEL_IDS.map((id) => [id, PANELS[i
 
 const ACCOUNT: PanelId[] = ['positions', 'orders', 'activity']
 
-/** Default widths of the side panels (the chart takes the rest). */
+/** Default widths of the side panels and height of the account tabs (the chart takes the rest). */
 const SIDE_WIDTH = { watchlist: 250, ticket: 300 } as const
+const ACCOUNT_HEIGHT = 180
 
 /** The default workspace: chart in the middle, watchlist left, order entry right,
  *  and the account views tabbed along the bottom. */
 export function buildDefaultLayout(api: DockviewApi): void {
   api.clear()
   api.addPanel({ id: 'chart', component: 'chart', title: PANELS.chart.title })
-  api.addPanel({ id: 'positions', component: 'positions', title: PANELS.positions.title, position: { direction: 'below' }, initialHeight: 220 })
+  api.addPanel({ id: 'positions', component: 'positions', title: PANELS.positions.title, position: { direction: 'below' }, initialHeight: ACCOUNT_HEIGHT })
   api.addPanel({ id: 'orders', component: 'orders', title: PANELS.orders.title, position: { referencePanel: 'positions', direction: 'within' }, inactive: true })
   api.addPanel({ id: 'activity', component: 'activity', title: PANELS.activity.title, position: { referencePanel: 'positions', direction: 'within' }, inactive: true })
   api.addPanel({ id: 'watchlist', component: 'watchlist', title: PANELS.watchlist.title, position: { referencePanel: 'chart', direction: 'left' }, initialWidth: SIDE_WIDTH.watchlist })
@@ -53,7 +54,7 @@ export function dockSpot(api: DockviewApi, id: PanelId): DockSpot {
   const docked = (p: PanelId) => p !== id && api.getPanel(p)?.group.api.location.type === 'grid'
   if (ACCOUNT.includes(id)) {
     const other = ACCOUNT.find(docked)
-    return other ? { beside: other, side: 'within' } : { side: 'below', size: 220 }
+    return other ? { beside: other, side: 'within' } : { side: 'below', size: ACCOUNT_HEIGHT }
   }
   if (id === 'watchlist') return docked('chart') ? { beside: 'chart', side: 'left', size: SIDE_WIDTH.watchlist } : { side: 'left', size: SIDE_WIDTH.watchlist }
   if (id === 'ticket') return docked('chart') ? { beside: 'chart', side: 'right', size: SIDE_WIDTH.ticket } : { side: 'right', size: SIDE_WIDTH.ticket }

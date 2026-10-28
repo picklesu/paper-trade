@@ -3,6 +3,7 @@ import { direction, dollars, signedDollars } from '../lib/format'
 import type { Account, ClockState, ProgressMessage, Regime } from '../lib/types'
 import { PanelsMenu } from '../layout/PanelsMenu'
 import { ClockControls } from './ClockControls'
+import { FullscreenButton } from './FullscreenButton'
 
 interface Props {
   status: ConnectionStatus
@@ -33,6 +34,7 @@ export function TopBar({ status, clock, regime, progress, account }: Props) {
       </div>
       <ClockControls clock={clock} regime={regime} progress={progress} />
       <PanelsMenu />
+      <FullscreenButton />
       <div className={`conn conn-${status}`} role="status">
         <span className="dot" />
         {STATUS_LABEL[status]}

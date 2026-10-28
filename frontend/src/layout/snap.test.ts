@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { snapPosition } from './snap'
+import { snapPosition, snapResize } from './snap'
 
 const container = { width: 1200, height: 800 }
 const box = (left: number, top: number, width = 300, height = 400) => ({ left, top, width, height })
@@ -33,5 +33,24 @@ describe('snapPosition', () => {
     expect(snapPosition(box(205, 500, 300, 200), container, [other])).toEqual({ left: 205, top: 500 })
     // Same x, but overlapping vertically: snaps.
     expect(snapPosition(box(205, 50, 300, 200), container, [other])).toEqual({ left: 200, top: 50 })
+  })
+})
+
+describe('snapResize', () => {
+  const container = { width: 1000, height: 600 }
+  const other = { left: 500, top: 100, width: 300, height: 300 }
+
+  it('pulls the dragged edge flush against a nearby window', () => {
+    expect(snapResize({ left: 100, top: 120, width: 393, height: 200 }, { right: true }, container, [other])).toEqual({ left: 100, top: 120, width: 400, height: 200 })
+  })
+
+  it('lines the dragged edge up with the other window and the workspace edges', () => {
+    expect(snapResize({ left: 100, top: 120, width: 200, height: 285 }, { bottom: true }, container, [{ ...other, left: 305 }])).toMatchObject({ top: 120, height: 280 })
+    expect(snapResize({ left: 8, top: 120, width: 200, height: 200 }, { left: true }, container, [])).toEqual({ left: 0, top: 120, width: 208, height: 200 })
+  })
+
+  it('leaves the edges not being dragged, and ignores windows far away on the other axis', () => {
+    expect(snapResize({ left: 100, top: 450, width: 395, height: 100 }, { right: true }, container, [other])).toEqual({ left: 100, top: 450, width: 395, height: 100 })
+    expect(snapResize({ left: 495, top: 120, width: 100, height: 100 }, { right: true }, container, [other])).toEqual({ left: 495, top: 120, width: 100, height: 100 })
   })
 })

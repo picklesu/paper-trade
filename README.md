@@ -25,6 +25,9 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - **⧉ pops a panel out** as a floating window over everything else; drag it by its top bar (it snaps to the workspace edges and to other floating windows) and resize it from any edge or corner. **⇲ docks it back.** Shift+drag a tab also floats it.
 - **⤢ maximizes** a panel (⤡ restores).
 - **⇤ ⇥ ⤒ ⤓ collapse** a docked panel to a strip of tabs on the edge it sits on; the chart takes the space. Click a tab to show that panel; a click anywhere else in the workspace tucks it away again, and the **pin** keeps it open. Side panels keep their size when others collapse or the window resizes; the chart grows and shrinks instead.
+- **⛶ Full screen** (top bar, or press **F**) hides the OS and browser bars so the chart gets the whole screen; Esc leaves. Another option: in Chrome, ⋮ → Cast, save, and share → Install page as app (or Create shortcut → Open as window) gives the app its own window without tabs or bookmarks.
+- The chart's range, bar size and indicator controls sit in the chart's tab bar (as drop-downs when the chart is narrow), and the quote is one line, so the candles get most of the panel.
+- Resizing a floating window snaps its edge to the workspace edges and to other floating windows, and brings it to the front.
 - **Panels ▾** (top bar) shows or hides panels and has **Reset layout**. Your layout is saved in this browser.
 
 ## Charts

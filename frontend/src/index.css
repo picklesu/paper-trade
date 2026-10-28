@@ -37,11 +37,15 @@ body {
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 0 16px;
-  height: 44px;
+  gap: 20px;
+  padding: 0 12px;
+  height: 36px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+}
+.topbar > * {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .brand {
   font-weight: 700;
@@ -49,8 +53,16 @@ body {
 }
 .account {
   display: flex;
-  gap: 24px;
-  flex: 1;
+  gap: 20px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+/* On a narrower window the name goes first; the account figures and controls stay. */
+@media (max-width: 1240px) {
+  .brand {
+    display: none;
+  }
 }
 .stat {
   display: flex;
@@ -100,6 +112,11 @@ body {
 }
 .speeds .ctl + .ctl {
   border-left: none;
+}
+.icon-ctl {
+  min-width: 28px;
+  font-size: 14px;
+  line-height: 1;
 }
 .ctl:hover:not(:disabled) {
   border-color: var(--accent);
@@ -274,6 +291,8 @@ body {
   --dv-drag-over-background-color: rgba(59, 130, 246, 0.18);
   --dv-drag-over-border-color: var(--accent);
   --dv-tabs-and-actions-container-font-size: 12px;
+  /* Thinner tab bars than dockview's 35px: more room for the chart. */
+  --dv-tabs-and-actions-container-height: 30px;
   --dv-floating-box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
   --dv-floating-titlebar-background-color: var(--bg);
 }
@@ -484,35 +503,47 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  container-type: inline-size;
 }
+/* A narrower chart drops the less important parts of the quote line. */
+@container (max-width: 900px) {
+  .quote-name {
+    display: none;
+  }
+}
+@container (max-width: 760px) {
+  .quote-stats .minor {
+    display: none;
+  }
+}
+/* One line: what doesn't fit at the right is cut off rather than taking another row. */
 .quote-detail {
-  padding: 10px 14px 8px;
-  border-bottom: 1px solid var(--border);
-}
-.quote-head {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
 }
 .quote-symbol {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 700;
 }
 .quote-name {
   color: var(--muted);
+  font-size: 12px;
 }
 .quote-last {
-  margin-left: 8px;
-  font-size: 20px;
+  margin-left: 4px;
+  font-size: 15px;
   font-weight: 600;
 }
 .quote-stats {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 20px;
-  margin: 6px 0 0;
-  font-variant-numeric: tabular-nums;
+  gap: 16px;
+  margin: 0 0 0 12px;
 }
 .quote-stats div {
   display: flex;
@@ -536,7 +567,22 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
+}
+/* The toolbar in the chart's tab bar (when the chart is wide enough). */
+.chart-toolbar-slot {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 10px;
+}
+.chart-toolbar-slot .chart-toolbar {
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 0;
+}
+.chart-toolbar-slot .ctl {
+  padding: 2px 7px;
 }
 .seg {
   display: flex;

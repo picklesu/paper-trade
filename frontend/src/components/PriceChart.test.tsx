@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bar } from '../lib/bars'
 import { calls, resetCalls } from '../test/lightweight-charts.mock'
 import type { ClockState, Order, Quote } from '../lib/types'
+import { ChartToolbarSlotContext } from '../layout/chartToolbarSlot'
 import { PriceChart } from './PriceChart'
 
 const OPEN = Date.parse('2026-01-07T14:30:00Z') / 1000
@@ -61,6 +62,29 @@ describe('PriceChart', () => {
     expect(loads()[2].get('interval')).toBe('15m')
     expect(screen.getByRole('button', { name: '15-minute bars' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: '5Y' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it("moves its toolbar into the chart's tab bar, compact when the chart is narrower", async () => {
+    const fn = serve()
+    const loads = () => fn.mock.calls.map(([u]) => new URL(u, 'http://x').searchParams).filter((p) => !p.has('end'))
+    const slot = document.createElement('div')
+    document.body.appendChild(slot)
+    render(
+      <ChartToolbarSlotContext.Provider value={{ element: slot, compact: true }}>
+        <PriceChart quote={quote} clock={clock} orders={[]} />
+      </ChartToolbarSlotContext.Provider>,
+    )
+    await waitFor(() => expect(loads()).toHaveLength(1))
+    const range = screen.getByRole('combobox', { name: 'Range' })
+    expect(slot).toContainElement(range)
+    fireEvent.change(range, { target: { value: '5Y' } })
+    await waitFor(() => expect(loads()).toHaveLength(2))
+    expect(loads()[1].get('interval')).toBe('1W')
+    expect(screen.getByRole('combobox', { name: 'Bar size' })).toHaveValue('1W')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Bar size' }), { target: { value: '15m' } })
+    await waitFor(() => expect(loads()).toHaveLength(3))
+    expect(loads()[2].get('interval')).toBe('15m')
+    slot.remove()
   })
 
   it('reloads when the timeline changes (a jump or rewind)', async () => {

@@ -12,6 +12,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { fetchBars } from '../lib/api'
 import {
   applyTick,
@@ -33,6 +34,7 @@ import { compute, DEFAULT_SETTINGS, indicatorLabel, INDICATORS, type IndicatorSe
 import type { ClockState, Order, Quote } from '../lib/types'
 import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
 import { IndicatorMenu } from './IndicatorMenu'
+import { useChartToolbarSlot } from '../layout/chartToolbarSlot'
 
 interface Props {
   quote: Quote
@@ -83,6 +85,7 @@ function volumeBar(b: Bar) {
 /** Interactive candlestick chart: drag to pan, scroll or pinch to zoom, older history loads as you scroll back. */
 export function PriceChart({ quote, clock, orders, history }: Props) {
   const box = useRef<HTMLDivElement>(null)
+  const toolbarSlot = useChartToolbarSlot()
   const chart = useRef<IChartApi | null>(null)
   const candles = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumes = useRef<ISeriesApi<'Histogram'> | null>(null)
@@ -359,41 +362,78 @@ export function PriceChart({ quote, clock, orders, history }: Props) {
           values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
         }))
 
+  const compact = toolbarSlot?.compact ?? false
+  const toolbar = (
+    <div className="chart-toolbar">
+      {compact ? (
+        <>
+          <select
+            className="ctl"
+            aria-label="Range"
+            title="Range"
+            value={preset?.label ?? ''}
+            onChange={(e) => {
+              const r = RANGES.find((x) => x.label === e.target.value)
+              if (r) choosePreset(r)
+            }}
+          >
+            {!preset && <option value="">Range</option>}
+            {RANGES.map((r) => (
+              <option key={r.label} value={r.label}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+          <select className="ctl" aria-label="Bar size" title="Bar size" value={interval} onChange={(e) => chooseInterval(e.target.value as Interval)}>
+            {INTERVALS.map((iv) => (
+              <option key={iv} value={iv}>
+                {INTERVAL_LABEL[iv].short}
+              </option>
+            ))}
+          </select>
+        </>
+      ) : (
+        <>
+          <div className="seg" role="group" aria-label="Range">
+            {RANGES.map((r) => (
+              <button
+                key={r.label}
+                className={preset?.label === r.label ? 'ctl active' : 'ctl'}
+                aria-pressed={preset?.label === r.label}
+                title={`Show ${r.label === 'YTD' ? 'year to date' : r.label}`}
+                onClick={() => choosePreset(r)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <div className="seg" role="group" aria-label="Bar size">
+            {INTERVALS.map((iv) => (
+              <button
+                key={iv}
+                className={interval === iv ? 'ctl active' : 'ctl'}
+                aria-pressed={interval === iv}
+                aria-label={INTERVAL_LABEL[iv].long}
+                title={INTERVAL_LABEL[iv].long}
+                onClick={() => chooseInterval(iv)}
+              >
+                {INTERVAL_LABEL[iv].short}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      <IndicatorMenu settings={settings} interval={interval} onChange={changeSettings} />
+      <button className="ctl" onClick={() => chart.current?.timeScale().scrollToRealTime()} title="Scroll to the latest bar">
+        Latest ⇥
+      </button>
+    </div>
+  )
+
   return (
     <div className="price-chart">
-      <div className="chart-toolbar">
-        <div className="seg" role="group" aria-label="Range">
-          {RANGES.map((r) => (
-            <button
-              key={r.label}
-              className={preset?.label === r.label ? 'ctl active' : 'ctl'}
-              aria-pressed={preset?.label === r.label}
-              title={`Show ${r.label === 'YTD' ? 'year to date' : r.label}`}
-              onClick={() => choosePreset(r)}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-        <div className="seg" role="group" aria-label="Bar size">
-          {INTERVALS.map((iv) => (
-            <button
-              key={iv}
-              className={interval === iv ? 'ctl active' : 'ctl'}
-              aria-pressed={interval === iv}
-              aria-label={INTERVAL_LABEL[iv].long}
-              title={INTERVAL_LABEL[iv].long}
-              onClick={() => chooseInterval(iv)}
-            >
-              {INTERVAL_LABEL[iv].short}
-            </button>
-          ))}
-        </div>
-        <IndicatorMenu settings={settings} interval={interval} onChange={changeSettings} />
-        <button className="ctl" onClick={() => chart.current?.timeScale().scrollToRealTime()} title="Scroll to the latest bar">
-          Latest ⇥
-        </button>
-      </div>
+      {/* In the chart's tab bar when there's room, so the candles get the row. */}
+      {toolbarSlot ? createPortal(toolbar, toolbarSlot.element) : toolbar}
       <div className="chart-area">
         <div ref={box} className="chart-canvas" data-testid="chart" />
         {legend && (

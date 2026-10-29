@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from paper_trade import __version__
 from paper_trade.api import health, market, stream, trading
 from paper_trade.market.clock import SimClock
-from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
+from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.store import Store
 
@@ -25,7 +25,10 @@ def load_market(store: Store, seed: int) -> tuple[SimClock, MarketEngine]:
         return clock, MarketEngine(start=clock.now(), seed=seed)
     if "starts" not in state:  # saved separately since it can be large
         state = {**state, "starts": store.get("market_starts", {})}
-    engine = MarketEngine.from_state(state)
+    if state.get("model") == MODEL_VERSION:
+        engine = MarketEngine.from_state(state)
+    else:
+        engine = MarketEngine.continue_older(state)
     saved = store.get("clock", {})
     clock = SimClock(start=engine.time, speed=saved.get("speed", 1), paused=saved.get("paused", False))
     return clock, engine

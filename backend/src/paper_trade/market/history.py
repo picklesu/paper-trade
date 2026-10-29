@@ -76,7 +76,23 @@ class History:
 
     def record(self, day: date) -> None:
         """Store a finished session's 30-minute bars (idempotent)."""
-        bars = aggregate(self.engine.minute_bars(day), STORED_MINUTES)
+        self._record_bars(day, aggregate(self.engine.minute_bars(day), STORED_MINUTES))
+
+    def backfill_iter(self, days: int) -> Iterator[date]:
+        """Generate the history before the market's origin and store its bars,
+        yielding after each session. Sessions are generated at unit scale (see
+        `MarketEngine.backfill_iter`), so their bars are held and stored once the
+        final scale is known; an interrupted build stores nothing."""
+        held = []
+        for day in self.engine.backfill_iter(days):
+            held.append((day, aggregate(self.engine.minute_bars(day), STORED_MINUTES)))
+            yield day
+        scale = self.engine.backfill_scale
+        for day, bars in held:
+            bars[..., :4] *= scale[:, None]
+            self._record_bars(day, bars)
+
+    def _record_bars(self, day: date, bars: np.ndarray) -> None:
         rows = [
             (spec.symbol, day.isoformat(), i, *map(float, bars[i, j]))
             for j, spec in enumerate(self.engine.specs)
@@ -126,6 +142,11 @@ class History:
         """Forget sessions from `day` on (a new future regenerates them)."""
         self.flush()
         self.db.execute("DELETE FROM bars30 WHERE day >= ?", (day.isoformat(),))
+
+    def delete_before(self, day: date) -> None:
+        """Forget sessions before `day` (history about to be generated again)."""
+        self.flush()
+        self.db.execute("DELETE FROM bars30 WHERE day < ?", (day.isoformat(),))
 
     def clear(self) -> None:
         if self._pending is not None:

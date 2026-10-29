@@ -21,8 +21,8 @@ def make(days: int = 60, now: datetime = NOW) -> History:
     history = History(Store(":memory:").connection, engine)
     engine.on_day_complete = history.record
     with history.batch():
-        for d in engine.backfill_iter(days):
-            history.record(d)
+        for _ in history.backfill_iter(days):
+            pass
     engine.advance(now)
     return history
 

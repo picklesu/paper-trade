@@ -195,3 +195,31 @@ def test_history_build_finishes_with_a_snapshot_that_says_so() -> None:
     ticks = [m for m in drain(q) if m["type"] == "tick"]
     assert ticks and ticks[-1]["clock"]["building_history"] is False
     assert svc.engine.backfilled and svc.engine.origin < datetime(2026, 1, 5, tzinfo=UTC)
+
+
+def test_market_from_an_older_model_continues_and_rebuilds_history(tmp_path) -> None:
+    from paper_trade.main import load_market
+
+    # A market saved by the older model (no model version, no variance), with chart bars.
+    store = Store(tmp_path / "old.db")
+    svc = MarketService(SimClock(start=START), MarketEngine(START), store, history_days=5)
+    asyncio.run(svc.build_history())
+    svc.engine.advance(datetime(2026, 1, 8, 15, 0, tzinfo=UTC))
+    svc.save()
+    state = store.get("market")
+    state.pop("model")
+    store.set("market", state)
+    starts = store.get("market_starts")
+    store.set("market_starts", {d: s[:2] for d, s in starts.items()})
+    old_days = svc.history.stored_days()
+
+    clock, engine = load_market(store, seed=42)
+    continued = engine.time
+    assert engine.origin == continued == svc.engine.time
+    assert not engine.backfilled
+    new = MarketService(clock, engine, store, history_days=5)
+    asyncio.run(new.build_history())
+    # Five days of new history before that point replace all the old bars.
+    days = new.history.stored_days()
+    assert len(days) == 5 and max(days) < continued.date() and days != old_days
+    assert engine.backfilled and engine.time == continued

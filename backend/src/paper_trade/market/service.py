@@ -255,8 +255,12 @@ class MarketService:
         """Store bars for finished sessions that have none, and generate the
         years of history before the market's start if not done yet."""
         try:
-            missing = self.history.missing_days()
             backfill = 0 if self.engine.backfilled else self.history_days
+            if backfill:
+                # Bars before the origin are about to be generated again; any there now
+                # (from a market continued from an older price model) no longer match.
+                self.history.delete_before(market_day(self.engine.origin))
+            missing = self.history.missing_days()
             total, done = len(missing) + backfill, 0
             with self.history.batch():
                 for day in missing:
@@ -264,8 +268,7 @@ class MarketService:
                     done += 1
                     await self._history_progress(done, total)
                 if backfill:
-                    for day in self.engine.backfill_iter(backfill):
-                        self.history.record(day)
+                    for _ in self.history.backfill_iter(backfill):
                         done += 1
                         await self._history_progress(done, total)
         except Exception:

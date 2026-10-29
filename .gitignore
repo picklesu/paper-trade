@@ -8,3 +8,4 @@ __pycache__/
 .run/
 *.db-wal
 *.db-shm
+.DS_Store

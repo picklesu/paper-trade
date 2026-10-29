@@ -26,9 +26,9 @@ _Last updated: 2026-10-29, after Phase 5.6 (more realistic prices)._
 ## Pick up here
 
 **Waiting on the user.** Decisions so far (2026-10-29):
-- **Layout presets are dropped** (they were 5.5c step 1). Don't propose them again.
-- **On hold:** "narrow screens" (one panel at a time over the chart, the other 5.5c step) and
-  expanding the symbol list to about 40 across sectors (costs about 4× engine work per
+- **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
+  (they were the 5.5c steps). Don't propose them again.
+- **On hold:** expanding the symbol list to about 40 across sectors (costs about 4× engine work per
   session, roughly 30s for the first history build).
 - **Phase 6 (watchlists and quotes) proposal**, given to the user and not yet approved: several
   named lists saved in SQLite, add/remove/reorder/sort, choosable columns (incl. a day

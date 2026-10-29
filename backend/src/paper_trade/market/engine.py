@@ -35,9 +35,9 @@ factor, and the symbol's own noise, with:
 Each symbol's long-run volatility and drift still match its spec: jumps take
 their share of the variance from the continuous part.
 
-A session's skeleton draws come from separate streams for the market, each
-sector and each symbol, keyed by name, so adding a symbol leaves the others'
-minute bars unchanged.
+Random draws come from separate streams for the market, each sector and each
+symbol, keyed by name, so adding a symbol leaves the others' prices unchanged,
+and one symbol's seconds can be generated alone.
 
 Going back in time either replays the same future or starts a new one. A new
 future is a new "epoch": random draws from its start (rounded up to the next
@@ -128,7 +128,7 @@ DISCRETE_EXTREME_SHIFT = 0.5826
 
 HISTORY_DAYS = TRADING_DAYS_PER_YEAR * 5  # history generated before a market's start
 SKELETON_CACHE_DAYS = 32
-FINE_CACHE_MINUTES = 16
+FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
@@ -179,24 +179,20 @@ class Quote:
 def bid_ask(price: float, factor: float = 1.0) -> tuple[float, float]:
     """Penny-wide spread for most prices, about 1bp for expensive ones, times
     `factor` (wider when the market is volatile)."""
-    spread = max(0.01, round(max(0.01, price * 0.0001) * factor, 2))
-    # Round down to the cent; round() first so float noise like 57996.99999 floors correctly.
-    bid = math.floor(round((price - spread / 2) * 100, 6)) / 100
-    ask = round(bid + spread, 2)
-    if ask < price:  # e.g. 1.234 floors to 1.22/1.23; shift up so the quote brackets the price
-        bid, ask = round(bid + 0.01, 2), round(ask + 0.01, 2)
-    return bid, ask
+    # Whole cents throughout, with the same operations as bid_ask_arrays, so both agree exactly.
+    spread = max(1, math.floor(max(0.01, price * 0.0001) * factor * 100 + 0.5))
+    bid = math.floor(price * 100 - spread / 2 + 1e-6)  # the 1e-6 absorbs float noise like 57996.99999
+    if bid + spread < price * 100:  # e.g. 1.234: 1.22/1.23; shift up so the quote brackets the price
+        bid += 1
+    return bid / 100, (bid + spread) / 100
 
 
 def bid_ask_arrays(prices: np.ndarray, factor: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
     """`bid_ask` for an array of prices, with identical results."""
-    spread = np.maximum(0.01, np.round(np.maximum(0.01, prices * 0.0001) * factor, 2))
-    bid = np.floor(np.round((prices - spread / 2) * 100, 6)) / 100
-    ask = np.round(bid + spread, 2)
-    low = ask < prices
-    bid = np.where(low, np.round(bid + 0.01, 2), bid)
-    ask = np.where(low, np.round(ask + 0.01, 2), ask)
-    return bid, ask
+    spread = np.maximum(1, np.floor(np.maximum(0.01, prices * 0.0001) * factor * 100 + 0.5))
+    bid = np.floor(prices * 100 - spread / 2 + 1e-6)
+    bid = np.where(bid + spread < prices * 100, bid + 1, bid)
+    return bid / 100, (bid + spread) / 100
 
 
 @dataclass
@@ -367,6 +363,7 @@ class MarketEngine:
             self.starts_version += 1
             self._forget(lambda d: d >= day)
         self._time = t
+        self._quotes = None
 
     def reset(self, t: datetime) -> None:
         """Start a brand-new market at `t`, with fresh prices and no history."""
@@ -376,6 +373,12 @@ class MarketEngine:
 
     @property
     def quotes(self) -> dict[str, Quote]:
+        """Every symbol's quote now (cached until the market moves)."""
+        if self._quotes is None or self._quotes[0] != self._time:
+            self._quotes = (self._time, self._make_quotes())
+        return self._quotes[1]
+
+    def _make_quotes(self) -> dict[str, Quote]:
         day = market_day(self._time)
         sk = self._skeleton(day)
         s = min(int(session_seconds(self._time)), _S - 1)
@@ -506,7 +509,7 @@ class MarketEngine:
         first, last = lo // 60, hi // 60
         for m in first + np.flatnonzero(candidates[first : last + 1]):
             a, b = max(lo, 60 * m) - 60 * m, min(hi, 60 * m + 59) - 60 * m
-            prices = self._fine(day, int(m))[a : b + 1, col]
+            prices = self._fine(day, int(m), col)[a : b + 1, col]
             hits = np.flatnonzero(test(prices, float(sk.spread[m])))
             if hits.size:
                 return int(60 * m + a + hits[0])
@@ -515,12 +518,15 @@ class MarketEngine:
     def price_at(self, day: date, second: int, col: int) -> float:
         """One symbol's price `second` seconds after a session's open."""
         m, sec = divmod(min(second, _S - 1), 60)
-        return float(self._fine(day, m)[sec, col])
+        return float(self._fine(day, m, col)[sec, col])
 
-    def day_prices(self, day: date) -> np.ndarray:
-        """(S, N) every second of a session, row s being s seconds after the open.
-        Slow (it generates every minute's seconds): for tests and checks."""
-        return np.concatenate([self._fine(day, m) for m in range(_M)])
+    def day_prices(self, day: date, col: int | None = None) -> np.ndarray:
+        """(S, N) every second of a session, row s being s seconds after the open
+        (or (S,) for one symbol). Slow (it generates every minute's seconds): for
+        tests and checks."""
+        if col is None:
+            return np.concatenate([self._fine(day, m) for m in range(_M)])
+        return np.concatenate([self._fine(day, m, col)[:, col] for m in range(_M)])
 
     def prices_at(self, t: datetime) -> dict[str, float]:
         """Last prices at a past market time (between origin and now)."""
@@ -590,7 +596,8 @@ class MarketEngine:
             prices = np.array([s.price for s in self.specs])
         self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, self._normal)}
         self._skeletons: OrderedDict[date, _Skeleton] = OrderedDict()
-        self._fines: OrderedDict[tuple[date, int], np.ndarray] = OrderedDict()
+        self._fines: OrderedDict[tuple[date, int], tuple[np.ndarray, np.ndarray]] = OrderedDict()
+        self._quotes: tuple[datetime, dict[str, Quote]] | None = None
         self.backfilled = False
         # Bumped whenever session start states change, so savers can skip the large part.
         self.starts_version = getattr(self, "starts_version", 0) + 1
@@ -817,35 +824,55 @@ class MarketEngine:
             next_start=_DayStart(np.exp(close[-1]), int(regimes[-1]), h_next, h_own_next),
         )
 
-    def _fine(self, day: date, m: int) -> np.ndarray:
-        """(60, N) prices for each second of minute `m`: a bridge through the
-        minute's open, high, low and close, shaped by the same market, sector and
-        own noise as the rest (so symbols still move together second to second)."""
+    def _fine(self, day: date, m: int, cols: int | np.ndarray | None = None) -> np.ndarray:
+        """(60, N) prices for each second of minute `m`, generated for `cols`
+        (default: every symbol); other columns may not be filled in yet."""
         key = (day, m)
         if key in self._fines:
             self._fines.move_to_end(key)
-            return self._fines[key]
-        sk = self._skeleton(day)
-        n, k = len(self.specs), len(self.sectors)
-        seed, ordinal = int(sk.minute_seed[m]), day.toordinal()
-        reg = sk.regimes[m]
-        weights = self._second_weight[60 * m : 60 * m + 59]  # rows 60m+1 .. 60m+59
-        rng = np.random.default_rng([seed, ordinal, _FINE, m])
-        mults = np.full(1 + k + n, self._own_mults[reg])
-        mults[0] = self._market_mults[reg]
-        walks = np.zeros((60, 1 + k + n))
-        walks[1:] = np.cumsum(weights[:, None] * mults * rng.standard_normal((59, 1 + k + n)), axis=0)
-        noise = sk.market_load * walks[:, :1] + sk.sector_load * walks[:, 1 + self._sector_of] + sk.own_load * walks[:, 1 + k :]
+            prices, done = self._fines[key]
+        else:
+            n = len(self.specs)
+            prices, done = np.empty((60, n)), np.zeros(n, dtype=bool)
+            self._cache(self._fines, key, (prices, done), FINE_CACHE_MINUTES, keep=key)
+        want = np.arange(len(self.specs)) if cols is None else np.atleast_1d(cols)
+        missing = want[~done[want]]
+        if missing.size:
+            prices[:, missing] = self._seconds(day, m, missing)
+            done[missing] = True
+        return prices
 
-        out = np.empty((60, n))
+    def _seconds(self, day: date, m: int, cols: np.ndarray) -> np.ndarray:
+        """(60, len(cols)) prices for each second of minute `m`: a bridge through
+        the minute's open, high, low and close, shaped by the same market, sector
+        and own noise as the rest (so symbols still move together second to second)."""
+        sk = self._skeleton(day)
+        k = len(self.sectors)
+        seed, ordinal, reg = int(sk.minute_seed[m]), day.toordinal(), sk.regimes[m]
+        weights = self._second_weight[60 * m : 60 * m + 59]  # rows 60m+1 .. 60m+59
+
+        def walk(path: int, mult: float) -> np.ndarray:
+            rng = np.random.default_rng([seed, ordinal, _FINE, m, self._keys[path]])
+            out = np.zeros(60)
+            out[1:] = np.cumsum(weights * mult * rng.standard_normal(59))
+            return out
+
+        market = walk(0, self._market_mults[reg])
+        sectors: dict[int, np.ndarray] = {}
+        out = np.empty((60, len(cols)))
         r = np.arange(60)
         inner = slice(1, 59)
-        for i in range(n):
+        for c, i in enumerate(cols):
+            noise = sk.market_load[i] * market + sk.own_load[i] * walk(1 + k + i, self._own_mults[reg])
+            if sk.sector_load[i]:
+                j = int(self._sector_of[i])
+                if j not in sectors:
+                    sectors[j] = walk(1 + j, self._own_mults[reg])
+                noise += sk.sector_load[i] * sectors[j]
             x0, x1, hi, lo = sk.open[m, i], sk.close[m, i], sk.high[m, i], sk.low[m, i]
-            walk = noise[:, i]
             # The high and low come where the noise (pinned at the open and close)
             # peaks and dips, so symbols that move together peak together.
-            pinned = walk - np.interp(r, (0, 59), walk[[0, 59]])
+            pinned = noise - np.interp(r, (0, 59), noise[[0, 59]])
             times, values = [0, 59], [x0, x1]
             t_hi = None
             if hi > max(x0, x1):
@@ -861,14 +888,12 @@ class MarketEngine:
             order = np.argsort(times)
             times_s, values_s = np.array(times)[order], np.array(values)[order]
             # Pin the noise at every anchor first, so anchors come out exactly.
-            path = np.interp(r, times_s, values_s) + (walk - np.interp(r, times_s, walk[times_s]))
+            path = np.interp(r, times_s, values_s) + (noise - np.interp(r, times_s, noise[times_s]))
             for _ in range(3):  # fold back inside the minute's range
                 path = np.where(path > hi, 2 * hi - path, path)
                 path = np.where(path < lo, 2 * lo - path, path)
-            out[:, i] = np.clip(path, lo, hi)
-        prices = np.exp(out)
-        self._cache(self._fines, key, prices, FINE_CACHE_MINUTES, keep=key)
-        return prices
+            out[:, c] = np.clip(path, lo, hi)
+        return np.exp(out)
 
     @staticmethod
     def _cache(cache: OrderedDict, key, value, size: int, keep) -> None:

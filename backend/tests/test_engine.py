@@ -256,10 +256,12 @@ def test_bid_ask_arrays_match_scalar() -> None:
     from paper_trade.market.engine import bid_ask_arrays
 
     rng = random.Random(1)
-    prices = [1.234, 57.5, 100.0, 580.0, 999.999] + [rng.uniform(1, 2000) for _ in range(20_000)]
-    bids, asks = bid_ask_arrays(np.array(prices))
-    for p, b, a in zip(prices, bids, asks):
-        assert (float(b), float(a)) == bid_ask(p)
+    prices = [1.234, 57.5, 100.0, 150.0, 580.0, 999.999] + [rng.uniform(1, 2000) for _ in range(20_000)]
+    for factor in (1.0, 1.5, 2.37, 5.0):
+        bids, asks = bid_ask_arrays(np.array(prices), factor)
+        for p, b, a in zip(prices, bids, asks):
+            assert (float(b), float(a)) == bid_ask(p, factor)
+            assert b <= p <= a
 
 
 def test_starts_version_changes_only_with_new_sessions() -> None:
@@ -526,6 +528,7 @@ def test_adding_a_symbol_leaves_the_others_unchanged() -> None:
             small.minute_bars(date(2026, 1, 8))[:, small.symbol_index(spec.symbol)],
             full.minute_bars(date(2026, 1, 8))[:, full.symbol_index(spec.symbol)],
         )
+        assert small.quotes[spec.symbol] == full.quotes[spec.symbol]  # seconds too
 
 
 def test_new_future_mid_minute_starts_at_the_next_minute() -> None:

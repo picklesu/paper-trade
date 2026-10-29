@@ -78,7 +78,8 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     generated in one go at **one-minute resolution**, its `_Skeleton`: each minute's open, high,
     low and close (as log prices) and volume for every symbol, plus the regimes, spread factors and
     loadings. Charts, stored bars, history and day high/low all come from it. **Seconds are
-    generated on demand** (`_fine(day, m)`, LRU of 16 minutes): the current minute for quotes and
+    generated on demand, per symbol** (`_fine(day, m, cols)`, LRU of 64 minutes holding the
+    columns generated so far; `_seconds` does the work): the current minute for quotes and
     minutes where an order could fill. A minute's seconds are a bridge through its open, high (at
     the peak of the shared noise), low (at its dip) and close, folded back inside the range, so
     seconds always agree exactly with the bars (`test_seconds_agree_with_minute_bars`); the noise is
@@ -99,9 +100,10 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     regime × √variance × activity (squared standardized move, `ACTIVITY_BASE` 0.7) × news burst ×
     earnings; spread factor per minute = market volatility vs normal, clipped to [1, 5]
     (`bid_ask(price, factor)`). Long-run vol and drift match each spec (tests over 10 years).
-    **Random draws:** the skeleton uses one stream per path keyed by name (`zlib.crc32`), so
-    adding a symbol leaves other symbols' bars unchanged (tested); seconds use one stream per
-    (seed, day, minute). **New future:** a new epoch takes over from the first whole minute at or
+    **Random draws:** one stream per path keyed by name (`zlib.crc32`), for the skeleton and
+    for seconds, so adding a symbol leaves other symbols' prices unchanged (tested) and one
+    symbol's seconds can be generated alone. `quotes` is cached per market time. `bid_ask` and
+    `bid_ask_arrays` work in whole cents with the same operations, so they agree exactly. **New future:** a new epoch takes over from the first whole minute at or
     after its start (that minute's moves from its open on), so prices up to `t` are unchanged with
     no mid-minute splicing. `backfill_iter(days)` generates history forward from prices of 1.0,
     oldest first, then sets `backfill_scale` and commits the scaled starts. Engine API used
@@ -312,6 +314,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
   exact Brownian path; minute highs and lows are drawn independently (their joint distribution is
   approximated).
 - The watchlist shows all 40 symbols in one scrolling list until Phase 6 adds lists.
+- Changing the symbol list (adding one) still continues the market as a new one (`continue_older`)
+  and rebuilds history, although other symbols' prices would be unchanged. Remapping saved
+  starts by name and backfilling only the new symbol would avoid that; do it if symbols are added.
 - Model-version changes (`continue_older`): the old model's prices can't be recomputed, so
   that session restarts from its previous close with new draws and the quote jumps once
   (positions revalue; a working stop could trigger). Fills made earlier keep their prices,

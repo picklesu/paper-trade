@@ -31,7 +31,7 @@ def move(b: Broker, t: datetime) -> None:
 
 
 def path(b: Broker, symbol: str, day: date) -> np.ndarray:
-    return b.engine.day_prices(day)[:, b.engine.symbol_index(symbol)]
+    return b.engine.day_prices(day, b.engine.symbol_index(symbol))
 
 
 def first_second(cond: np.ndarray, after: int) -> int:
@@ -234,8 +234,8 @@ def test_limit_fills_at_better_price_when_open_gaps_through() -> None:
     days = sorted(probe.engine._starts)
     i = probe.engine.symbol_index("NVDA")
     for prev, day in zip(days, days[1:]):
-        close = float(probe.engine.day_prices(prev)[-1, i])
-        open_ = float(probe.engine.day_prices(day)[0, i])
+        close = float(probe.engine.minute_bars(prev)[-1, i, 3])
+        open_ = float(probe.engine.minute_bars(day)[0, i, 0])
         if open_ < close * 0.995:
             break
     else:

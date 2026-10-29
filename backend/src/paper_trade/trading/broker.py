@@ -488,7 +488,7 @@ class Broker:
             self._fill(o, fill, t)
 
     @staticmethod
-    def _immediate(o: Order, price: float, spread: float = 1.0) -> tuple[bool, float | None]:
+    def _immediate(o: Order, price: float, spread: float) -> tuple[bool, float | None]:
         """What happens to `o` at once with the last price `price` (and spreads
         `spread` times normal), without changing anything: whether its stop
         triggers, and the fill price if it trades now."""

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Modal } from './Modal'
-import { goto, previewGoto, type GotoResult } from '../lib/api'
-import { dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
+import { fetchRealPrices, goto, previewGoto, syncRealPrices, type GotoResult, type RealPricesStatus } from '../lib/api'
+import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
 interface Props {
@@ -25,6 +25,42 @@ export function GoToDialog({ clock, onClose }: Props) {
   const [preview, setPreview] = useState<GotoResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Set while offering to sync to real prices.
+  const [real, setReal] = useState<RealPricesStatus | 'loading' | null>(null)
+
+  // Counts sync views opened, so a status that arrives after Back is ignored.
+  const syncView = useRef(0)
+
+  const openSync = async () => {
+    const view = ++syncView.current
+    setReal('loading')
+    setError(null)
+    try {
+      const status = await fetchRealPrices()
+      if (view === syncView.current) setReal(status)
+    } catch (err) {
+      if (view !== syncView.current) return
+      setError(err instanceof Error ? err.message : String(err))
+      setReal(null)
+    }
+  }
+
+  const closeSync = () => {
+    syncView.current++
+    setReal(null)
+  }
+
+  const sync = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await syncRealPrices()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setBusy(false)
+    }
+  }
 
   const run = async (future: 'replay' | 'new' = 'replay') => {
     setBusy(true)
@@ -64,7 +100,9 @@ export function GoToDialog({ clock, onClose }: Props) {
 
   return (
     <Modal labelledBy="goto-title" onClose={onClose}>
-      {preview?.action === 'rewind' ? (
+      {real !== null ? (
+        <SyncToReal status={real} busy={busy} onSync={sync} onBack={closeSync} />
+      ) : preview?.action === 'rewind' ? (
         <>
           <h2 id="goto-title">Go back to {marketDateTime(preview.target)}?</h2>
           <RewindSummary preview={preview} />
@@ -135,6 +173,11 @@ export function GoToDialog({ clock, onClose }: Props) {
               Cancel
             </button>
           </div>
+          <div className="dialog-footer">
+            <button className="link-button" disabled={busy} onClick={openSync}>
+              Sync to real prices…
+            </button>
+          </div>
         </>
       )}
       {error && (
@@ -143,6 +186,90 @@ export function GoToDialog({ clock, onClose }: Props) {
         </p>
       )}
     </Modal>
+  )
+}
+
+interface SyncProps {
+  status: RealPricesStatus | 'loading'
+  busy: boolean
+  onSync: () => void
+  onBack: () => void
+}
+
+/** Offer to continue the market from now at the saved real prices. */
+function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
+  const back = (
+    <button className="btn" disabled={busy} onClick={onBack}>
+      Back
+    </button>
+  )
+  if (status === 'loading') {
+    return (
+      <>
+        <h2 id="goto-title">Sync to real prices</h2>
+        <p className="muted">Checking saved real prices…</p>
+        <div className="dialog-actions">{back}</div>
+      </>
+    )
+  }
+  if (!status.configured) {
+    return (
+      <>
+        <h2 id="goto-title">Sync to real prices</h2>
+        <p>
+          Real prices come from Alpha Vantage and need a free API key. Add a line{' '}
+          <code>ALPHAVANTAGE_API_KEY=your-key</code> to <code>backend/.env</code> and restart the server.
+        </p>
+        <div className="dialog-actions">{back}</div>
+      </>
+    )
+  }
+  const problem = status.last_error && (
+    <p className="warn-text">
+      The last fetch failed: {status.last_error}
+    </p>
+  )
+  if (status.available === 0) {
+    return (
+      <>
+        <h2 id="goto-title">Sync to real prices</h2>
+        <p>
+          No real prices yet. They're fetched in the background, up to {status.daily_requests} a day (Alpha Vantage's
+          free limit), so all {status.total} symbols take two days. Symbols can be synced as soon as some arrive.
+        </p>
+        {problem}
+        <div className="dialog-actions">{back}</div>
+      </>
+    )
+  }
+  const missing = status.total - status.available
+  const days =
+    status.oldest && status.newest && status.oldest !== status.newest
+      ? `${calendarDate(status.oldest)}–${calendarDate(status.newest)}`
+      : status.newest
+        ? calendarDate(status.newest)
+        : ''
+  return (
+    <>
+      <h2 id="goto-title">Sync to real prices?</h2>
+      <p>
+        Real prices are saved for {status.available} of {status.total} symbols{days && ` (closes from ${days})`}. Prices
+        move to them now
+        {missing > 0 && `; the other ${missing} keep their current price (the rest arrive over the next day or two)`}.
+      </p>
+      <p className="muted">
+        The market continues from here: its 5-year history is generated again to end at these prices, and going back
+        before now starts a new market. Your cash, positions and orders are kept; positions are valued at the new
+        prices, and working orders whose stop or limit the move crosses will trigger or fill at them.
+      </p>
+      {problem}
+      <div className="dialog-actions">
+        <button className="btn primary" disabled={busy} onClick={onSync}>
+          Sync prices
+        </button>
+        {back}
+      </div>
+    </>
   )
 }
 

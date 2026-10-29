@@ -90,6 +90,25 @@ async def goto(body: Goto, request: Request) -> dict:
     return {"action": action, "target": target.isoformat(), "clock": svc.clock_state()}
 
 
+@router.get("/real-prices")
+async def real_prices(request: Request) -> dict:
+    """How many symbols have a saved real price, and from when."""
+    return market(request).real_prices_status()
+
+
+@router.post("/real-prices/sync")
+async def sync_real_prices(request: Request) -> dict:
+    """Continue the market from now at the saved real prices."""
+    svc = market(request)
+    try:
+        status = await svc.sync_real_prices()
+    except BusyError as e:
+        raise HTTPException(409, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    return {**status, "clock": svc.clock_state()}
+
+
 @router.get("/bars")
 async def get_bars(request: Request, symbol: str, interval: str = "5m", end: str | None = None, count: int = 500) -> dict:
     """Chart bars: up to `count` before `end` (default now, including the live bar), oldest first."""

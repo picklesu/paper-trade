@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-29, after Phase 5.7 (engine redesign)._
+_Last updated: 2026-10-29, after Phase 5.8 (sync to real prices)._
 
 ## Where things stand
 
@@ -20,6 +20,7 @@ _Last updated: 2026-10-29, after Phase 5.7 (engine redesign)._
 | Panels on any edge (left, right, top, bottom), no floating windows; edge tabs open/collapse; Panels menu sets edge and On/Off | Merged | #22 |
 | 5.6. More realistic prices (from the user's `improve_sim.docx` discussion) | Merged | #23 |
 | 5.7. Engine redesign (performance for 40 symbols and options; user approved Claude's plan) | Merged | #25 |
+| 5.8. Sync to real prices (the user chose Alpha Vantage; Stooq now blocks scripts) | Merged | #26 |
 | 6. Watchlists and quotes | **Next, when the user says so.** See below. | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
@@ -36,6 +37,10 @@ _Last updated: 2026-10-29, after Phase 5.7 (engine redesign)._
   context re-rendering everything on each tick, virtualized long tables, options priced on the
   server (vectorized Black-Scholes; SVI smile), what-if math in a Web Worker. WASM was ruled out:
   the costs are data and DOM, not math.
+- **Real prices (5.8):** the user asked for prices close to real ones and chose option 2 (sync
+  to real closes now, keep the simulation). Option 3, discussed and deferred to Phase 12: real
+  5-year daily history (minutes bridged through real daily bars) plus parameters calibrated from
+  it; real days would only replay.
 - **Later realism:** exchange holidays/half days with Phase 7; earnings volatility dynamics (IV
   crush), a VIX-like index and dividends with Phases 7–8.
 - **Phase 6 (watchlists and quotes) proposal**, given to the user and not yet approved: several
@@ -141,6 +146,25 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     interrupted build or an older model). Jumps are refused (409) while it runs. `clock_state` includes
     `session_open`, `timeline` (bumped on every jump and when history is done, so charts reload)
     and `building_history`.
+  - `realprices.py` (5.8): Alpha Vantage `GLOBAL_QUOTE` (free plan: about 25 requests a day,
+    one symbol each; the bulk endpoint is premium). Key from `ALPHAVANTAGE_API_KEY` or
+    `backend/.env` (git-ignored; the user's key lives there; **never commit it or put it in PR
+    text**). `RealPrices` saves prices in the store (`real_prices`: price, trading day, fetched
+    time) and the day's request count (`real_prices_usage`, New York date); `next_due` picks
+    never-fetched symbols, then the oldest (a price is fresh for 12 hours; a symbol whose fetch
+    failed waits an hour, so one bad symbol can't take the budget). `MarketService`'s background
+    `_refresh_real_prices` fetches one symbol every 15s in a worker thread (the store is only
+    touched on the loop thread: SQLite connections are per thread). Replies: a burst limit
+    (`Throttled`) pauses a minute, the daily limit (`DailyLimit`) an hour (the service's day
+    boundary isn't documented), anything else (e.g. an invalid key) is an error; the last
+    problem is saved and shown in the Sync dialog until a fetch succeeds. `sync_real_prices()` (POST
+    `/api/real-prices/sync`; GET `/api/real-prices` for status) calls `engine.reanchor(prices)`:
+    a new market at the current time whose prices **now** equal the targets (previous closes
+    scaled by today's simulated move so far), symbols without a real price keep their current
+    one; clears and rebuilds the history; keeps the account and orders. New markets (going back
+    before the history) start from saved real prices (`real_start_prices`). `tests/conftest.py`
+    stops tests from ever reading the key or calling the service. UI: Go to… → "Sync to real
+    prices…" (a footer link) → confirmation with how many symbols have prices and from when.
   - `trading/broker.py`: `Broker`, the cash account. `_build` validates (buying power, shares,
     prices; when replacing, that order's reserved cash or shares count as free). `preview`
     (no side effects: estimated price and total, buying power, cash, position, average cost,
@@ -278,7 +302,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 183 (pytest), frontend 105 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 194 (pytest), frontend 109 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

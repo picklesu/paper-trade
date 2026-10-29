@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-29, after Phase 5.6 (more realistic prices)._
+_Last updated: 2026-10-29, after Phase 5.7 (engine redesign)._
 
 ## Where things stand
 
@@ -19,6 +19,7 @@ _Last updated: 2026-10-29, after Phase 5.6 (more realistic prices)._
 | Activity panel removed (Orders' Filled list covers it); filled sells show their realized P/L | Merged | #21 |
 | Panels on any edge (left, right, top, bottom), no floating windows; edge tabs open/collapse; Panels menu sets edge and On/Off | Merged | #22 |
 | 5.6. More realistic prices (from the user's `improve_sim.docx` discussion) | Merged | #23 |
+| 5.7. Engine redesign (performance for 40 symbols and options; user approved Claude's plan) | Merged | #25 |
 | 6. Watchlists and quotes | **Next, when the user says so.** See below. | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
@@ -28,8 +29,15 @@ _Last updated: 2026-10-29, after Phase 5.6 (more realistic prices)._
 **Waiting on the user.** Decisions so far (2026-10-29):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
   (they were the 5.5c steps). Don't propose them again.
-- **On hold:** expanding the symbol list to about 40 across sectors (costs about 4× engine work per
-  session, roughly 30s for the first history build).
+- **Done in 5.7:** 40 symbols, sector factors, volume following moves, spreads widening with
+  volatility, single-stock clustering (the realism items discussed after 5.6).
+- **Next performance work (discussed with the user, not started):** the browser. Send only what's
+  on screen (subscriptions and deltas) in Phase 6/7, per-row selective re-renders instead of one
+  context re-rendering everything on each tick, virtualized long tables, options priced on the
+  server (vectorized Black-Scholes; SVI smile), what-if math in a Web Worker. WASM was ruled out:
+  the costs are data and DOM, not math.
+- **Later realism:** exchange holidays/half days with Phase 7; earnings volatility dynamics (IV
+  crush), a VIX-like index and dividends with Phases 7–8.
 - **Phase 6 (watchlists and quotes) proposal**, given to the user and not yet approved: several
   named lists saved in SQLite, add/remove/reorder/sort, choosable columns (incl. a day
   sparkline), held-position marker, symbol lookup from anywhere (type a ticker + Enter), a
@@ -66,35 +74,47 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
   - `market/clock.py`: `SimClock`. Market time = anchor + real elapsed × speed, counted in
     open-market seconds, so the 4:00 PM close continues at the next 9:30 AM. Supports
     pause/resume, `set_speed` and `set_time`. The real-time source is injectable for tests.
-  - `market/engine.py`: `MarketEngine`. Each session's per-second path (23,400 seconds × 10
-    symbols) is generated in one go (`_generate`) from numpy draws seeded by `(seed, date)`
-    (`_Draws`), so any moment is reproducible however the clock stepped there. State carried
-    between sessions (`_DayStart`): previous close, regime, and the market factor's GARCH
-    variance. **The model (Phase 5.6, `MODEL_VERSION = 2`):** a market factor plus each
-    symbol's own noise; a per-minute regime chain (calm/normal/volatile) scaling the market
-    factor's volatility more than the own noise (so correlation rises in turbulence) and
-    tilting the drift (centered); GJR-GARCH(1,1) on the market factor's daily variance
-    (0.02/0.16/0.88; `_omega` is corrected for selloffs so it averages 1); Student's t
-    overnight gaps (20% of daily variance); jumps: quarterly earnings gaps on a schedule from
-    `SymbolSpec.earnings` (`_earnings_on`, 2.5× volume that day), intraday news jumps (2 a year
-    per symbol), market selloffs at the open (1 a year, by beta); intraday volatility shape
-    (`_intraday_shape`, burst at the open, smaller at the close); U-shaped volume scaled by
-    regime and √variance. Jumps take their variance from the continuous part and selloffs'
-    mean is added back to the drift, so each symbol's long-run vol and drift match its spec
-    (tests check this over 10 years, plus kurtosis, clustering, leverage, correlation and
-    earnings gaps). Paths are cached for 4 sessions. A "new future" is a new epoch
-    `(start, seed)`: draws after `start` come from the new seed (shocks, news, regime and
-    volume draws; the gap's draws come from the epoch in force at the open). The previous close
-    is the last price shown (row S-1). The regime shown is the one that drove the latest
-    move. `backfill_iter(days)` generates history before the origin **forward, oldest first,
-    from prices of 1.0** (so regimes and GARCH carry from day to day), then sets
-    `backfill_scale` (origin closes / history's last closes) and commits the scaled starts.
-    Paths are multiplicative, so replaying forward gives the same prices, and going back in
-    time works the same inside this history. `minute_bars(day, through)` gives OHLCV per
-    minute. **A saved market from another model version** can't be regenerated:
-    `main.load_market` calls `continue_older`, a new market at the saved time from that
-    session's previous closes (account kept; going earlier than that point is "before the
-    history", so it resets). Bump `MODEL_VERSION` whenever generated prices change.
+  - `market/engine.py`: `MarketEngine` (**redesigned in 5.7, `MODEL_VERSION = 3`**). A session is
+    generated in one go at **one-minute resolution**, its `_Skeleton`: each minute's open, high,
+    low and close (as log prices) and volume for every symbol, plus the regimes, spread factors and
+    loadings. Charts, stored bars, history and day high/low all come from it. **Seconds are
+    generated on demand, per symbol** (`_fine(day, m, cols)`, LRU of 64 minutes holding the
+    columns generated so far; `_seconds` does the work): the current minute for quotes and
+    minutes where an order could fill. A minute's seconds are a bridge through its open, high (at
+    the peak of the shared noise), low (at its dip) and close, folded back inside the range, so
+    seconds always agree exactly with the bars (`test_seconds_agree_with_minute_bars`); the noise is
+    the same market/sector/own mix, so symbols co-move second to second. **How the skeleton is
+    made:** unit paths (market factor, one per sector, one per symbol) are drawn at the knots (each
+    minute's first and last second) with variances accumulated per second (regime, intraday shape,
+    GARCH); symbol log prices = loadings × paths + drift (lognormal-corrected, regime tilt) +
+    jumps; each minute's high/low is drawn from the **exact distribution of a Brownian bridge's
+    maximum/minimum** given its open and close, shifted for once-a-second sampling
+    (Broadie–Glasserman–Kou, 0.5826 σ√Δt), and snapped to the open/close when within half a
+    second's move. **Model:** market factor + sector factor (`SymbolSpec.sector`,
+    `sector_corr`) + own noise; regimes (scale the market factor more, tilt the drift; the move
+    into second r follows the regime of minute (r-1)//60); GJR-GARCH on the market factor's daily
+    variance and a GARCH on each symbol's own variance (`own_variance` in `_DayStart`);
+    `VARIANCE_RANGE` (0.25, 25) is only a safety net (a cap of 8 biased volatility ~7% low); Student's
+    t gaps; quarterly earnings gaps (`_earnings_on`), news jumps **between two minutes** (so no
+    jump falls inside a minute), selloffs at the open; intraday volatility shape; volume U-shaped ×
+    regime × √variance × activity (squared standardized move, `ACTIVITY_BASE` 0.7) × news burst ×
+    earnings; spread factor per minute = market volatility vs normal, clipped to [1, 5]
+    (`bid_ask(price, factor)`). Long-run vol and drift match each spec (tests over 10 years).
+    **Random draws:** one stream per path keyed by name (`zlib.crc32`), for the skeleton and
+    for seconds, so adding a symbol leaves other symbols' prices unchanged (tested) and one
+    symbol's seconds can be generated alone. `quotes` is cached per market time. `bid_ask` and
+    `bid_ask_arrays` work in whole cents with the same operations, so they agree exactly. **New future:** a new epoch takes over from the first whole minute at or
+    after its start (that minute's moves from its open on), so prices up to `t` are unchanged with
+    no mid-minute splicing. `backfill_iter(days)` generates history forward from prices of 1.0,
+    oldest first, then sets `backfill_scale` and commits the scaled starts. Engine API used
+    elsewhere: `quotes`, `minute_bars(day, through)`, `minute_range(day, col)` and
+    `first_hit(day, col, lo, hi, candidates, test)` (order matching), `price_at`, `prices_at`,
+    `spread_factor(t)`, `day_prices` (slow; tests only). **Saved markets** record `model` and
+    `symbols`; `main.load_market` calls `continue_older` when either differs (old 10-symbol saves
+    map by `LEGACY_SYMBOLS`; new symbols start at spec prices). `scripts/bench_engine.py [N]`
+    benchmarks it. At 40 symbols, 5.6's engine vs 5.7's: fast-forward a year 9.1s → 0.58s,
+    5-year history 49s → 3.1s (about 4s in the app including the database), memory 145MB → 7MB,
+    a tick 0.09ms either way.
   - `market/history.py`: `History`, the chart bars. Finished sessions are stored as 30-minute
     bars in a `bars30` table (recorded via `engine.on_day_complete`, in batches during long
     jumps and the history build). `bars(symbol, interval, end, count)` serves 30m/1h/1D/1W from
@@ -126,9 +146,10 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     (no side effects: estimated price and total, buying power, cash, position, average cost,
     realized P&L, warnings), `place`, `replace` (cancel/replace: the old order is canceled with
     "Replaced by #N"; the new one has `replaces`), and `cancel`. `_immediate` is the pure "what
-    happens right now" check used by both `_activate` and `preview`. `process_iter(t0, t1)` scans each session's
-    per-second path (`engine.day_prices`) for every working order and handles events in time
-    order. It expires day orders at each close. The ledger (cash, positions, average cost,
+    happens right now" check used by both `_activate` and `preview`. `process_iter(t0, t1)` finds each working order's next
+    event with `engine.first_hit` (minutes whose high/low can't reach the stop or limit are
+    skipped; seconds are generated only for candidate minutes) and handles events in time order.
+    Bid/ask use the spread factor at that moment (`bid_ask(price, engine.spread_factor(t))`). It expires day orders at each close. The ledger (cash, positions, average cost,
     realized P&L, and each filled sell's realized P&L in `realized_by_order`) is rebuilt from
     filled orders and cached; `order_dict(o)` is how the API and stream send an order (its
     stored fields plus `realized`). `summary()` gives net liq, buying
@@ -257,7 +278,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 174 (pytest), frontend 105 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 183 (pytest), frontend 105 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -287,9 +308,15 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - No exchange holidays; weekends only.
 - Reset (going before the history) starts at the spec prices. A new market always begins at
   the same prices whatever the date.
-- Only the market factor's volatility clusters (GARCH), so single stocks show little
-  clustering of their own beyond the market's. Five-year samples vary around the spec vol
-  (persistent volatility); the average over many runs matches it.
+- Five-year samples vary around the spec vol (persistent volatility); the average over many runs
+  matches it.
+- Within a minute, seconds are a plausible bridge through the bar's open/high/low/close, not an
+  exact Brownian path; minute highs and lows are drawn independently (their joint distribution is
+  approximated).
+- The watchlist shows all 40 symbols in one scrolling list until Phase 6 adds lists.
+- Changing the symbol list (adding one) still continues the market as a new one (`continue_older`)
+  and rebuilds history, although other symbols' prices would be unchanged. Remapping saved
+  starts by name and backfilling only the new symbol would avoid that; do it if symbols are added.
 - Model-version changes (`continue_older`): the old model's prices can't be recomputed, so
   that session restarts from its previous close with new draws and the quote jumps once
   (positions revalue; a working stop could trigger). Fills made earlier keep their prices,

@@ -8,11 +8,12 @@ A paper trading simulator that runs 24/7 on simulated market data.
 ## How the simulated market works
 
 - Prices are synthetic. Tickers are familiar names, but prices start from fixed values and move by a seeded random model, so they are not real quotes. Each symbol's long-run volatility and drift match its profile.
-- Symbols move together through a shared market factor, plus their own noise. In turbulent markets they move together more.
+- **40 symbols:** 8 funds (SPY, QQQ, IWM, sector funds XLF/XLE/XLV, gold GLD and Treasuries TLT) and 32 stocks across 8 sectors.
+- Symbols move together through a shared market factor, a sector factor (oil stocks with oil stocks, banks with banks) and their own noise. In turbulent markets they move together more; Treasuries tend to rise when stocks fall.
 - The market switches between **Calm**, **Normal** and **Volatile** regimes (shown in the top bar). Volatile spells lean down, calm ones up.
-- **Volatility clusters:** a big day, a drop especially, is followed by turbulent days that calm down gradually.
+- **Volatility clusters:** a big day, a drop especially, is followed by turbulent days that calm down gradually. A stock stays jumpy for a while after its own big moves (earnings, news) too.
 - **Fat tails:** overnight gaps are occasionally large; stocks gap on **earnings** four times a year (on a fixed quarterly schedule, with heavier volume that day), jump on news now and then, and the whole market sometimes sells off at the open.
-- Within a day, prices move most just after the open and pick up again into the close.
+- Within a day, prices move most just after the open and pick up again into the close. **Volume** is heavier on big moves and after news, and **spreads widen** when the market is volatile (at the open, in volatile spells, after selloffs).
 - **Session hours, without the wait:** the market trades 9:30 AM–4:00 PM ET, Monday–Friday. At the close it continues straight from the next session's open (with an overnight gap), so whenever you use the app the market is open. Exchange holidays are not modeled.
 - Use the top-bar controls to pause or run at 1×, 10×, 60× or 600×.
 - **Go to…** jumps to any date and time:
@@ -82,6 +83,7 @@ cd frontend && npm test
 | 5 | Indicators | Done |
 | 5.5 | Customizable workspace: dockable, floating, resizable panels (step 1), collapse to edge strips (step 2), chart-first layout with the Panels menu (step 2b), panels on any edge (step 2c) | Done |
 | 5.6 | More realistic prices: fat tails (gaps, earnings, news, selloffs), volatility clustering with the leverage effect, intraday volatility shape | Done |
+| 5.7 | Engine redesign: minute-resolution sessions with seconds on demand (16× faster, 20× less memory), 40 symbols with sectors, volume and spreads that follow volatility, single-stock clustering | Done |
 | 6 | Watchlists and quotes | |
 | 7 | Options chain with Greeks | |
 | 8 | Option expiration, exercise, assignment | |

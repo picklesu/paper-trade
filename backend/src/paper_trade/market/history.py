@@ -2,7 +2,7 @@
 
 Finished sessions are stored as 30-minute bars (13 per session per symbol),
 which cover 30m, 1h, 1D and 1W charts for any range quickly. 1m, 5m and 15m
-bars are computed on request from the engine's reproducible per-second paths,
+bars are computed on request from the engine's reproducible one-minute sessions,
 over a limited look-back. Today's bars always come live from the engine.
 
 Bars are [time, open, high, low, close, volume] with time in Unix seconds at
@@ -33,7 +33,7 @@ FINE_MINUTES = {"1m": 1, "5m": 5, "15m": 15}
 # How many sessions back the finer bars go (they're computed on request).
 FINE_LOOKBACK_DAYS = {"1m": 60, "5m": 252, "15m": 252}
 MAX_COUNT = 2000
-BATCH_ROWS = 13 * 10 * 100  # about 100 sessions of 10 symbols per commit
+BATCH_ROWS = 50_000  # rows per commit: about 100 sessions of 40 symbols
 
 Bar = list[float]
 

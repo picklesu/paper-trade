@@ -11,6 +11,7 @@ from paper_trade.api import health, market, stream, trading
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
 from paper_trade.market.service import MarketService
+from paper_trade.market.symbols import SYMBOLS
 from paper_trade.store import Store
 
 # backend/paper_trade.db unless PAPER_TRADE_DB says otherwise.
@@ -25,7 +26,7 @@ def load_market(store: Store, seed: int) -> tuple[SimClock, MarketEngine]:
         return clock, MarketEngine(start=clock.now(), seed=seed)
     if "starts" not in state:  # saved separately since it can be large
         state = {**state, "starts": store.get("market_starts", {})}
-    if state.get("model") == MODEL_VERSION:
+    if state.get("model") == MODEL_VERSION and state.get("symbols") == [s.symbol for s in SYMBOLS]:
         engine = MarketEngine.from_state(state)
     else:
         engine = MarketEngine.continue_older(state)

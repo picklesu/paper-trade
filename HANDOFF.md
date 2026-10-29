@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
+_Last updated: 2026-10-29, after Phase 5.6 (more realistic prices)._
 
 ## Where things stand
 
@@ -18,27 +18,23 @@ _Last updated: 2026-10-28, after Phase 5.5 step 2 (edge strips)._
 | Fix: with the chart floating, collapsed panels moved to the top/bottom and opened over the whole workspace | Merged | #20 |
 | Activity panel removed (Orders' Filled list covers it); filled sells show their realized P/L | Merged | #21 |
 | Panels on any edge (left, right, top, bottom), no floating windows; edge tabs open/collapse; Panels menu sets edge and On/Off | Merged | #22 |
-| **5.5c. Workspace, next steps** | **Next.** See below. | — |
-| 6. Watchlists and quotes | After 5.5. | — |
+| 5.6. More realistic prices (from the user's `improve_sim.docx` discussion) | Merged | #23 |
+| 6. Watchlists and quotes | **Next, when the user says so.** See below. | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**The workspace (Phase 5.5) is being built in small steps, at the user's request.** Their
-requirements (2026-10-28): the chart is the main view; the other views collapse to or dock on
-any edge (the user dropped floating windows in favour of this, #22); every view is resizable;
-the UI/UX should be smooth, intuitive and uncluttered (they found panels around the chart
-cluttered, and per-panel tab bars and buttons a waste of space). **No multiple copies of a
-view**; otherwise follow Claude's recommendations (layout saved per browser; laptop/desktop
-first).
-
-See Architecture → `layout/`. Next steps, smallest first:
-1. **Layout presets** in the Panels menu: "Chart" (the default: everything collapsed),
-   "Trading" (Watchlist and Order Entry open), "Review" (Positions and Orders open), plus
-   saving the current layout under a name.
-2. **Narrow screens**: one panel at a time over the chart.
-Then Phase 6 (watchlists and quotes) adds its views as panels.
+**Waiting on the user.** Decisions so far (2026-10-29):
+- **Layout presets are dropped** (they were 5.5c step 1). Don't propose them again.
+- **On hold:** "narrow screens" (one panel at a time over the chart, the other 5.5c step) and
+  expanding the symbol list to about 40 across sectors (costs about 4× engine work per
+  session, roughly 30s for the first history build).
+- **Phase 6 (watchlists and quotes) proposal**, given to the user and not yet approved: several
+  named lists saved in SQLite, add/remove/reorder/sort, choosable columns (incl. a day
+  sparkline), held-position marker, symbol lookup from anywhere (type a ticker + Enter), a
+  fuller quote (day-range bar, 52-week high/low and average volume from history, spread),
+  simulated bid/ask sizes.
 
 **The user is not QA**: verify everything (tests, build, lint with `--deny-warnings`, a
 headless-browser check that **looks at screenshots**, green CI) before merging, and don't ask
@@ -71,18 +67,34 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     open-market seconds, so the 4:00 PM close continues at the next 9:30 AM. Supports
     pause/resume, `set_speed` and `set_time`. The real-time source is injectable for tests.
   - `market/engine.py`: `MarketEngine`. Each session's per-second path (23,400 seconds × 10
-    symbols) is generated in one go from numpy draws seeded by `(seed, date)`, so any moment is
-    reproducible however the clock stepped there. The model: correlated geometric Brownian
-    motion (shared market shock plus each symbol's own noise), a per-minute regime chain
-    (calm/normal/volatile), 20% of daily variance as the overnight gap, U-shaped volume, and
-    volatility calibrated to 252 trading days. Paths are cached for 4 sessions. A
-    "new future" is a new epoch `(start, seed)`: draws after `start` come from the new seed.
-    The previous close is the last price shown (row S-1). The regime shown is the one that
-    drove the latest move. `backfill_iter(days)` generates history before the origin, newest
-    first: each day's path comes from a start of 1.0, scaled so it closes at the next day's
-    previous close. Paths are multiplicative, so replaying forward gives the same prices, and
-    going back in time works the same inside this history. `minute_bars(day, through)` gives OHLCV
-    per minute.
+    symbols) is generated in one go (`_generate`) from numpy draws seeded by `(seed, date)`
+    (`_Draws`), so any moment is reproducible however the clock stepped there. State carried
+    between sessions (`_DayStart`): previous close, regime, and the market factor's GARCH
+    variance. **The model (Phase 5.6, `MODEL_VERSION = 2`):** a market factor plus each
+    symbol's own noise; a per-minute regime chain (calm/normal/volatile) scaling the market
+    factor's volatility more than the own noise (so correlation rises in turbulence) and
+    tilting the drift (centered); GJR-GARCH(1,1) on the market factor's daily variance
+    (0.02/0.16/0.88; `_omega` is corrected for selloffs so it averages 1); Student's t
+    overnight gaps (20% of daily variance); jumps: quarterly earnings gaps on a schedule from
+    `SymbolSpec.earnings` (`_earnings_on`, 2.5× volume that day), intraday news jumps (2 a year
+    per symbol), market selloffs at the open (1 a year, by beta); intraday volatility shape
+    (`_intraday_shape`, burst at the open, smaller at the close); U-shaped volume scaled by
+    regime and √variance. Jumps take their variance from the continuous part and selloffs'
+    mean is added back to the drift, so each symbol's long-run vol and drift match its spec
+    (tests check this over 10 years, plus kurtosis, clustering, leverage, correlation and
+    earnings gaps). Paths are cached for 4 sessions. A "new future" is a new epoch
+    `(start, seed)`: draws after `start` come from the new seed (shocks, news, regime and
+    volume draws; the gap's draws come from the epoch in force at the open). The previous close
+    is the last price shown (row S-1). The regime shown is the one that drove the latest
+    move. `backfill_iter(days)` generates history before the origin **forward, oldest first,
+    from prices of 1.0** (so regimes and GARCH carry from day to day), then sets
+    `backfill_scale` (origin closes / history's last closes) and commits the scaled starts.
+    Paths are multiplicative, so replaying forward gives the same prices, and going back in
+    time works the same inside this history. `minute_bars(day, through)` gives OHLCV per
+    minute. **A saved market from another model version** can't be regenerated:
+    `main.load_market` calls `continue_older`, a new market at the saved time from that
+    session's previous closes (account kept; going earlier than that point is "before the
+    history", so it resets). Bump `MODEL_VERSION` whenever generated prices change.
   - `market/history.py`: `History`, the chart bars. Finished sessions are stored as 30-minute
     bars in a `bars30` table (recorded via `engine.on_day_complete`, in batches during long
     jumps and the history build). `bars(symbol, interval, end, count)` serves 30m/1h/1D/1W from
@@ -102,8 +114,11 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `goto_details()` builds the rewind/reset confirmation contents. `build_history()` runs in the
     background at startup and after a reset: it records missing finished sessions and backfills
     `HISTORY_DAYS` (5 years) if `engine.backfilled` is false (about 8s), sending `history`
-    progress messages. The backfill commits all at once at the end, so an interrupted build
-    leaves the market unchanged and simply runs again on the next start. Jumps are refused (409) while it runs. `clock_state` includes
+    progress messages, via `History.backfill_iter` (it holds the unit-scale 30-minute bars
+    and stores them scaled once `backfill_scale` is known). The backfill commits all at once
+    at the end, so an interrupted build leaves the market unchanged and simply runs again on
+    the next start; a build that needs the backfill clears `bars30` first (old bars from an
+    interrupted build or an older model). Jumps are refused (409) while it runs. `clock_state` includes
     `session_open`, `timeline` (bumped on every jump and when history is done, so charts reload)
     and `building_history`.
   - `trading/broker.py`: `Broker`, the cash account. `_build` validates (buying power, shares,
@@ -242,7 +257,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 165 (pytest), frontend 105 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 174 (pytest), frontend 105 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -272,4 +287,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - No exchange holidays; weekends only.
 - Reset (going before the history) starts at the spec prices. A new market always begins at
   the same prices whatever the date.
+- Only the market factor's volatility clusters (GARCH), so single stocks show little
+  clustering of their own beyond the market's. Five-year samples vary around the spec vol
+  (persistent volatility); the average over many runs matches it.
+- Fills made before a model-version change keep their prices; the regenerated history before
+  that point no longer shows them on the chart at the same prices.
 - `dev.sh` (foreground) still exists alongside `server.sh` (background). Keep it or remove it.

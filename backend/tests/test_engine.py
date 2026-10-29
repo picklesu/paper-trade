@@ -157,8 +157,11 @@ def test_reset_starts_a_new_market() -> None:
 
 
 def test_daily_volatility_matches_spec(monkeypatch) -> None:
-    # Hold the regime at normal so only the spec volatility drives returns.
-    monkeypatch.setattr(engine_mod, "REGIMES", (("normal", 1.0, 1e12),))
+    # Hold the regime at normal, with no volatility clustering or jumps, so only the
+    # spec volatility drives returns (test_long_run_volatility_matches_spec covers the rest).
+    monkeypatch.setattr(engine_mod, "REGIMES", (("normal", 1.0, 1e12, 0.0),))
+    for name in ("GARCH_ALPHA", "GARCH_GAMMA", "GARCH_BETA", "NEWS_PER_YEAR", "CRASHES_PER_YEAR"):
+        monkeypatch.setattr(engine_mod, name, 0.0)
     spec = SymbolSpec("TEST", "Test", 100, vol=0.30, drift=0, market_corr=0.5, daily_volume=1000)
     engine = MarketEngine(START, seed=3, specs=(spec,))
     closes = []
@@ -211,7 +214,7 @@ def test_quotes_at_last_second_of_session() -> None:
 
 def test_new_future_at_minute_boundary_keeps_regime_and_prices(monkeypatch) -> None:
     # Regimes that switch about every minute, so a replaced draw would show.
-    monkeypatch.setattr(engine_mod, "REGIMES", (("calm", 0.6, 0.01), ("normal", 1.0, 0.01), ("volatile", 2.0, 0.01)))
+    monkeypatch.setattr(engine_mod, "REGIMES", (("calm", 0.6, 0.01, 0.0), ("normal", 1.0, 0.01, 0.0), ("volatile", 2.0, 0.01, 0.0)))
     t = et(2026, 1, 6, 10, 30)  # whole minute, as the date picker sends
     for seed in range(20):
         engine = at(et(2026, 1, 6, 14, 0), seed=seed)
@@ -273,12 +276,12 @@ def test_backfill_ends_exactly_at_the_starting_prices() -> None:
     engine = MarketEngine(START)
     start_prices = prices(engine)
     days = list(engine.backfill_iter(30))
-    assert len(days) == 30 and days[0] == date(2026, 1, 2) and days == sorted(days, reverse=True)
-    assert engine.origin == session_open_of(days[-1])
+    assert len(days) == 30 and days[-1] == date(2026, 1, 2) and days == sorted(days)
+    assert engine.origin == session_open_of(days[0])
     assert engine.backfilled
     assert prices(engine) == start_prices  # the present is unchanged
     # The last backfilled session closes at the origin's previous close.
-    close = engine.day_prices(days[0])[-1]
+    close = engine.day_prices(days[-1])[-1]
     for spec, c in zip(engine.specs, close):
         assert c == pytest.approx(spec.price, rel=1e-12)
 
@@ -357,3 +360,90 @@ def test_backfill_keeps_todays_path_cached() -> None:
     for _ in engine.backfill_iter(30):
         pass
     assert engine._paths.get(date(2026, 1, 5)) is today
+
+
+# ----- model statistics --------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ten_years() -> dict[str, np.ndarray]:
+    """Ten years of SPY and AAPL: daily opens and closes, and the mean absolute
+    one-minute return over the first 15 minutes and over midday."""
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "AAPL"))
+    engine = MarketEngine(START, seed=1, specs=specs)
+    days, opens, closes, early, midday = [], [], [], [], []
+    for day in engine.backfill_iter(2520):
+        p = engine.day_prices(day)
+        days.append(day)
+        opens.append(p[0].copy())
+        closes.append(p[-1].copy())
+        r = np.abs(np.diff(np.log(p[::60]), axis=0))
+        early.append(r[:15].mean(axis=0))
+        midday.append(r[150:240].mean(axis=0))
+    return {
+        "engine": engine,
+        "days": days,
+        "open": np.array(opens),
+        "close": np.array(closes),
+        "early": np.array(early),
+        "midday": np.array(midday),
+    }
+
+
+def test_long_run_volatility_matches_spec(ten_years) -> None:
+    r = np.diff(np.log(ten_years["close"]), axis=0)
+    for i, spec in enumerate(ten_years["engine"].specs):
+        assert r[:, i].std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.2)
+
+
+def test_daily_returns_have_fat_tails(ten_years) -> None:
+    r = np.diff(np.log(ten_years["close"][:, 0]))
+    x = r - r.mean()
+    assert (x**4).mean() / (x**2).mean() ** 2 > 5  # a normal distribution's is 3
+
+
+def test_volatility_clusters_and_rises_after_drops(ten_years) -> None:
+    r = np.diff(np.log(ten_years["close"][:, 0]))
+    a = np.abs(r)
+    assert np.mean([np.corrcoef(a[:-k], a[k:])[0, 1] for k in range(1, 11)]) > 0.1
+    assert np.corrcoef(r[:-1], a[1:])[0, 1] < -0.03  # the leverage effect
+
+
+def test_stocks_move_together_more_on_big_days(ten_years) -> None:
+    r = np.diff(np.log(ten_years["close"]), axis=0)
+    spy, aapl = r[:, 0], r[:, 1]
+    calm, big = np.abs(spy) <= np.quantile(np.abs(spy), 0.25), np.abs(spy) >= np.quantile(np.abs(spy), 0.75)
+    assert np.corrcoef(spy[big], aapl[big])[0, 1] > np.corrcoef(spy[calm], aapl[calm])[0, 1] + 0.2
+
+
+def test_earnings_gaps(ten_years) -> None:
+    gaps = np.abs(np.log(ten_years["open"][1:, 1] / ten_years["close"][:-1, 1]))
+    on = np.array([ten_years["engine"]._earnings_on(d)[1] for d in ten_years["days"][1:]])
+    assert 38 <= on.sum() <= 41  # four a year
+    assert gaps[on].mean() > 3 * gaps[~on].mean()
+
+
+def test_volatility_is_highest_after_the_open(ten_years) -> None:
+    assert (ten_years["early"].mean(axis=0) > 1.5 * ten_years["midday"].mean(axis=0)).all()
+
+
+def test_earnings_schedule() -> None:
+    engine = MarketEngine(START)
+    aapl, nvda = engine.symbol_index("AAPL"), engine.symbol_index("NVDA")
+    assert engine._earnings_on(date(2026, 1, 26))[aapl]
+    assert not engine._earnings_on(date(2026, 1, 23))[aapl]
+    assert engine._earnings_on(date(2026, 4, 27))[aapl]  # the 26th is a Sunday
+    assert engine._earnings_on(date(2026, 5, 22))[nvda]  # NVIDIA reports a month later
+    assert not engine._earnings_on(date(2026, 4, 22))[nvda]
+    assert not engine._earnings_on(date(2026, 1, 26))[engine.symbol_index("SPY")]
+
+
+def test_continue_older_model_starts_at_the_saved_time_and_closes() -> None:
+    old = at(et(2026, 1, 8, 14, 0)).to_state()
+    old.pop("model")
+    for start in old["starts"].values():
+        del start[2:]  # older saves had no variance
+    engine = MarketEngine.continue_older(old)
+    assert engine.origin == engine.time == et(2026, 1, 8, 14, 0)
+    assert not engine.backfilled
+    assert engine.quotes["SPY"].prev_close == old["starts"]["2026-01-08"][0][0]

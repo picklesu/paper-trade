@@ -6,10 +6,20 @@ path is generated in one go, second by second, from random draws seeded by
 time, forward or back, and get exactly the same prices as if it had run there
 tick by tick.
 
-Model, per symbol: geometric Brownian motion driven by a shared market shock
-(so symbols move together) plus its own noise, scaled by a market regime
-(calm / normal / volatile) that switches minute by minute. Part of each day's
-variance arrives as an overnight gap at the open.
+Model, per symbol: a shared market factor (so symbols move together) plus the
+symbol's own noise, with:
+- a market regime (calm / normal / volatile) that switches minute by minute,
+  scaling volatility (the market factor's more than each symbol's own, so stocks
+  move together more in turbulent markets) and leaning the drift;
+- volatility clustering with the leverage effect: the market factor's daily
+  variance follows GJR-GARCH(1,1), so a big day (a drop especially) is followed
+  by turbulent days that calm down gradually;
+- fat tails: part of each day's variance arrives as an overnight gap drawn from
+  Student's t, plus earnings gaps on a quarterly schedule, occasional intraday
+  news jumps per symbol, and rare market-wide selloffs at the open;
+- intraday volatility highest just after the open and raised into the close.
+Each symbol's long-run volatility and drift still match its spec: jumps take
+their share of the variance from the continuous part.
 
 Going back in time either replays the same future or starts a new one. A new
 future is a new "epoch": random draws after its start time come from a new
@@ -30,9 +40,10 @@ import numpy as np
 from paper_trade.market.calendar import (
     SESSION_MINUTES,
     SESSION_SECONDS,
+    add_trading_days,
+    is_trading_day,
     market_day,
     next_trading_day,
-    previous_trading_day,
     session_close,
     session_open,
     session_seconds,
@@ -45,8 +56,44 @@ TRADING_DAYS_PER_YEAR = 252
 # Share of a day's price variance that arrives as the overnight gap.
 GAP_SHARE = 0.2
 
-# (name, volatility multiplier, average market-hours spent in the regime)
-REGIMES = (("calm", 0.6, 12.0), ("normal", 1.0, 24.0), ("volatile", 2.0, 4.0))
+# (name, volatility multiplier, average market-hours spent in the regime, drift tilt).
+# The tilt (annualized, on the market factor) leans calm periods up and volatile
+# ones down; it's centered so the long-run drift is unchanged. The multipliers are
+# scaled so the long-run volatility still matches each symbol's spec.
+REGIMES = (("calm", 0.6, 12.0, 0.3), ("normal", 1.0, 24.0, 0.0), ("volatile", 2.0, 4.0, -2.0))
+
+# The market factor's annualized volatility: sets betas and the size of selloffs.
+MARKET_VOL = 0.16
+
+# Fat tails. Gap draws come from Student's t with GAP_DF degrees of freedom, jump
+# sizes from one with JUMP_DF (both scaled to unit variance).
+GAP_DF = 5
+JUMP_DF = 4
+# News: about NEWS_PER_YEAR times a year a symbol jumps intraday, with a standard
+# deviation of NEWS_SIZE days of its volatility.
+NEWS_PER_YEAR = 2.0
+NEWS_SIZE = 2.5
+# Selloffs: about CRASHES_PER_YEAR times a year the market factor gaps down at the
+# open by CRASH_MIN plus an exponential amount averaging CRASH_EXTRA (each symbol
+# by its beta).
+CRASHES_PER_YEAR = 1.0
+CRASH_MIN = 0.015
+CRASH_EXTRA = 0.015
+EARNINGS_PER_YEAR = 4
+EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
+
+# GJR-GARCH(1,1) on the market factor's daily variance, as a multiple of normal
+# (averaging 1). GAMMA is the extra response to down days.
+GARCH_ALPHA, GARCH_GAMMA, GARCH_BETA = 0.02, 0.16, 0.88
+VARIANCE_RANGE = (0.25, 8.0)
+
+# Intraday volatility: OPEN_BURST and CLOSE_BURST extra at the open and close,
+# fading over BURST_DECAY of the session (about 12 minutes).
+OPEN_BURST, CLOSE_BURST, BURST_DECAY = 1.5, 0.5, 0.03
+
+# Saved markets record the model that generated them; prices from another model
+# can't be regenerated (see `MarketEngine.continue_older`).
+MODEL_VERSION = 2
 
 VOLUME_NOISE = 0.5  # lognormal sigma of per-minute volume
 HISTORY_DAYS = TRADING_DAYS_PER_YEAR * 5  # history generated before a market's start
@@ -117,6 +164,21 @@ def bid_ask_arrays(prices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 class _DayStart:
     prev_close: np.ndarray  # (N,) previous session's closing prices
     regime: int  # regime at the end of the previous session
+    variance: float = 1.0  # the market factor's variance for the session, as a multiple of normal
+
+
+@dataclass
+class _Draws:
+    """A session's random draws. Row s of the shocks is the move that ends s
+    seconds after the open (row 0 is the overnight gap)."""
+
+    z_market: np.ndarray  # (S+1,)
+    z_own: np.ndarray  # (S+1, N)
+    u: np.ndarray  # (M, 2) regime switching
+    volume_noise: np.ndarray  # (M, N)
+    news: np.ndarray  # (S+1, N) unit-variance jump sizes where news arrives, else 0
+    earnings: np.ndarray  # (N,) unit-variance earnings moves
+    crash: np.ndarray  # [uniform for whether a selloff happens, exponential for its size]
 
 
 @dataclass
@@ -127,22 +189,60 @@ class _DayPath:
     minute_volume: np.ndarray  # (M, N)
     volume: np.ndarray  # (M+1, N) cumulative volume at each minute boundary
     regimes: np.ndarray  # (M,) regime index for each minute
+    next_start: _DayStart  # the following session's starting state
 
 
 class MarketEngine:
-    def __init__(self, start: datetime, seed: int = 42, specs: tuple[SymbolSpec, ...] = SYMBOLS) -> None:
+    def __init__(
+        self,
+        start: datetime,
+        seed: int = 42,
+        specs: tuple[SymbolSpec, ...] = SYMBOLS,
+        prices: np.ndarray | None = None,
+    ) -> None:
+        """A new market at `start`, its previous closes at `prices` (default: the specs')."""
         self.specs = specs
-        self._vol = np.array([s.vol for s in specs])
-        self._drift = np.array([s.drift for s in specs])
+        vol = np.array([s.vol for s in specs])
         self._rho = np.array([s.market_corr for s in specs])
+        self._beta = self._rho * vol / MARKET_VOL
         self._daily_volume = np.array([s.daily_volume for s in specs], dtype=float)
-        self._p_switch = [1 - math.exp(-1 / (hours * 60)) for _, _, hours in REGIMES]
-        self._mults = np.array([m for _, m, _ in REGIMES])
+        self._earnings_move = np.array([s.earnings_move for s in specs])
+        self._news_sd = NEWS_SIZE * vol / math.sqrt(TRADING_DAYS_PER_YEAR)
+
+        # Jumps take their share of each symbol's variance from the continuous part.
+        crash_mean = CRASH_MIN + CRASH_EXTRA
+        jump_var = (
+            EARNINGS_PER_YEAR * self._earnings_move**2
+            + NEWS_PER_YEAR * self._news_sd**2
+            + CRASHES_PER_YEAR * (crash_mean**2 + CRASH_EXTRA**2) * self._beta**2
+        )
+        self._day_sd = np.sqrt(np.maximum(vol**2 - jump_var, 0.5 * vol**2) / TRADING_DAYS_PER_YEAR)
+        # Selloffs would pull the drift down; add their average back.
+        self._drift = np.array([s.drift for s in specs]) + CRASHES_PER_YEAR * crash_mean * self._beta
+        # GARCH's constant, so the variance averages 1. Selloffs add to the squared
+        # shocks (on average this much a day, in units of a normal day's variance).
+        crash_shock = CRASHES_PER_YEAR * (crash_mean**2 + CRASH_EXTRA**2) / MARKET_VOL**2
+        self._omega = (
+            1 - GARCH_BETA - GARCH_ALPHA - GARCH_GAMMA / 2 - (GARCH_ALPHA + GARCH_GAMMA) * crash_shock
+        )
+
+        self._p_switch = [1 - math.exp(-1 / (r[2] * 60)) for r in REGIMES]
+        share = _stationary(self._p_switch)  # long-run share of time in each regime
+        mults = np.array([r[1] for r in REGIMES])
+        self._volume_mults = mults
+        self._market_mults = mults / math.sqrt(share @ mults**2)
+        self._own_mults = np.sqrt(mults) / math.sqrt(share @ mults)
+        tilt = np.array([r[3] for r in REGIMES])
+        self._tilt = tilt - share @ tilt
+        self._shape = _intraday_shape()
+
         self._seed = seed
         self._seeds_used = 0
         # Called with each session as the engine moves past it (its path is final then).
         self.on_day_complete: Callable[[date], None] | None = None
-        self._reset(start, seed)
+        # Set by a finished backfill: what its unit-start paths were multiplied by.
+        self.backfill_scale: np.ndarray | None = None
+        self._reset(start, seed, prices)
 
     # ----- time travel -------------------------------------------------------
 
@@ -169,8 +269,7 @@ class MarketEngine:
         while last < target_day:
             path = self._path(last)
             nxt = next_trading_day(last)
-            # The close is the last price shown in the session (one second before 4:00).
-            self._starts[nxt] = _DayStart(path.prices[_S - 1].copy(), int(path.regimes[-1]))
+            self._starts[nxt] = path.next_start
             self.starts_version += 1
             if self.on_day_complete:
                 self.on_day_complete(last)
@@ -236,48 +335,39 @@ class MarketEngine:
         return REGIMES[r][0]
 
     def backfill_iter(self, days: int = HISTORY_DAYS) -> Iterator[date]:
-        """Generate `days` sessions of history before the origin, newest first,
-        yielding each finished session (its path is cached, ready to read).
+        """Generate `days` sessions of history before the origin, oldest first,
+        yielding each one with its path cached at unit scale (see below).
 
-        Each day's path is generated from a start of 1.0 and then scaled so its
-        close equals the next day's previous close. Paths are multiplicative, so
-        that is exactly the path a forward replay from the scaled start produces.
+        The history runs forward, so volatility clustering and regimes carry
+        from day to day, starting from prices of 1.0. Paths are multiplicative,
+        so once it's done, multiplying every price by `backfill_scale` (the
+        origin's previous closes over the history's last closes) gives exactly
+        the history a forward replay from the scaled starts produces, ending at
+        the origin's prices. Callers keep what they read until then.
 
         Nothing is committed until the end: the origin and session starts change
         all at once, so an interrupted build leaves the market as it was (and
         saving mid-build stays consistent).
         """
-        normal = next(i for i, (name, _, _) in enumerate(REGIMES) if name == "normal")
-        pending: dict[date, _DayStart] = {}
-        day = market_day(self.origin)
-        for _ in range(days):
-            prev = previous_trading_day(day)
-            target = (pending.get(day) or self._starts[day]).prev_close
-            # Generate the unit path with a temporary start, then take it back out.
-            self._starts[prev] = _DayStart(np.ones(len(self.specs)), normal)
-            self._paths.pop(prev, None)
-            try:
-                unit = self._path(prev)
-            finally:
-                del self._starts[prev]
-            scale = target / unit.prices[_S - 1]
-            pending[prev] = _DayStart(scale, normal)
-            self._cache_path(
-                prev,
-                _DayPath(
-                    prices=unit.prices * scale,
-                    high=unit.high * scale,
-                    low=unit.low * scale,
-                    minute_volume=unit.minute_volume,
-                    volume=unit.volume,
-                    regimes=unit.regimes,
-                ),
-            )
-            day = prev
-            yield prev
-        self._starts.update(pending)
-        if pending:
-            self.origin = session_open(day)
+        normal = next(i for i, r in enumerate(REGIMES) if r[0] == "normal")
+        origin_day = market_day(self.origin)
+        day = add_trading_days(origin_day, -days)
+        start = _DayStart(np.ones(len(self.specs)), normal)
+        unit: dict[date, _DayStart] = {}
+        while day < origin_day:
+            unit[day] = start
+            path = self._generate(day, start, self._draws(day))
+            self._cache_path(day, path)
+            start = path.next_start
+            yield day
+            day = next_trading_day(day)
+        scale = self._starts[origin_day].prev_close / start.prev_close
+        for d in [d for d in self._paths if d < origin_day]:
+            del self._paths[d]
+        self._starts.update({d: _DayStart(s.prev_close * scale, s.regime, s.variance) for d, s in unit.items()})
+        self.backfill_scale = scale
+        if unit:
+            self.origin = session_open(min(unit))
             self.starts_version += 1
         self.backfilled = True
 
@@ -327,10 +417,13 @@ class MarketEngine:
             "origin": self.origin.isoformat(),
             "time": self._time.isoformat(),
             "epochs": [[start.isoformat(), seed] for start, seed in self._epochs],
-            "starts": {d.isoformat(): [s.prev_close.tolist(), s.regime] for d, s in self._starts.items()},
+            "starts": {
+                d.isoformat(): [s.prev_close.tolist(), s.regime, s.variance] for d, s in self._starts.items()
+            },
             "seed": self._seed,
             "seeds_used": self._seeds_used,
             "backfilled": self.backfilled,
+            "model": MODEL_VERSION,
         }
 
     @classmethod
@@ -341,21 +434,32 @@ class MarketEngine:
         engine._time = datetime.fromisoformat(state["time"])
         engine._epochs = [(datetime.fromisoformat(start), seed) for start, seed in state["epochs"]]
         engine._starts = {
-            date.fromisoformat(d): _DayStart(np.array(prev_close), regime)
-            for d, (prev_close, regime) in state["starts"].items()
+            date.fromisoformat(d): _DayStart(np.array(start[0]), start[1], *start[2:])
+            for d, start in state["starts"].items()
         }
+        return engine
+
+    @classmethod
+    def continue_older(cls, state: dict, specs: tuple[SymbolSpec, ...] = SYMBOLS) -> "MarketEngine":
+        """A market saved by an older price model can't be regenerated, so start a
+        new one at its time, from that session's previous closes. Its history is
+        then generated again (`backfilled` is false)."""
+        t = datetime.fromisoformat(state["time"])
+        prev_close = state["starts"][market_day(t).isoformat()][0]
+        engine = cls(t, seed=state["seed"], specs=specs, prices=np.array(prev_close))
+        engine._seeds_used = state["seeds_used"]
         return engine
 
     # ----- internals ---------------------------------------------------------
 
-    def _reset(self, start: datetime, seed: int) -> None:
+    def _reset(self, start: datetime, seed: int, prices: np.ndarray | None = None) -> None:
         self.origin = snap(start)
         self._time = self.origin
         self._epochs: list[tuple[datetime, int]] = [(self.origin, seed)]
-        normal = next(i for i, (name, _, _) in enumerate(REGIMES) if name == "normal")
-        self._starts: dict[date, _DayStart] = {
-            market_day(self.origin): _DayStart(np.array([s.price for s in self.specs]), normal)
-        }
+        normal = next(i for i, r in enumerate(REGIMES) if r[0] == "normal")
+        if prices is None:
+            prices = np.array([s.price for s in self.specs])
+        self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, normal)}
         self._paths: OrderedDict[date, _DayPath] = OrderedDict()
         self.backfilled = False
         # Bumped whenever session start states change, so savers can skip the large part.
@@ -365,26 +469,38 @@ class MarketEngine:
         self._seeds_used += 1
         return (self._seed * 1_000_003 + self._seeds_used) % 2**63
 
-    def _random(self, seed: int, day: date) -> tuple[np.ndarray, ...]:
+    def _random(self, seed: int, day: date) -> _Draws:
         n = len(self.specs)
         rng = np.random.default_rng([seed, day.toordinal()])
         z_market = rng.standard_normal(_S + 1)
         z_own = rng.standard_normal((_S + 1, n))
         u = rng.random((_M, 2))
         volume_noise = rng.lognormal(0.0, VOLUME_NOISE, (_M, n))
-        return z_market, z_own, u, volume_noise
+        # Fat-tailed overnight gaps.
+        gap_scale = math.sqrt((GAP_DF - 2) / GAP_DF)
+        z_market[0] = rng.standard_t(GAP_DF) * gap_scale
+        z_own[0] = rng.standard_t(GAP_DF, n) * gap_scale
+        jump_scale = math.sqrt((JUMP_DF - 2) / JUMP_DF)
+        hit = rng.random(n) < NEWS_PER_YEAR / TRADING_DAYS_PER_YEAR
+        second = rng.integers(1, _S, n)
+        size = rng.standard_t(JUMP_DF, n) * jump_scale
+        news = np.zeros((_S + 1, n))
+        news[second[hit], np.flatnonzero(hit)] = size[hit]
+        earnings = rng.standard_t(JUMP_DF, n) * jump_scale
+        crash = np.array([rng.random(), rng.exponential()])
+        return _Draws(z_market, z_own, u, volume_noise, news, earnings, crash)
 
-    def _draws(self, day: date) -> tuple[np.ndarray, ...]:
+    def _draws(self, day: date) -> _Draws:
         """The day's random draws, honoring any epochs that start during it.
 
-        Row s of the shocks is the move that ends s seconds after the open (row 0
-        is the overnight gap). A new epoch starting at second c replaces rows
-        after c, and minutes that start at or after c.
+        A new epoch starting at second c replaces the shock rows after c, and
+        minutes that start at or after c. The gap's draws (earnings, selloffs)
+        always come from the epoch in force at the open.
         """
         open_, close = session_open(day), session_close(day)
         before = [e for e in self._epochs if e[0] < open_]
         base = before[-1] if before else self._epochs[0]
-        z_market, z_own, u, volume_noise = self._random(base[1], day)
+        draws = self._random(base[1], day)
         for epoch in self._epochs:
             start, seed = epoch
             if epoch is base or not open_ <= start < close:
@@ -393,59 +509,102 @@ class MarketEngine:
             row = math.floor(cut) + 1
             minute = math.ceil(cut / 60)
             new = self._random(seed, day)
-            z_market[row:] = new[0][row:]
-            z_own[row:] = new[1][row:]
-            u[minute:] = new[2][minute:]
-            volume_noise[minute:] = new[3][minute:]
-        return z_market, z_own, u, volume_noise
+            draws.z_market[row:] = new.z_market[row:]
+            draws.z_own[row:] = new.z_own[row:]
+            draws.news[row:] = new.news[row:]
+            draws.u[minute:] = new.u[minute:]
+            draws.volume_noise[minute:] = new.volume_noise[minute:]
+        return draws
 
     def _path(self, day: date) -> _DayPath:
         if day in self._paths:
             self._paths.move_to_end(day)
             return self._paths[day]
+        path = self._generate(day, self._starts[day], self._draws(day))
+        self._cache_path(day, path)
+        return path
 
-        start = self._starts[day]
-        z_market, z_own, u, volume_noise = self._draws(day)
-
+    def _generate(self, day: date, start: _DayStart, draws: _Draws) -> _DayPath:
+        n = len(self.specs)
         regimes = np.empty(_M, dtype=np.int8)
         r = start.regime
         for m in range(_M):
-            if u[m, 0] < self._p_switch[r]:
+            if draws.u[m, 0] < self._p_switch[r]:
                 others = [i for i in range(len(REGIMES)) if i != r]
-                r = others[int(u[m, 1] * len(others))]
+                r = others[int(draws.u[m, 1] * len(others))]
             regimes[m] = r
-        mult = self._mults[regimes]
+        by_second = np.repeat(regimes, 60)
 
-        # Split each day's variance between the overnight gap and the session.
-        day_var = self._vol**2 / TRADING_DAYS_PER_YEAR
-        sd = np.empty((_S + 1, len(self.specs)))
-        sd[0] = np.sqrt(day_var * GAP_SHARE) * self._mults[start.regime]
-        sd[1:] = np.sqrt(day_var * (1 - GAP_SHARE) / _S) * np.repeat(mult, 60)[:, None]
+        # Each row's share of a normal day's standard deviation, for the market
+        # factor and for each symbol's own noise: the gap's share at the open,
+        # then the session's, shaped through the day and scaled by the regime.
+        gap, session = math.sqrt(GAP_SHARE), math.sqrt((1 - GAP_SHARE) / _S)
+        market = np.empty(_S + 1)
+        own = np.empty(_S + 1)
+        market[0] = gap * self._market_mults[start.regime]
+        own[0] = gap * self._own_mults[start.regime]
+        market[1:] = session * self._shape * self._market_mults[by_second]
+        own[1:] = session * self._shape * self._own_mults[by_second]
 
-        z = self._rho * z_market[:, None] + np.sqrt(1 - self._rho**2) * z_own
-        log_returns = z * sd - 0.5 * sd**2
-        log_returns[1:] += self._drift / (TRADING_DAYS_PER_YEAR * _S)
+        h = start.variance
+        market_sd = (math.sqrt(h) * market)[:, None] * (self._rho * self._day_sd)
+        own_sd = own[:, None] * (np.sqrt(1 - self._rho**2) * self._day_sd)
+        log_returns = market_sd * draws.z_market[:, None] + own_sd * draws.z_own - 0.5 * (market_sd**2 + own_sd**2)
+        log_returns[1:] += (self._drift + self._tilt[by_second][:, None] * self._beta) / (TRADING_DAYS_PER_YEAR * _S)
+
+        # Jumps, each lognormal-corrected like the rest so it doesn't bias the drift.
+        rows, cols = np.nonzero(draws.news)
+        sd = self._news_sd[cols]
+        log_returns[rows, cols] += draws.news[rows, cols] * sd - 0.5 * sd**2
+        earnings = self._earnings_on(day)
+        em = np.where(earnings, self._earnings_move, 0.0)
+        log_returns[0] += draws.earnings * em - 0.5 * em**2
+        crash = 0.0
+        if draws.crash[0] < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR:
+            crash = CRASH_MIN + CRASH_EXTRA * draws.crash[1]
+            log_returns[0] -= crash * self._beta
         prices = start.prev_close * np.exp(np.cumsum(log_returns, axis=0))
+
+        # The day's market shock in units of the session's expected volatility
+        # (a selloff counts in full) sets the next session's variance.
+        market_day_sd = MARKET_VOL / math.sqrt(TRADING_DAYS_PER_YEAR) * math.sqrt(h)
+        shock = market[:_S] @ draws.z_market[:_S] - crash / market_day_sd
+        response = GARCH_ALPHA + (GARCH_GAMMA if shock < 0 else 0.0)
+        h_next = float(np.clip(self._omega + GARCH_BETA * h + response * shock**2 * h, *VARIANCE_RANGE))
 
         # U-shaped intraday volume: busiest at the open and the close.
         x = (np.arange(_M) + 0.5) / _M
         shape = 1 + 2 * (2 * x - 1) ** 2
         shape /= shape.mean()
-        noise = volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
-        minute_volume = np.floor(self._daily_volume / _M * shape[:, None] * mult[:, None] * noise)
-        volume = np.zeros((_M + 1, len(self.specs)))
+        noise = draws.volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
+        level = self._daily_volume * math.sqrt(h) * np.where(earnings, EARNINGS_VOLUME, 1.0)
+        minute_volume = np.floor(level / _M * shape[:, None] * self._volume_mults[regimes][:, None] * noise)
+        volume = np.zeros((_M + 1, n))
         volume[1:] = np.cumsum(minute_volume, axis=0)
 
-        path = _DayPath(
+        return _DayPath(
             prices=prices,
             high=np.maximum.accumulate(prices, axis=0),
             low=np.minimum.accumulate(prices, axis=0),
             minute_volume=minute_volume,
             volume=volume,
             regimes=regimes,
+            # The close is the last price shown in the session (one second before 4:00).
+            next_start=_DayStart(prices[_S - 1].copy(), int(regimes[-1]), h_next),
         )
-        self._cache_path(day, path)
-        return path
+
+    def _earnings_on(self, day: date) -> np.ndarray:
+        """(N,) whether each symbol reports earnings before this session."""
+        on = np.zeros(len(self.specs), dtype=bool)
+        for i, spec in enumerate(self.specs):
+            if spec.earnings is None:
+                continue
+            month, dom = spec.earnings
+            if (day.month - 1) % 3 != month:
+                continue
+            target = date(day.year, day.month, dom)
+            on[i] = day == (target if is_trading_day(target) else next_trading_day(target))
+        return on
 
     def _cache_path(self, day: date, path: _DayPath) -> None:
         """Keep a few recent paths, never evicting the current session's (every tick reads it)."""
@@ -455,3 +614,25 @@ class MarketEngine:
         while len(self._paths) > PATH_CACHE_DAYS:
             oldest = next(d for d in self._paths if d != current)
             del self._paths[oldest]
+
+
+def _stationary(p_switch: list[float]) -> np.ndarray:
+    """Long-run share of time in each regime, for a chain that leaves regime r
+    with probability p_switch[r] per minute, to any other regime equally."""
+    k = len(p_switch)
+    if k == 1:
+        return np.ones(1)
+    p = np.array(p_switch)[:, None] / (k - 1) * np.ones((k, k))
+    np.fill_diagonal(p, 1 - np.array(p_switch))
+    a = p.T - np.eye(k)
+    a[-1] = 1
+    b = np.zeros(k)
+    b[-1] = 1
+    return np.linalg.solve(a, b)
+
+
+def _intraday_shape() -> np.ndarray:
+    """(S,) volatility multiplier for each second of the session, averaging 1 in variance."""
+    x = (np.arange(_S) + 0.5) / _S
+    v = 1 + OPEN_BURST * np.exp(-x / BURST_DECAY) + CLOSE_BURST * np.exp(-(1 - x) / BURST_DECAY)
+    return v / math.sqrt(np.mean(v**2))

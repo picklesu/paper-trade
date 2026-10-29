@@ -257,9 +257,9 @@ class MarketService:
         try:
             backfill = 0 if self.engine.backfilled else self.history_days
             if backfill:
-                # Start clean: an interrupted build, or a market continued from an
-                # older price model, may have left bars that no longer match.
-                self.history.clear()
+                # Bars before the origin are about to be generated again; any there now
+                # (from a market continued from an older price model) no longer match.
+                self.history.delete_before(market_day(self.engine.origin))
             missing = self.history.missing_days()
             total, done = len(missing) + backfill, 0
             with self.history.batch():

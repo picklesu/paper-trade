@@ -143,6 +143,11 @@ class History:
         self.flush()
         self.db.execute("DELETE FROM bars30 WHERE day >= ?", (day.isoformat(),))
 
+    def delete_before(self, day: date) -> None:
+        """Forget sessions before `day` (history about to be generated again)."""
+        self.flush()
+        self.db.execute("DELETE FROM bars30 WHERE day < ?", (day.isoformat(),))
+
     def clear(self) -> None:
         if self._pending is not None:
             self._pending = []

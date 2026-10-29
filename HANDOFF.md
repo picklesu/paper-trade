@@ -290,6 +290,11 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - Only the market factor's volatility clusters (GARCH), so single stocks show little
   clustering of their own beyond the market's. Five-year samples vary around the spec vol
   (persistent volatility); the average over many runs matches it.
-- Fills made before a model-version change keep their prices; the regenerated history before
-  that point no longer shows them on the chart at the same prices.
+- Model-version changes (`continue_older`): the old model's prices can't be recomputed, so
+  that session restarts from its previous close with new draws and the quote jumps once
+  (positions revalue; a working stop could trigger). Fills made earlier keep their prices,
+  but the regenerated history no longer shows them at those prices, and going earlier than
+  the continue point resets the account. The user's account had no orders at the 5.6 upgrade.
+- History meets the origin with a seam in regime and GARCH variance: the origin's session
+  starts normal at variance 1 whatever the history ended in (as before 5.6).
 - `dev.sh` (foreground) still exists alongside `server.sh` (background). Keep it or remove it.

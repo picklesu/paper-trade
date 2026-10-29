@@ -352,6 +352,7 @@ def test_interrupted_backfill_changes_nothing() -> None:
     it.close()  # e.g. the server stopped mid-build
     assert (engine.origin, dict(engine._starts), engine.starts_version) == before
     assert not engine.backfilled
+    assert all(d >= START.date() for d in engine._paths)  # no unit-scale paths left behind
 
 
 def test_backfill_keeps_todays_path_cached() -> None:

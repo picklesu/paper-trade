@@ -176,9 +176,11 @@ class _Draws:
     z_own: np.ndarray  # (S+1, N)
     u: np.ndarray  # (M, 2) regime switching
     volume_noise: np.ndarray  # (M, N)
-    news: np.ndarray  # (S+1, N) unit-variance jump sizes where news arrives, else 0
+    news_at: np.ndarray  # (N,) the row where news arrives for each symbol, or 0 for none
+    news_size: np.ndarray  # (N,) unit-variance news jump sizes
     earnings: np.ndarray  # (N,) unit-variance earnings moves
-    crash: np.ndarray  # [uniform for whether a selloff happens, exponential for its size]
+    crash_u: float  # a selloff happens if this uniform is small enough
+    crash_size: float  # unit exponential
 
 
 @dataclass
@@ -227,9 +229,10 @@ class MarketEngine:
         )
 
         self._p_switch = [1 - math.exp(-1 / (r[2] * 60)) for r in REGIMES]
+        self._normal = next(i for i, r in enumerate(REGIMES) if r[0] == "normal")
         share = _stationary(self._p_switch)  # long-run share of time in each regime
         mults = np.array([r[1] for r in REGIMES])
-        self._volume_mults = mults
+        self._volume_mults = mults / (share @ mults)
         self._market_mults = mults / math.sqrt(share @ mults**2)
         self._own_mults = np.sqrt(mults) / math.sqrt(share @ mults)
         tilt = np.array([r[3] for r in REGIMES])
@@ -349,21 +352,23 @@ class MarketEngine:
         all at once, so an interrupted build leaves the market as it was (and
         saving mid-build stays consistent).
         """
-        normal = next(i for i, r in enumerate(REGIMES) if r[0] == "normal")
         origin_day = market_day(self.origin)
         day = add_trading_days(origin_day, -days)
-        start = _DayStart(np.ones(len(self.specs)), normal)
+        start = _DayStart(np.ones(len(self.specs)), self._normal)
         unit: dict[date, _DayStart] = {}
-        while day < origin_day:
-            unit[day] = start
-            path = self._generate(day, start, self._draws(day))
-            self._cache_path(day, path)
-            start = path.next_start
-            yield day
-            day = next_trading_day(day)
+        try:
+            while day < origin_day:
+                unit[day] = start
+                path = self._generate(day, start, self._draws(day))
+                self._cache_path(day, path)
+                start = path.next_start
+                yield day
+                day = next_trading_day(day)
+        finally:
+            # The unit-scale paths must never be read as prices, finished or not.
+            for d in [d for d in self._paths if d < origin_day]:
+                del self._paths[d]
         scale = self._starts[origin_day].prev_close / start.prev_close
-        for d in [d for d in self._paths if d < origin_day]:
-            del self._paths[d]
         self._starts.update({d: _DayStart(s.prev_close * scale, s.regime, s.variance) for d, s in unit.items()})
         self.backfill_scale = scale
         if unit:
@@ -456,10 +461,9 @@ class MarketEngine:
         self.origin = snap(start)
         self._time = self.origin
         self._epochs: list[tuple[datetime, int]] = [(self.origin, seed)]
-        normal = next(i for i, r in enumerate(REGIMES) if r[0] == "normal")
         if prices is None:
             prices = np.array([s.price for s in self.specs])
-        self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, normal)}
+        self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, self._normal)}
         self._paths: OrderedDict[date, _DayPath] = OrderedDict()
         self.backfilled = False
         # Bumped whenever session start states change, so savers can skip the large part.
@@ -482,13 +486,11 @@ class MarketEngine:
         z_own[0] = rng.standard_t(GAP_DF, n) * gap_scale
         jump_scale = math.sqrt((JUMP_DF - 2) / JUMP_DF)
         hit = rng.random(n) < NEWS_PER_YEAR / TRADING_DAYS_PER_YEAR
-        second = rng.integers(1, _S, n)
-        size = rng.standard_t(JUMP_DF, n) * jump_scale
-        news = np.zeros((_S + 1, n))
-        news[second[hit], np.flatnonzero(hit)] = size[hit]
+        news_at = np.where(hit, rng.integers(1, _S, n), 0)
+        news_size = rng.standard_t(JUMP_DF, n) * jump_scale
         earnings = rng.standard_t(JUMP_DF, n) * jump_scale
-        crash = np.array([rng.random(), rng.exponential()])
-        return _Draws(z_market, z_own, u, volume_noise, news, earnings, crash)
+        crash_u, crash_size = rng.random(), rng.exponential()
+        return _Draws(z_market, z_own, u, volume_noise, news_at, news_size, earnings, crash_u, crash_size)
 
     def _draws(self, day: date) -> _Draws:
         """The day's random draws, honoring any epochs that start during it.
@@ -511,7 +513,10 @@ class MarketEngine:
             new = self._random(seed, day)
             draws.z_market[row:] = new.z_market[row:]
             draws.z_own[row:] = new.z_own[row:]
-            draws.news[row:] = new.news[row:]
+            # News before the cut stays; after it, the new epoch's (one per symbol a day).
+            keep = (draws.news_at > 0) & (draws.news_at < row)
+            draws.news_at = np.where(keep, draws.news_at, np.where(new.news_at >= row, new.news_at, 0))
+            draws.news_size = np.where(keep, draws.news_size, new.news_size)
             draws.u[minute:] = new.u[minute:]
             draws.volume_noise[minute:] = new.volume_noise[minute:]
         return draws
@@ -553,15 +558,15 @@ class MarketEngine:
         log_returns[1:] += (self._drift + self._tilt[by_second][:, None] * self._beta) / (TRADING_DAYS_PER_YEAR * _S)
 
         # Jumps, each lognormal-corrected like the rest so it doesn't bias the drift.
-        rows, cols = np.nonzero(draws.news)
+        cols = np.flatnonzero(draws.news_at)
         sd = self._news_sd[cols]
-        log_returns[rows, cols] += draws.news[rows, cols] * sd - 0.5 * sd**2
+        log_returns[draws.news_at[cols], cols] += draws.news_size[cols] * sd - 0.5 * sd**2
         earnings = self._earnings_on(day)
         em = np.where(earnings, self._earnings_move, 0.0)
         log_returns[0] += draws.earnings * em - 0.5 * em**2
         crash = 0.0
-        if draws.crash[0] < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR:
-            crash = CRASH_MIN + CRASH_EXTRA * draws.crash[1]
+        if draws.crash_u < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR:
+            crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
             log_returns[0] -= crash * self._beta
         prices = start.prev_close * np.exp(np.cumsum(log_returns, axis=0))
 

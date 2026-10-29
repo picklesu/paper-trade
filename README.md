@@ -16,7 +16,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - Within a day, prices move most just after the open and pick up again into the close. **Volume** is heavier on big moves and after news, and **spreads widen** when the market is volatile (at the open, in volatile spells, after selloffs).
 - **Session hours, without the wait:** the market trades 9:30 AM–4:00 PM ET, Monday–Friday. At the close it continues straight from the next session's open (with an overnight gap), so whenever you use the app the market is open. Exchange holidays are not modeled.
 - Use the top-bar controls to pause or run at 1×, 10×, 60× or 600×.
-- **Real prices:** with an Alpha Vantage key (see [Real prices](#real-prices)), **Go to… → Sync to real prices…** moves the market to the latest real closes and continues from there; new markets start from them too. The simulation moves prices randomly afterwards, so they drift from real ones over time.
+- **Real prices:** with free Alpaca API keys (see [Real prices](#real-prices)), **Go to… → Sync to real prices…** moves the market to the latest real closes and continues from there; new markets start from them too. The simulation moves prices randomly afterwards, so they drift from real ones over time.
 - **Go to…** jumps to any date and time:
   - **Forward** fast-forwards the market through the skipped sessions.
   - **Back** asks whether to **replay the same prices** or **generate a new future** from that point. Prices are reproducible, so a replay is exact.
@@ -53,13 +53,14 @@ A paper trading simulator that runs 24/7 on simulated market data.
 
 ## Real prices
 
-Real prices come from [Alpha Vantage](https://www.alphavantage.co/support/#api-key) (free key). Put it in `backend/.env`, which git ignores (never commit it):
+Real prices come from [Alpaca](https://alpaca.markets/)'s market data API. Its free keys come with a free paper trading account (no money needed): sign up, open the paper trading dashboard and generate API keys. Put them in `backend/.env`, which git ignores (never commit it):
 
 ```
-ALPHAVANTAGE_API_KEY=your-key
+APCA_API_KEY_ID=your-key-id
+APCA_API_SECRET_KEY=your-secret
 ```
 
-Then `./server.sh restart`. The free plan allows about 25 requests a day, one symbol each, so the server fetches in the background (the oldest prices first, 15 seconds apart) and all 40 symbols take two days. **Go to… → Sync to real prices…** uses whatever has arrived; symbols without a real price yet keep their current one. Without a key, everything works as before with built-in starting prices.
+Then `./server.sh restart`. The server fetches all 40 symbols in one request when it starts and every 15 minutes; opening **Go to… → Sync to real prices…** fetches again if the last fetch is over a minute old. The free plan's real-time prices come from the IEX exchange, within cents of the consolidated price. Syncing moves every symbol with a real price to it; any without one keep their current price. Without keys, everything works as before with built-in starting prices.
 
 ## Run
 
@@ -95,7 +96,8 @@ cd frontend && npm test
 | 5.5 | Customizable workspace: dockable, floating, resizable panels (step 1), collapse to edge strips (step 2), chart-first layout with the Panels menu (step 2b), panels on any edge (step 2c) | Done |
 | 5.6 | More realistic prices: fat tails (gaps, earnings, news, selloffs), volatility clustering with the leverage effect, intraday volatility shape | Done |
 | 5.7 | Engine redesign: minute-resolution sessions with seconds on demand (16× faster, 20× less memory), 40 symbols with sectors, volume and spreads that follow volatility, single-stock clustering | Done |
-| 5.8 | Sync to real prices (Alpha Vantage, fetched in the background within the free daily limit) | Done |
+| 5.8 | Sync to real prices | Done |
+| 5.9 | Real prices from Alpaca: all symbols in one request, refreshed every 15 minutes (replaces Alpha Vantage's 25 requests a day) | Done |
 | 6 | Watchlists and quotes | |
 | 7 | Options chain with Greeks | |
 | 8 | Option expiration, exercise, assignment | |

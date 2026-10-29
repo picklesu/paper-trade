@@ -207,7 +207,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
     return (
       <>
         <h2 id="goto-title">Sync to real prices</h2>
-        <p className="muted">Checking saved real prices…</p>
+        <p className="muted">Checking real prices…</p>
         <div className="dialog-actions">{back}</div>
       </>
     )
@@ -217,8 +217,9 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
       <>
         <h2 id="goto-title">Sync to real prices</h2>
         <p>
-          Real prices come from Alpha Vantage and need a free API key. Add a line{' '}
-          <code>ALPHAVANTAGE_API_KEY=your-key</code> to <code>backend/.env</code> and restart the server.
+          Real prices come from Alpaca and need its free API keys (from a free paper trading account). Add the lines{' '}
+          <code>APCA_API_KEY_ID=your-key-id</code> and <code>APCA_API_SECRET_KEY=your-secret</code> to{' '}
+          <code>backend/.env</code> and restart the server.
         </p>
         <div className="dialog-actions">{back}</div>
       </>
@@ -233,10 +234,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
     return (
       <>
         <h2 id="goto-title">Sync to real prices</h2>
-        <p>
-          No real prices yet. They're fetched in the background, up to {status.daily_requests} a day (Alpha Vantage's
-          free limit), so all {status.total} symbols take two days. Symbols can be synced as soon as some arrive.
-        </p>
+        <p>No real prices yet. The server fetches all {status.total} symbols from Alpaca when it starts and every 15 minutes.</p>
         {problem}
         <div className="dialog-actions">{back}</div>
       </>
@@ -253,9 +251,8 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
     <>
       <h2 id="goto-title">Sync to real prices?</h2>
       <p>
-        Real prices are saved for {status.available} of {status.total} symbols{days && ` (closes from ${days})`}. Prices
-        move to them now
-        {missing > 0 && `; the other ${missing} keep their current price (the rest arrive over the next day or two)`}.
+        Real prices are saved for {status.available} of {status.total} symbols{days && ` (prices from ${days})`}. Prices
+        move to them now{missing > 0 && `; the other ${missing} keep their current price`}.
       </p>
       <p className="muted">
         The market continues from here: its 5-year history is generated again to end at these prices, and going back

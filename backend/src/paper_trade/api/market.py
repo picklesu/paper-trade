@@ -92,8 +92,11 @@ async def goto(body: Goto, request: Request) -> dict:
 
 @router.get("/real-prices")
 async def real_prices(request: Request) -> dict:
-    """How many symbols have a saved real price, and from when."""
-    return market(request).real_prices_status()
+    """How many symbols have a saved real price, and from when (fetching first if
+    the last fetch was over a minute ago)."""
+    svc = market(request)
+    await svc.refresh_real_prices_if_stale()
+    return svc.real_prices_status()
 
 
 @router.post("/real-prices/sync")

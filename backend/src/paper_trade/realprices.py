@@ -1,17 +1,20 @@
-"""Real prices from Alpha Vantage, so the simulated market can start from them.
+"""Real prices from Alpaca's market data API, so the simulated market can start from them.
 
-The free plan allows about 25 requests a day, one symbol per request, so a
-background refresher spends that budget on the symbols whose prices are oldest,
-spacing requests out. Fetched prices are saved; "Sync to real prices" and new
-markets use whatever is saved.
+One request returns a snapshot of every symbol. On the free (Basic) plan,
+real-time prices come from the IEX exchange alone; they trade within cents of
+the consolidated price, which is plenty for starting a simulation. A background
+refresher keeps the saved prices recent, and opening the Sync dialog fetches
+again if they're more than a minute old. "Sync to real prices" and new markets
+use whatever is saved.
 
-The API key comes from the ALPHAVANTAGE_API_KEY environment variable or from
-`backend/.env` (git-ignored; never commit it: the repository is public).
+The keys come from the APCA_API_KEY_ID and APCA_API_SECRET_KEY environment
+variables (Alpaca's own names) or from `backend/.env` (git-ignored; never commit
+it: the repository is public).
 """
 
 import json
-import logging
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -22,31 +25,18 @@ from pathlib import Path
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.store import Store
 
-URL = "https://www.alphavantage.co/query"
-KEY_NAME = "ALPHAVANTAGE_API_KEY"
+URL = "https://data.alpaca.markets/v2/stocks/snapshots"
+KEY_ID_NAME = "APCA_API_KEY_ID"
+SECRET_NAME = "APCA_API_SECRET_KEY"
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
-DAILY_REQUESTS = 25
-REQUEST_SPACING_SECONDS = 15  # stays under the free plan's per-minute limit too
-FRESH_FOR = timedelta(hours=12)  # a price fetched more recently isn't refreshed
-RETRY_AFTER = timedelta(hours=1)  # a symbol whose fetch failed waits this long
-# After a refusal: a burst limit clears within a minute; for the daily limit, check
-# hourly (when the service's day starts isn't documented).
-THROTTLE_PAUSE = timedelta(minutes=1)
-DAILY_LIMIT_PAUSE = timedelta(hours=1)
-
-log = logging.getLogger(__name__)
+REFRESH_EVERY = timedelta(minutes=15)  # the background refresher's interval
+STATUS_REFRESH_AFTER = timedelta(minutes=1)  # opening the Sync dialog fetches if older
 
 
-class RateLimited(Exception):
-    """The service refused for now."""
-
-
-class DailyLimit(RateLimited):
-    """The day's requests are used up."""
-
-
-class Throttled(RateLimited):
-    """Too many requests in a short time."""
+@dataclass(frozen=True)
+class Credentials:
+    key_id: str
+    secret: str
 
 
 @dataclass(frozen=True)
@@ -56,54 +46,96 @@ class RealPrice:
     fetched: datetime
 
 
-def api_key(env_file: Path = ENV_FILE) -> str | None:
-    if key := os.environ.get(KEY_NAME):
-        return key.strip()
+class FetchError(Exception):
+    """The service refused or sent something unusable; the message is for the user."""
+
+
+def _env_value(name: str, env_file: Path) -> str | None:
+    if value := os.environ.get(name, "").strip():
+        return value
     if env_file.is_file():
         for line in env_file.read_text().splitlines():
-            name, sep, value = line.partition("=")
-            if sep and name.strip() == KEY_NAME and value.strip():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() == name and value.strip():
                 return value.strip().strip("\"'")
     return None
 
 
-def parse_quote(body: dict) -> tuple[float, date]:
-    """A GLOBAL_QUOTE response's price and trading day."""
-    quote = body.get("Global Quote")
-    if quote and "05. price" in quote:
-        return float(quote["05. price"]), date.fromisoformat(quote["07. latest trading day"])
-    message = str(body.get("Information") or body.get("Note") or body.get("Error Message") or "")
-    text = message.lower()
-    if "per day" in text or "daily" in text:
-        raise DailyLimit(message)
-    if "rate limit" in text or "per second" in text or "per minute" in text or "sparingly" in text:
-        raise Throttled(message)
-    # Anything else (e.g. an invalid key) is a problem to show, not a limit to wait out.
-    raise ValueError(message or f"unexpected response: {json.dumps(body)[:200]}")
+def credentials(env_file: Path = ENV_FILE) -> Credentials | None:
+    key_id, secret = _env_value(KEY_ID_NAME, env_file), _env_value(SECRET_NAME, env_file)
+    return Credentials(key_id, secret) if key_id and secret else None
 
 
-def fetch_quote(symbol: str, key: str, timeout: float = 15) -> tuple[float, date]:
-    query = urllib.parse.urlencode({"function": "GLOBAL_QUOTE", "symbol": symbol, "apikey": key})
-    with urllib.request.urlopen(f"{URL}?{query}", timeout=timeout) as response:
-        return parse_quote(json.load(response))
+def _trading_day(timestamp: str) -> date:
+    # RFC 3339 with up to nanoseconds; fromisoformat keeps the first six digits.
+    return datetime.fromisoformat(timestamp).astimezone(MARKET_TZ).date()
+
+
+def parse_snapshots(body: dict, symbols: list[str]) -> dict[str, tuple[float, date]]:
+    """Each symbol's latest trade price and trading day (the day's close if there's
+    no trade); symbols the response leaves out are left out."""
+    prices = {}
+    for symbol in symbols:
+        snap = body.get(symbol) or {}
+        for field, key in (("latestTrade", "p"), ("dailyBar", "c")):
+            if (item := snap.get(field)) and item.get(key) and item.get("t"):
+                prices[symbol] = (float(item[key]), _trading_day(item["t"]))
+                break
+    return prices
+
+
+def _refusal(code: int, body: bytes) -> FetchError:
+    # Errors usually carry JSON {"message": ...}; some are an HTML page, which isn't shown.
+    try:
+        message = str(json.loads(body).get("message") or "")
+    except (ValueError, AttributeError):
+        message = ""
+    detail = f"{code} {message}".strip()
+    if code in (401, 403):
+        return FetchError(f"Alpaca rejected the API keys ({detail}). Check {KEY_ID_NAME} and {SECRET_NAME}.")
+    if code == 429:
+        return FetchError("Alpaca says too many requests; the next refresh will try again.")
+    return FetchError(f"Alpaca answered {detail}")
+
+
+def fetch_snapshots(symbols: list[str], creds: Credentials, timeout: float = 10) -> dict[str, tuple[float, date]]:
+    query = urllib.parse.urlencode({"symbols": ",".join(symbols), "feed": "iex"})
+    request = urllib.request.Request(
+        f"{URL}?{query}",
+        headers={"APCA-API-KEY-ID": creds.key_id, "APCA-API-SECRET-KEY": creds.secret, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = json.load(response)
+    except urllib.error.HTTPError as e:
+        raise _refusal(e.code, e.read()) from None
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise FetchError(f"couldn't reach Alpaca ({getattr(e, 'reason', e)})") from None
+    if not isinstance(body, dict):
+        raise FetchError(f"unexpected response: {json.dumps(body)[:200]}")
+    return parse_snapshots(body, symbols)
 
 
 class RealPrices:
-    """Saved real prices, the daily request budget and the refresher's state, in
-    the store (saved prices are also kept in memory)."""
+    """Saved real prices and the last fetch's outcome, in the store (saved prices
+    are also kept in memory)."""
 
     def __init__(
         self,
         store: Store,
-        key: str | None,
-        fetch: Callable[[str, str], tuple[float, date]] | None = None,
+        creds: Credentials | None,
+        fetch: Callable[[list[str], Credentials], dict[str, tuple[float, date]]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.store = store
-        self.key = key
+        self.creds = creds
         self._fetch = fetch
         self._now = now
         self._saved: dict[str, RealPrice] | None = None
+
+    @property
+    def configured(self) -> bool:
+        return self.creds is not None
 
     @property
     def saved(self) -> dict[str, RealPrice]:
@@ -114,74 +146,37 @@ class RealPrices:
             }
         return self._saved
 
-    def requests_left(self) -> int:
-        usage = self.store.get("real_prices_usage", {})
-        return DAILY_REQUESTS - usage.get("count", 0) if usage.get("day") == self._today() else DAILY_REQUESTS
+    def last_attempt(self) -> datetime | None:
+        at = self.store.get("real_prices_attempt")
+        return datetime.fromisoformat(at) if at else None
 
-    def due(self, symbols: list[str]) -> list[str]:
-        """Symbols worth fetching: never fetched first, then the oldest; a symbol
-        whose fetch failed waits RETRY_AFTER (so it can't take the whole budget)."""
-        saved, now = self.saved, self._now()
-        attempts = {s: datetime.fromisoformat(t) for s, t in self.store.get("real_prices_attempts", {}).items()}
+    def stale(self, age: timedelta) -> bool:
+        """Whether the last fetch (successful or not) was longer than `age` ago."""
+        last = self.last_attempt()
+        return last is None or self._now() - last >= age
 
-        def last(s: str) -> datetime | None:
-            times = [t for t in (saved[s].fetched if s in saved else None, attempts.get(s)) if t]
-            return max(times) if times else None
-
-        due = [
-            s
-            for s in symbols
-            if (s not in saved or now - saved[s].fetched >= FRESH_FOR)
-            and (s not in attempts or now - attempts[s] >= RETRY_AFTER)
-        ]
-        return sorted(due, key=lambda s: (s in saved, last(s) or now))
-
-    def paused_until(self) -> datetime | None:
-        until = self.store.get("real_prices_pause")
-        return datetime.fromisoformat(until) if until else None
-
-    def next_due(self, symbols: list[str]) -> str | None:
-        """The symbol to fetch next, or None (no key, paused, nothing due, or no
-        requests left today)."""
-        paused = self.paused_until()
-        if not self.key or (paused and self._now() < paused) or self.requests_left() <= 0:
-            return None
-        due = self.due(symbols)
-        return due[0] if due else None
-
-    def seconds_until_retry(self, idle: float) -> float:
-        """How long the refresher should wait when nothing is due: until a pause
-        ends, if that's sooner than `idle`."""
-        paused = self.paused_until()
-        if paused and paused > self._now():
-            return min(idle, (paused - self._now()).total_seconds())
-        return idle
-
-    def fetch(self, symbol: str) -> tuple[float, date]:
+    def fetch(self, symbols: list[str]) -> dict[str, tuple[float, date]]:
         """One request (safe to run in a worker thread: it doesn't touch the store)."""
-        assert self.key
-        return (self._fetch or fetch_quote)(symbol, self.key)
+        assert self.creds
+        return (self._fetch or fetch_snapshots)(symbols, self.creds)
 
-    def attempt(self, symbol: str) -> None:
-        """A request for `symbol` is about to be made: count it."""
-        self.store.set("real_prices_usage", {"day": self._today(), "count": DAILY_REQUESTS - self.requests_left() + 1})
-        attempts = self.store.get("real_prices_attempts", {})
-        attempts[symbol] = self._now().isoformat()
-        self.store.set("real_prices_attempts", attempts)
+    def attempt(self) -> None:
+        """A fetch is about to be made."""
+        self.store.set("real_prices_attempt", self._now().isoformat())
 
-    def record(self, symbol: str, price: float, as_of: date) -> None:
+    def record(self, prices: dict[str, tuple[float, date]], symbols: list[str]) -> None:
         fetched = self._now()
-        prices = self.store.get("real_prices", {})
-        prices[symbol] = {"price": price, "as_of": as_of.isoformat(), "fetched": fetched.isoformat()}
-        self.store.set("real_prices", prices)
-        self.saved[symbol] = RealPrice(price, as_of, fetched)
+        saved = self.store.get("real_prices", {})
+        for symbol, (price, as_of) in prices.items():
+            saved[symbol] = {"price": price, "as_of": as_of.isoformat(), "fetched": fetched.isoformat()}
+            self.saved[symbol] = RealPrice(price, as_of, fetched)
+        self.store.set("real_prices", saved)
+        missing = [s for s in symbols if s not in prices]
         self.store.set("real_prices_error", None)
-
-    def refused(self, error: RateLimited) -> None:
-        """The service refused: pause (briefly for a burst limit, an hour for the daily one)."""
-        pause = DAILY_LIMIT_PAUSE if isinstance(error, DailyLimit) else THROTTLE_PAUSE
-        self.store.set("real_prices_pause", (self._now() + pause).isoformat())
-        self.failed(str(error))
+        if not prices:
+            self.failed("Alpaca sent no prices")
+        elif missing:
+            self.failed(f"no price for {', '.join(missing)}")
 
     def failed(self, message: str) -> None:
         self.store.set("real_prices_error", {"message": message, "at": self._now().isoformat()})
@@ -189,17 +184,14 @@ class RealPrices:
     def status(self, symbols: list[str]) -> dict:
         saved = self.saved
         days = [saved[s].as_of for s in symbols if s in saved]
+        fetched = [saved[s].fetched for s in symbols if s in saved]
         error = self.store.get("real_prices_error")
         return {
-            "configured": bool(self.key),
+            "configured": self.configured,
             "available": sum(s in saved for s in symbols),
             "total": len(symbols),
             "oldest": min(days).isoformat() if days else None,
             "newest": max(days).isoformat() if days else None,
-            "requests_left": self.requests_left(),
-            "daily_requests": DAILY_REQUESTS,
+            "fetched": max(fetched).isoformat() if fetched else None,
             "last_error": error["message"] if error else None,
         }
-
-    def _today(self) -> str:
-        return self._now().astimezone(MARKET_TZ).date().isoformat()

@@ -183,12 +183,12 @@ describe('GoToDialog: sync to real prices', () => {
   }
 
   it('says how many symbols have real prices, then syncs', async () => {
-    const fetchMock = mockReal({ configured: true, available: 25, total: 40, oldest: '2026-10-27', newest: '2026-10-28', daily_requests: 25 })
+    const fetchMock = mockReal({ configured: true, available: 25, total: 40, oldest: '2026-10-27', newest: '2026-10-28' })
     const onClose = vi.fn()
     render(<GoToDialog clock={clock} onClose={onClose} />)
     fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
 
-    expect(await screen.findByText(/saved for 25 of 40 symbols \(closes from Oct 27–Oct 28\)/)).toBeInTheDocument()
+    expect(await screen.findByText(/saved for 25 of 40 symbols \(prices from Oct 27–Oct 28\)/)).toBeInTheDocument()
     expect(screen.getByText(/the other 15 keep their current price/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Sync prices' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
@@ -196,10 +196,10 @@ describe('GoToDialog: sync to real prices', () => {
   })
 
   it('shows the last fetch problem', async () => {
-    mockReal({ configured: true, available: 0, total: 40, daily_requests: 25, last_error: 'The parameter apikey is invalid or missing.' })
+    mockReal({ configured: true, available: 0, total: 40, last_error: 'Alpaca rejected the API keys (401).' })
     render(<GoToDialog clock={clock} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
-    expect(await screen.findByText(/The last fetch failed: The parameter apikey is invalid/)).toBeInTheDocument()
+    expect(await screen.findByText(/The last fetch failed: Alpaca rejected the API keys/)).toBeInTheDocument()
   })
 
   it('ignores a status that arrives after Back', async () => {
@@ -221,10 +221,10 @@ describe('GoToDialog: sync to real prices', () => {
     mockReal({ configured: false, available: 0, total: 40 })
     const { unmount } = render(<GoToDialog clock={clock} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
-    expect(await screen.findByText(/need a free API key/)).toBeInTheDocument()
+    expect(await screen.findByText(/need its free API keys/)).toBeInTheDocument()
     unmount()
 
-    mockReal({ configured: true, available: 0, total: 40, daily_requests: 25 })
+    mockReal({ configured: true, available: 0, total: 40 })
     render(<GoToDialog clock={clock} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
     expect(await screen.findByText(/No real prices yet/)).toBeInTheDocument()

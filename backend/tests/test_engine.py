@@ -160,7 +160,9 @@ def test_daily_volatility_matches_spec(monkeypatch) -> None:
     # Hold the regime at normal, with no volatility clustering or jumps, so only the
     # spec volatility drives returns (test_long_run_volatility_matches_spec covers the rest).
     monkeypatch.setattr(engine_mod, "REGIMES", (("normal", 1.0, 1e12, 0.0),))
-    for name in ("GARCH_ALPHA", "GARCH_GAMMA", "GARCH_BETA", "NEWS_PER_YEAR", "CRASHES_PER_YEAR"):
+    for name in ("GARCH_ALPHA", "GARCH_GAMMA", "GARCH_BETA", "OWN_GARCH_ALPHA", "OWN_GARCH_GAMMA", "OWN_GARCH_BETA"):
+        monkeypatch.setattr(engine_mod, name, 0.0)
+    for name in ("NEWS_PER_YEAR", "CRASHES_PER_YEAR"):
         monkeypatch.setattr(engine_mod, name, 0.0)
     spec = SymbolSpec("TEST", "Test", 100, vol=0.30, drift=0, market_corr=0.5, daily_volume=1000)
     engine = MarketEngine(START, seed=3, specs=(spec,))
@@ -352,35 +354,45 @@ def test_interrupted_backfill_changes_nothing() -> None:
     it.close()  # e.g. the server stopped mid-build
     assert (engine.origin, dict(engine._starts), engine.starts_version) == before
     assert not engine.backfilled
-    assert all(d >= START.date() for d in engine._paths)  # no unit-scale paths left behind
+    assert all(d >= START.date() for d in engine._skeletons)  # no unit-scale sessions left behind
 
 
-def test_backfill_keeps_todays_path_cached() -> None:
+def test_backfill_keeps_todays_session_cached() -> None:
     engine = at(et(2026, 1, 5, 11, 0))
-    today = engine._path(date(2026, 1, 5))
-    for _ in engine.backfill_iter(30):
+    today = engine._skeleton(date(2026, 1, 5))
+    for _ in engine.backfill_iter(60):
         pass
-    assert engine._paths.get(date(2026, 1, 5)) is today
+    assert engine._skeletons.get(date(2026, 1, 5)) is today
 
 
 # ----- model statistics --------------------------------------------------------------
 
 
+STATS_SYMBOLS = ("SPY", "TLT", "AAPL", "MSFT", "XOM", "CVX")
+
+
 @pytest.fixture(scope="module")
-def ten_years() -> dict[str, np.ndarray]:
-    """Ten years of SPY and AAPL: daily opens and closes, and the mean absolute
-    one-minute return over the first 15 minutes and over midday."""
-    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "AAPL"))
+def ten_years() -> dict:
+    """Ten years of a few symbols: daily opens and closes, the mean absolute
+    one-minute move over the first 15 minutes and over midday, each day's
+    correlation between minute volume and the size of the minute's move, and
+    the spread factor at the open and midday."""
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in STATS_SYMBOLS)
     engine = MarketEngine(START, seed=1, specs=specs)
-    days, opens, closes, early, midday = [], [], [], [], []
+    days, opens, closes, early, midday, volume_corr, spread_open, spread_mid = [], [], [], [], [], [], [], []
     for day in engine.backfill_iter(2520):
-        p = engine.day_prices(day)
+        bars = engine.minute_bars(day)
         days.append(day)
-        opens.append(p[0].copy())
-        closes.append(p[-1].copy())
-        r = np.abs(np.diff(np.log(p[::60]), axis=0))
+        opens.append(bars[0, :, 0])
+        closes.append(bars[-1, :, 3])
+        r = np.abs(np.diff(np.log(bars[:, :, 0]), axis=0))
         early.append(r[:15].mean(axis=0))
         midday.append(r[150:240].mean(axis=0))
+        move = np.abs(np.log(bars[:, :, 3] / bars[:, :, 0]))
+        volume_corr.append([np.corrcoef(move[:, i], bars[:, i, 4])[0, 1] for i in range(len(specs))])
+        factor = engine._skeletons[day].spread
+        spread_open.append(factor[:5].mean())
+        spread_mid.append(factor[150:240].mean())
     return {
         "engine": engine,
         "days": days,
@@ -388,44 +400,75 @@ def ten_years() -> dict[str, np.ndarray]:
         "close": np.array(closes),
         "early": np.array(early),
         "midday": np.array(midday),
+        "volume_corr": np.array(volume_corr),
+        "spread_open": np.array(spread_open),
+        "spread_mid": np.array(spread_mid),
     }
 
 
+def returns(ten_years: dict, symbol: str) -> np.ndarray:
+    return np.diff(np.log(ten_years["close"][:, ten_years["engine"].symbol_index(symbol)]))
+
+
 def test_long_run_volatility_matches_spec(ten_years) -> None:
-    r = np.diff(np.log(ten_years["close"]), axis=0)
-    for i, spec in enumerate(ten_years["engine"].specs):
-        assert r[:, i].std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.2)
+    for spec in ten_years["engine"].specs:
+        assert returns(ten_years, spec.symbol).std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.2)
 
 
 def test_daily_returns_have_fat_tails(ten_years) -> None:
-    r = np.diff(np.log(ten_years["close"][:, 0]))
-    x = r - r.mean()
+    x = returns(ten_years, "SPY")
+    x = x - x.mean()
     assert (x**4).mean() / (x**2).mean() ** 2 > 5  # a normal distribution's is 3
 
 
 def test_volatility_clusters_and_rises_after_drops(ten_years) -> None:
-    r = np.diff(np.log(ten_years["close"][:, 0]))
+    r = returns(ten_years, "SPY")
     a = np.abs(r)
     assert np.mean([np.corrcoef(a[:-k], a[k:])[0, 1] for k in range(1, 11)]) > 0.1
     assert np.corrcoef(r[:-1], a[1:])[0, 1] < -0.03  # the leverage effect
 
 
+def test_single_stocks_cluster_too(ten_years) -> None:
+    a = np.abs(returns(ten_years, "AAPL"))
+    assert np.mean([np.corrcoef(a[:-k], a[k:])[0, 1] for k in range(1, 11)]) > 0.05
+
+
 def test_stocks_move_together_more_on_big_days(ten_years) -> None:
-    r = np.diff(np.log(ten_years["close"]), axis=0)
-    spy, aapl = r[:, 0], r[:, 1]
+    spy, aapl = returns(ten_years, "SPY"), returns(ten_years, "AAPL")
     calm, big = np.abs(spy) <= np.quantile(np.abs(spy), 0.25), np.abs(spy) >= np.quantile(np.abs(spy), 0.75)
     assert np.corrcoef(spy[big], aapl[big])[0, 1] > np.corrcoef(spy[calm], aapl[calm])[0, 1] + 0.2
 
 
+def test_sectors_and_treasuries(ten_years) -> None:
+    def corr(a: str, b: str) -> float:
+        return np.corrcoef(returns(ten_years, a), returns(ten_years, b))[0, 1]
+
+    assert corr("XOM", "CVX") > corr("XOM", "AAPL") + 0.15  # oil moves together
+    assert corr("AAPL", "MSFT") > corr("AAPL", "XOM") + 0.1
+    assert corr("SPY", "TLT") < -0.1  # Treasuries move against stocks
+
+
 def test_earnings_gaps(ten_years) -> None:
-    gaps = np.abs(np.log(ten_years["open"][1:, 1] / ten_years["close"][:-1, 1]))
-    on = np.array([ten_years["engine"]._earnings_on(d)[1] for d in ten_years["days"][1:]])
+    i = ten_years["engine"].symbol_index("AAPL")
+    gaps = np.abs(np.log(ten_years["open"][1:, i] / ten_years["close"][:-1, i]))
+    on = np.array([ten_years["engine"]._earnings_on(d)[i] for d in ten_years["days"][1:]])
     assert 38 <= on.sum() <= 41  # four a year
     assert gaps[on].mean() > 3 * gaps[~on].mean()
 
 
 def test_volatility_is_highest_after_the_open(ten_years) -> None:
     assert (ten_years["early"].mean(axis=0) > 1.5 * ten_years["midday"].mean(axis=0)).all()
+
+
+def test_volume_follows_price_moves(ten_years) -> None:
+    corr = np.nanmean(ten_years["volume_corr"], axis=0)
+    spy = ten_years["engine"].symbol_index("SPY")
+    assert (np.delete(corr, spy) > 0.3).all()  # SPY's moves are all market, so it varies less
+
+
+def test_spreads_widen_at_the_open(ten_years) -> None:
+    assert ten_years["spread_mid"].min() >= 1
+    assert ten_years["spread_open"].mean() > 1.5 * ten_years["spread_mid"].mean()
 
 
 def test_earnings_schedule() -> None:
@@ -448,3 +491,67 @@ def test_continue_older_model_starts_at_the_saved_time_and_closes() -> None:
     assert engine.origin == engine.time == et(2026, 1, 8, 14, 0)
     assert not engine.backfilled
     assert engine.quotes["SPY"].prev_close == old["starts"]["2026-01-08"][0][0]
+
+
+# ----- seconds, symbols and migration ------------------------------------------------
+
+
+def test_seconds_agree_with_minute_bars() -> None:
+    engine = at(et(2026, 1, 6, 10, 0))
+    day = date(2026, 1, 6)
+    seconds = engine.day_prices(day).reshape(390, 60, -1)
+    bars = engine.minute_bars(day)
+    assert np.array_equal(seconds[:, 0], bars[..., 0])
+    assert np.array_equal(seconds.max(axis=1), bars[..., 1])
+    assert np.array_equal(seconds.min(axis=1), bars[..., 2])
+    assert np.array_equal(seconds[:, -1], bars[..., 3])
+
+
+def test_seconds_move_together() -> None:
+    engine = at(et(2026, 1, 6, 10, 0))
+    x = np.diff(np.log(engine.day_prices(date(2026, 1, 6))), axis=0)
+    inside = np.arange(1, x.shape[0] + 1) % 60 != 0  # moves within a minute
+    spy, qqq = engine.symbol_index("SPY"), engine.symbol_index("QQQ")
+    assert np.corrcoef(x[inside, spy], x[inside, qqq])[0, 1] > 0.5
+
+
+def test_adding_a_symbol_leaves_the_others_unchanged() -> None:
+    few = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "XOM", "AAPL"))
+    t = et(2026, 1, 9, 11, 0)
+    small = MarketEngine(START, specs=few)
+    small.advance(t)
+    full = at(t)
+    for spec in few:
+        assert np.array_equal(
+            small.minute_bars(date(2026, 1, 8))[:, small.symbol_index(spec.symbol)],
+            full.minute_bars(date(2026, 1, 8))[:, full.symbol_index(spec.symbol)],
+        )
+
+
+def test_new_future_mid_minute_starts_at_the_next_minute() -> None:
+    t = et(2026, 1, 6, 10, 30, 20)
+    engine = at(et(2026, 1, 6, 14, 0))
+    replay = at(et(2026, 1, 6, 14, 0))
+    engine.rewind(t, new_future=True)
+    replay.rewind(t, new_future=False)
+    for e in (engine, replay):
+        e.advance(et(2026, 1, 6, 10, 30, 59))
+    assert prices(engine) == prices(replay)  # the rest of that minute replays
+    for e in (engine, replay):
+        e.advance(et(2026, 1, 6, 10, 32))
+    assert prices(engine) != prices(replay)
+
+
+def test_continue_older_maps_the_old_symbols() -> None:
+    import json
+
+    old = json.loads(json.dumps(at(et(2026, 1, 8, 14, 0)).to_state()))
+    legacy = [old["symbols"].index(s) for s in engine_mod.LEGACY_SYMBOLS]
+    for d, start in old["starts"].items():  # a version 2 save: 10 symbols, no names
+        old["starts"][d] = [[start[0][i] * 1.5 for i in legacy], start[1], start[2]]
+    del old["symbols"], old["model"]
+    engine = MarketEngine.continue_older(old)
+    q = engine.quotes
+    for i, symbol in enumerate(engine_mod.LEGACY_SYMBOLS):
+        assert q[symbol].prev_close == old["starts"]["2026-01-08"][0][i]
+    assert q["XOM"].prev_close == next(s.price for s in engine_mod.SYMBOLS if s.symbol == "XOM")

@@ -186,7 +186,7 @@ class Broker:
         exactly as place() would."""
         o = self._build(symbol, side, qty, type, tif, limit_price, stop_price)
         q = self.engine.quotes[symbol]
-        triggered, fill = self._immediate(o, q.last)
+        triggered, fill = self._immediate(o, q.last, self.engine.spread_factor(self.engine.time))
         if fill is not None:
             est = fill
         elif o.has_limit:
@@ -261,7 +261,7 @@ class Broker:
     ) -> Order:
         order = self._build(symbol, side, qty, type, tif, limit_price, stop_price)
         self.orders[order.id] = order
-        self._activate(order, self.engine.time, self.engine.quotes[symbol].last)
+        self._activate_now(order)
         self._save(order)
         return order
 
@@ -295,7 +295,7 @@ class Broker:
         self._close(old, "canceled", self.engine.time, f"Replaced by #{new.id}")
         self._save(old)
         self.orders[new.id] = new
-        self._activate(new, self.engine.time, self.engine.quotes[new.symbol].last)
+        self._activate_now(new)
         self._save(new)
         return new
 
@@ -421,61 +421,78 @@ class Broker:
     def _process_day(self, day: date, lo: int, hi: int) -> bool:
         if lo > hi:
             return False
-        prices = self.engine.day_prices(day)
         changed = False
         while True:
             # Handle events in time order: one order's fill can affect another's (cash, shares).
             best: tuple[int, Order] | None = None
             for o in self.working():
                 start = max(lo, _after(o.created_at, day), _after(o.triggered_at, day))
-                k = self._next_event(o, prices[:, self.engine.symbol_index(o.symbol)], start, hi)
+                k = self._next_event(o, day, start, hi)
                 if k is not None and (best is None or (k, o.id) < (best[0], best[1].id)):
                     best = (k, o)
             if best is None:
                 return changed
             k, o = best
             t = session_open(day) + timedelta(seconds=k)
-            price = float(prices[k, self.engine.symbol_index(o.symbol)])
+            price = self.engine.price_at(day, k, self.engine.symbol_index(o.symbol))
+            spread = self.engine.spread_factor(t)
             if o.waiting_for_stop:
-                self._activate(o, t, price)  # the stop is reached at t: trigger it
+                self._activate(o, t, price, spread)  # the stop is reached at t: trigger it
             else:
                 # A resting limit fills at its price, or better if the open gapped through it.
                 fill = o.limit_price
                 if k == 0:
-                    bid, ask = bid_ask(price)
+                    bid, ask = bid_ask(price, spread)
                     fill = min(fill, ask) if o.side == "buy" else max(fill, bid)
                 self._fill(o, fill, t)
             self._save(o)
             changed = True
 
-    @staticmethod
-    def _next_event(o: Order, x: np.ndarray, lo: int, hi: int) -> int | None:
+    def _next_event(self, o: Order, day: date, lo: int, hi: int) -> int | None:
         """First second in [lo, hi] at which the order's stop triggers (on the last
-        price) or its limit is reached (by the ask for a buy, the bid for a sell)."""
+        price) or its limit is reached (by the ask for a buy, the bid for a sell).
+        Only minutes whose range reaches the price are looked at second by second."""
         if lo > hi:
             return None
-        seg = x[lo : hi + 1]
+        col = self.engine.symbol_index(o.symbol)
+        high, low = self.engine.minute_range(day, col)
+        buy = o.side == "buy"
         if o.waiting_for_stop:
-            hit = seg >= o.stop_price if o.side == "buy" else seg <= o.stop_price
-        else:
-            bid, ask = bid_ask_arrays(seg)
-            hit = ask <= o.limit_price if o.side == "buy" else bid >= o.limit_price
-        idx = np.flatnonzero(hit)
-        return lo + int(idx[0]) if idx.size else None
+            stop = o.stop_price
+            candidates = high >= stop if buy else low <= stop
 
-    def _activate(self, o: Order, t: datetime, price: float) -> None:
+            def test(p: np.ndarray, spread: float) -> np.ndarray:
+                return p >= stop if buy else p <= stop
+        else:
+            limit = o.limit_price
+            # The ask is at or above the price and the bid at or below it.
+            candidates = low <= limit if buy else high >= limit
+
+            def test(p: np.ndarray, spread: float) -> np.ndarray:
+                bid, ask = bid_ask_arrays(p, spread)
+                return ask <= limit if buy else bid >= limit
+
+        return self.engine.first_hit(day, col, lo, hi, candidates, test)
+
+    def _activate_now(self, o: Order) -> None:
+        """An order placed now goes live at the current quote."""
+        t = self.engine.time
+        self._activate(o, t, self.engine.quotes[o.symbol].last, self.engine.spread_factor(t))
+
+    def _activate(self, o: Order, t: datetime, price: float, spread: float) -> None:
         """An order goes live at `t` with the last price `price`: fill it if it's marketable now."""
-        triggered, fill = self._immediate(o, price)
+        triggered, fill = self._immediate(o, price, spread)
         if triggered:
             o.triggered_at = t
         if fill is not None:
             self._fill(o, fill, t)
 
     @staticmethod
-    def _immediate(o: Order, price: float) -> tuple[bool, float | None]:
-        """What happens to `o` at once with the last price `price`, without changing
-        anything: whether its stop triggers, and the fill price if it trades now."""
-        bid, ask = bid_ask(price)
+    def _immediate(o: Order, price: float, spread: float = 1.0) -> tuple[bool, float | None]:
+        """What happens to `o` at once with the last price `price` (and spreads
+        `spread` times normal), without changing anything: whether its stop
+        triggers, and the fill price if it trades now."""
+        bid, ask = bid_ask(price, spread)
         market_price = ask if o.side == "buy" else bid
         if o.type == "market":
             return False, market_price

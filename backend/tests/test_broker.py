@@ -183,24 +183,26 @@ def test_sell_stop_triggers_and_fills_at_bid() -> None:
     k = first_second(x <= stop, s0)
     assert o.status == "filled"
     assert o.triggered_at == o.filled_at == session_open(day) + timedelta(seconds=k)
-    assert o.fill_price == bid_ask(float(x[k]))[0]
+    assert o.fill_price == bid_ask(float(x[k]), b.engine.spread_factor(o.filled_at))[0]
 
 
 def test_stop_limit_waits_for_stop_then_acts_as_limit() -> None:
     b = make()
     day = market_day(T)
-    x = path(b, "AMZN", day)
     s0 = int(session_seconds(T))
+    # A symbol that rises well above its current price later in the day.
+    symbol = next(s.symbol for s in b.engine.specs if path(b, s.symbol, day)[s0:].max() > path(b, s.symbol, day)[s0] + 0.2)
+    x = path(b, symbol, day)
     stop = round(float(x[s0:].max()) - 0.05, 2)  # buy stop above the market, reached later
     limit = round(stop + 50, 2)  # generous: fills right when triggered
-    o = b.place("AMZN", "buy", 10, "stop_limit", stop_price=stop, limit_price=limit)
+    o = b.place(symbol, "buy", 10, "stop_limit", stop_price=stop, limit_price=limit)
     assert o.status == "working" and o.triggered_at is None
 
     move(b, et(2026, 1, 5, 15, 59, 59))
     k = first_second(x >= stop, s0)
     assert o.triggered_at == session_open(day) + timedelta(seconds=k)
     assert o.status == "filled"
-    assert o.fill_price == bid_ask(float(x[k]))[1]
+    assert o.fill_price == bid_ask(float(x[k]), b.engine.spread_factor(o.filled_at))[1]
 
 
 def test_day_order_expires_at_close_gtc_does_not() -> None:
@@ -245,7 +247,7 @@ def test_limit_fills_at_better_price_when_open_gaps_through() -> None:
     assert o.status == "working"
     move(b, session_open(day) + timedelta(minutes=1))
     assert o.filled_at == session_open(day)
-    assert o.fill_price == bid_ask(open_)[1]
+    assert o.fill_price == bid_ask(open_, b.engine.spread_factor(o.filled_at))[1]
     assert o.fill_price < limit
 
 
@@ -362,7 +364,8 @@ def test_limit_at_last_price_does_not_fill_inside_the_spread() -> None:
     move(b, add_seconds(T, 1))
     if o.status == "filled":  # only if the ask itself came down to the limit
         x = path(b, "SPY", market_day(T))
-        assert bid_ask(float(x[int(session_seconds(o.filled_at))]))[1] <= o.limit_price
+        factor = b.engine.spread_factor(o.filled_at)
+        assert bid_ask(float(x[int(session_seconds(o.filled_at))]), factor)[1] <= o.limit_price
 
 
 def test_buy_stop_reserves_at_least_the_ask() -> None:

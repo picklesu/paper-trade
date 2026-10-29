@@ -57,6 +57,8 @@ export interface RealPricesStatus {
   newest?: string | null
   /** When the newest saved price was fetched (ISO time). */
   fetched?: string | null
+  /** How often the server fetches them. */
+  refresh_minutes?: number
   /** The last problem fetching (e.g. an invalid key or a refusal), if any since the last success. */
   last_error?: string | null
 }

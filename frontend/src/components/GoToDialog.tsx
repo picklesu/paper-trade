@@ -196,6 +196,13 @@ interface SyncProps {
   onBack: () => void
 }
 
+/** ", fetched at 2:41 PM" in the computer's own time (it's when, not market time). */
+function fetchedAt(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const t = new Date(iso)
+  return Number.isNaN(t.getTime()) ? '' : `, fetched at ${t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+}
+
 /** Offer to continue the market from now at the saved real prices. */
 function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
   const back = (
@@ -234,7 +241,10 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
     return (
       <>
         <h2 id="goto-title">Sync to real prices</h2>
-        <p>No real prices yet. The server fetches all {status.total} symbols from Alpaca when it starts and every 15 minutes.</p>
+        <p>
+          No real prices yet. The server fetches all {status.total} symbols from Alpaca when it starts and every{' '}
+          {status.refresh_minutes ?? 15} minutes.
+        </p>
         {problem}
         <div className="dialog-actions">{back}</div>
       </>
@@ -251,7 +261,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
     <>
       <h2 id="goto-title">Sync to real prices?</h2>
       <p>
-        Real prices are saved for {status.available} of {status.total} symbols{days && ` (prices from ${days})`}. Prices
+        Real prices are saved for {status.available} of {status.total} symbols{days && ` (prices from ${days}${fetchedAt(status.fetched)})`}. Prices
         move to them now{missing > 0 && `; the other ${missing} keep their current price`}.
       </p>
       <p className="muted">

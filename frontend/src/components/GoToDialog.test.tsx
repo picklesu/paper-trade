@@ -183,12 +183,14 @@ describe('GoToDialog: sync to real prices', () => {
   }
 
   it('says how many symbols have real prices, then syncs', async () => {
-    const fetchMock = mockReal({ configured: true, available: 25, total: 40, oldest: '2026-10-27', newest: '2026-10-28' })
+    const fetched = '2026-10-29T14:05:00Z'
+    const fetchMock = mockReal({ configured: true, available: 25, total: 40, oldest: '2026-10-27', newest: '2026-10-28', fetched })
     const onClose = vi.fn()
     render(<GoToDialog clock={clock} onClose={onClose} />)
     fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
 
-    expect(await screen.findByText(/saved for 25 of 40 symbols \(prices from Oct 27–Oct 28\)/)).toBeInTheDocument()
+    const time = new Date(fetched).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    expect(await screen.findByText(`saved for 25 of 40 symbols (prices from Oct 27–Oct 28, fetched at ${time})`, { exact: false })).toBeInTheDocument()
     expect(screen.getByText(/the other 15 keep their current price/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Sync prices' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
@@ -224,10 +226,10 @@ describe('GoToDialog: sync to real prices', () => {
     expect(await screen.findByText(/need its free API keys/)).toBeInTheDocument()
     unmount()
 
-    mockReal({ configured: true, available: 0, total: 40 })
+    mockReal({ configured: true, available: 0, total: 40, refresh_minutes: 15 })
     render(<GoToDialog clock={clock} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
-    expect(await screen.findByText(/No real prices yet/)).toBeInTheDocument()
+    expect(await screen.findByText(/No real prices yet.*every 15 minutes/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Sync prices' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     expect(screen.getByLabelText('Market date and time')).toBeInTheDocument()

@@ -159,9 +159,12 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     last attempt (`real_prices_attempt`) and the last problem (`real_prices_error`, cleared by a
     success; missing symbols are named). `MarketService.refresh_real_prices(older_than)` fetches in
     a worker thread (the store is only touched on the loop thread: SQLite connections are per
-    thread) under a lock, so a second caller waits instead of fetching again. The background task
-    refreshes every 15 minutes; GET `/api/real-prices` refreshes first when the last fetch is over
-    a minute old (the Sync dialog). `sync_real_prices()` (POST `/api/real-prices/sync`) calls
+    thread) under a lock, so a second caller waits instead of fetching again (the symbol list is
+    captured before the request). The background task fetches at startup, then
+    `seconds_until_refresh` decides: 15 minutes after the last fetch, or 1 minute after a failed
+    one (`real_prices_retry`); it checks the wall clock at least every minute, since a sleeping Mac
+    pauses asyncio's clock. GET `/api/real-prices` (the Sync dialog) fetches first when the last
+    fetch is over a minute old, waiting at most 5s (the fetch carries on, shielded). `sync_real_prices()` (POST `/api/real-prices/sync`) calls
     `engine.reanchor(prices)`:
     a new market at the current time whose prices **now** equal the targets (previous closes
     scaled by today's simulated move so far), symbols without a real price keep their current
@@ -170,7 +173,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     stops tests from ever reading the keys or calling the service. UI: Go to… → "Sync to real
     prices…" (a footer link) → confirmation with how many symbols have prices and from when.
     Alpaca's response format was checked against the official alpaca-py SDK (the docs site blocks
-    scripts). Old store keys `real_prices_usage`/`_attempts`/`_pause` from 5.8 are unused.
+    scripts). Old store keys `real_prices_usage`/`_attempts`/`_pause` from 5.8 are deleted on load.
   - `trading/broker.py`: `Broker`, the cash account. `_build` validates (buying power, shares,
     prices; when replacing, that order's reserved cash or shares count as free). `preview`
     (no side effects: estimated price and total, buying power, cash, position, average cost,
@@ -308,7 +311,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 194 (pytest), frontend 109 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 198 (pytest), frontend 109 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

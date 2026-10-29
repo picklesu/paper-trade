@@ -13,6 +13,7 @@ from paper_trade.realprices import (
     RealPrices,
     _refusal,
     credentials,
+    fetch_snapshots,
     parse_snapshots,
 )
 from paper_trade.store import Store
@@ -48,6 +49,38 @@ def test_refusals_read_as_messages() -> None:
     assert "rejected the API keys (401)" in str(_refusal(401, b"<html>401 Authorization Required</html>"))
     assert "too many requests" in str(_refusal(429, b"slow down"))
     assert str(_refusal(500, b'{"message": "internal error"}')) == "Alpaca answered 500 internal error"
+
+
+def test_fetch_errors_read_as_messages(monkeypatch) -> None:
+    import io
+    import urllib.request
+
+    def reset(*args, **kwargs):
+        raise ConnectionResetError(54, "Connection reset by peer")
+
+    monkeypatch.setattr(urllib.request, "urlopen", reset)
+    with pytest.raises(FetchError, match="couldn't reach Alpaca"):
+        fetch_snapshots(["SPY"], KEYS)
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: io.BytesIO(b"<html>Sign in to Wi-Fi</html>"))
+    with pytest.raises(FetchError, match="wasn't readable"):
+        fetch_snapshots(["SPY"], KEYS)
+
+
+def test_schedule_and_old_alpha_vantage_keys() -> None:
+    clock = Clock()
+    store = Store(":memory:")
+    store.set("real_prices_usage", {"day": "2026-10-28", "count": 3})
+    real = RealPrices(store, KEYS, now=clock)
+    assert store.get("real_prices_usage") is None  # cleaned up
+    assert real.seconds_until_refresh() == 0  # never fetched
+    real.attempt()
+    real.record({"SPY": (1.0, date(2026, 10, 28))}, ["SPY"])
+    assert real.seconds_until_refresh() == 15 * 60
+    clock.t += timedelta(minutes=1)
+    real.attempt()
+    real.fetch_failed("couldn't reach Alpaca")
+    assert real.seconds_until_refresh() == 60  # a failure retries in a minute
+    assert real.status(["SPY"])["refresh_minutes"] == 15
 
 
 def test_credentials_from_env_file(tmp_path, monkeypatch) -> None:
@@ -169,5 +202,87 @@ def test_refresh_fetches_every_symbol_at_once_and_reports_failures() -> None:
         status = svc.real_prices_status()
         assert status["last_error"] == "couldn't reach Alpaca (timed out)"
         assert status["available"] == len(svc.symbols)  # the saved prices stay
+
+    asyncio.run(run())
+
+
+def test_refresher_fetches_at_startup_then_on_schedule(monkeypatch) -> None:
+    from paper_trade.market import service as service_mod
+
+    monkeypatch.setattr(service_mod, "REAL_PRICES_CHECK_SECONDS", 0.001)
+    clock = Clock()
+    calls = []
+
+    def fetch(symbols: list[str], creds: Credentials) -> dict:
+        calls.append(clock.t)
+        if len(calls) == 1:
+            raise FetchError("couldn't reach Alpaca (offline)")
+        return {s: (100.0, date(2026, 10, 28)) for s in symbols}
+
+    svc = make_service()
+    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
+    svc.real.attempt()  # a fetch just before a restart doesn't stop the one at startup
+
+    async def run() -> None:
+        async def settle() -> None:
+            for _ in range(20):
+                await asyncio.sleep(0.002)
+
+        task = asyncio.create_task(svc._refresh_real_prices())
+        await settle()
+        assert len(calls) == 1  # at startup; it failed
+        clock.t += timedelta(seconds=59)
+        await settle()
+        assert len(calls) == 1
+        clock.t += timedelta(seconds=1)
+        await settle()
+        assert len(calls) == 2  # retried a minute later
+        clock.t += timedelta(minutes=14)
+        await settle()
+        assert len(calls) == 2
+        clock.t += timedelta(minutes=1)
+        await settle()
+        assert len(calls) == 3  # then every 15 minutes
+        task.cancel()
+
+    asyncio.run(run())
+
+
+def test_status_fetches_when_over_a_minute_old_and_waits_at_most_a_moment(monkeypatch) -> None:
+    import time
+
+    from paper_trade.api import market as api_mod
+
+    clock = Clock()
+    calls = []
+    slow = False
+
+    def fetch(symbols: list[str], creds: Credentials) -> dict:
+        calls.append(clock.t)
+        if slow:
+            time.sleep(0.3)
+        return {s: (100.0, date(2026, 10, 28)) for s in symbols}
+
+    monkeypatch.setattr(api_mod, "STATUS_FETCH_WAIT_SECONDS", 0.05)
+    svc = make_service()
+    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
+
+    class Request:
+        class app:
+            class state:
+                market = svc
+
+    async def run() -> None:
+        assert (await api_mod.real_prices(Request))["available"] == 40
+        await api_mod.real_prices(Request)
+        assert len(calls) == 1  # fresh: not fetched again
+        clock.t += timedelta(minutes=1)
+        nonlocal slow
+        slow = True
+        started = time.monotonic()
+        await api_mod.real_prices(Request)
+        assert time.monotonic() - started < 0.25 and len(calls) == 2  # answered before the fetch finished
+        await asyncio.sleep(0.4)
+        assert svc.real.saved["SPY"].fetched == clock.t  # the fetch finished in the background
 
     asyncio.run(run())

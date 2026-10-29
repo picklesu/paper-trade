@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from datetime import datetime
 from typing import Literal
 
@@ -7,7 +9,7 @@ from pydantic import BaseModel
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.market.clock import SPEEDS
 from paper_trade.api.deps import idle_market, market
-from paper_trade.market.service import BusyError
+from paper_trade.market.service import STATUS_FETCH_WAIT_SECONDS, BusyError
 
 router = APIRouter()
 
@@ -95,7 +97,9 @@ async def real_prices(request: Request) -> dict:
     """How many symbols have a saved real price, and from when (fetching first if
     the last fetch was over a minute ago)."""
     svc = market(request)
-    await svc.refresh_real_prices_if_stale()
+    # A slow fetch carries on in the background; the status says what's saved so far.
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(asyncio.shield(svc.refresh_real_prices_if_stale()), STATUS_FETCH_WAIT_SECONDS)
     return svc.real_prices_status()
 
 

@@ -3,8 +3,9 @@
 One request returns a snapshot of every symbol. On the free (Basic) plan,
 real-time prices come from the IEX exchange alone; they trade within cents of
 the consolidated price, which is plenty for starting a simulation. A background
-refresher keeps the saved prices recent, and opening the Sync dialog fetches
-again if they're more than a minute old. "Sync to real prices" and new markets
+refresher fetches at startup and every 15 minutes (a minute after a failed
+fetch), and opening the Sync dialog fetches again if the last fetch is more than
+a minute old. "Sync to real prices" and new markets
 use whatever is saved.
 
 The keys come from the APCA_API_KEY_ID and APCA_API_SECRET_KEY environment
@@ -12,6 +13,7 @@ variables (Alpaca's own names) or from `backend/.env` (git-ignored; never commit
 it: the repository is public).
 """
 
+import http.client
 import json
 import os
 import urllib.error
@@ -30,6 +32,7 @@ KEY_ID_NAME = "APCA_API_KEY_ID"
 SECRET_NAME = "APCA_API_SECRET_KEY"
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 REFRESH_EVERY = timedelta(minutes=15)  # the background refresher's interval
+RETRY_AFTER = timedelta(minutes=1)  # after a failed fetch (offline at startup, a refusal)
 STATUS_REFRESH_AFTER = timedelta(minutes=1)  # opening the Sync dialog fetches if older
 
 
@@ -109,8 +112,10 @@ def fetch_snapshots(symbols: list[str], creds: Credentials, timeout: float = 10)
             body = json.load(response)
     except urllib.error.HTTPError as e:
         raise _refusal(e.code, e.read()) from None
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise FetchError(f"couldn't reach Alpaca ({getattr(e, 'reason', e)})") from None
+    except (OSError, http.client.HTTPException) as e:  # URLError, timeouts, dropped connections
+        raise FetchError(f"couldn't reach Alpaca ({getattr(e, 'reason', None) or e})") from None
+    except ValueError:  # not JSON: e.g. a proxy's or captive portal's page
+        raise FetchError("Alpaca's answer wasn't readable (not JSON); is something on the network in the way?") from None
     if not isinstance(body, dict):
         raise FetchError(f"unexpected response: {json.dumps(body)[:200]}")
     return parse_snapshots(body, symbols)
@@ -132,6 +137,8 @@ class RealPrices:
         self._fetch = fetch
         self._now = now
         self._saved: dict[str, RealPrice] | None = None
+        for old in ("real_prices_usage", "real_prices_attempts", "real_prices_pause"):  # from Alpha Vantage
+            store.delete(old)
 
     @property
     def configured(self) -> bool:
@@ -155,6 +162,15 @@ class RealPrices:
         last = self.last_attempt()
         return last is None or self._now() - last >= age
 
+    def seconds_until_refresh(self) -> float:
+        """Until the background refresher's next fetch: REFRESH_EVERY after the
+        last fetch, or RETRY_AFTER if it failed."""
+        last = self.last_attempt()
+        if last is None:
+            return 0
+        wait = RETRY_AFTER if self.store.get("real_prices_retry") else REFRESH_EVERY
+        return max(0.0, (last + wait - self._now()).total_seconds())
+
     def fetch(self, symbols: list[str]) -> dict[str, tuple[float, date]]:
         """One request (safe to run in a worker thread: it doesn't touch the store)."""
         assert self.creds
@@ -163,6 +179,7 @@ class RealPrices:
     def attempt(self) -> None:
         """A fetch is about to be made."""
         self.store.set("real_prices_attempt", self._now().isoformat())
+        self.store.set("real_prices_retry", False)
 
     def record(self, prices: dict[str, tuple[float, date]], symbols: list[str]) -> None:
         fetched = self._now()
@@ -177,6 +194,11 @@ class RealPrices:
             self.failed("Alpaca sent no prices")
         elif missing:
             self.failed(f"no price for {', '.join(missing)}")
+
+    def fetch_failed(self, message: str) -> None:
+        """The fetch got nothing: show why, and retry soon."""
+        self.failed(message)
+        self.store.set("real_prices_retry", True)
 
     def failed(self, message: str) -> None:
         self.store.set("real_prices_error", {"message": message, "at": self._now().isoformat()})
@@ -194,4 +216,5 @@ class RealPrices:
             "newest": max(days).isoformat() if days else None,
             "fetched": max(fetched).isoformat() if fetched else None,
             "last_error": error["message"] if error else None,
+            "refresh_minutes": round(REFRESH_EVERY.total_seconds() / 60),
         }

@@ -40,6 +40,12 @@ export function marketDate(iso: string): string {
   })
 }
 
+/** A calendar date like "2026-10-28" as "Oct 28" (no time zone involved). */
+export function calendarDate(day: string): string {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export function marketTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-US', { timeZone: MARKET_TZ, hour12: false })
 }

@@ -650,6 +650,26 @@ body {
   gap: 8px;
   margin-top: 16px;
 }
+.dialog-footer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.link-button:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.link-button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
 .field {
   display: flex;
   flex-direction: column;

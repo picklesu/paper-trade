@@ -365,9 +365,20 @@ class MarketEngine:
         self._time = t
         self._quotes = None
 
-    def reset(self, t: datetime) -> None:
-        """Start a brand-new market at `t`, with fresh prices and no history."""
-        self._reset(t, self._new_seed())
+    def reset(self, t: datetime, prices: np.ndarray | None = None) -> None:
+        """Start a brand-new market at `t`, with fresh prices and no history, its
+        previous closes at `prices` (default: the specs')."""
+        self._reset(t, self._new_seed(), prices)
+
+    def reanchor(self, prices: np.ndarray) -> None:
+        """Start a new market at the current time whose prices right now are
+        `prices`. Its history is then generated again (`backfilled` is false)."""
+        seed = self._new_seed()
+        self._reset(self._time, seed, prices)
+        # Prices are multiplicative: scale the previous closes by how far today's
+        # moves so far took them from the targets.
+        now = np.array([q.last for q in self.quotes.values()])
+        self._reset(self._time, seed, prices * prices / now)
 
     # ----- current state -----------------------------------------------------
 

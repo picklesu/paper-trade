@@ -167,3 +167,47 @@ describe('GoToDialog', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('at most 1260 trading days')
   })
 })
+
+describe('GoToDialog: sync to real prices', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function mockReal(status: object) {
+    const fn = vi.fn(async (url: string, init?: RequestInit) => ({
+      ok: true,
+      json: async () => (url === '/api/real-prices/sync' && init?.method === 'POST' ? { ...status, clock } : status),
+    }))
+    vi.stubGlobal('fetch', fn)
+    return fn
+  }
+
+  it('says how many symbols have real prices, then syncs', async () => {
+    const fetchMock = mockReal({ configured: true, available: 25, total: 40, oldest: '2026-10-27', newest: '2026-10-28', daily_requests: 25 })
+    const onClose = vi.fn()
+    render(<GoToDialog clock={clock} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+
+    expect(await screen.findByText(/saved for 25 of 40 symbols \(closes from Oct 27–Oct 28\)/)).toBeInTheDocument()
+    expect(screen.getByText(/the other 15 keep their current price/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Sync prices' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/real-prices/sync' && init?.method === 'POST')).toBe(true)
+  })
+
+  it('explains when there is no key or nothing fetched yet', async () => {
+    mockReal({ configured: false, available: 0, total: 40 })
+    const { unmount } = render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    expect(await screen.findByText(/need a free API key/)).toBeInTheDocument()
+    unmount()
+
+    mockReal({ configured: true, available: 0, total: 40, daily_requests: 25 })
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    expect(await screen.findByText(/No real prices yet/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sync prices' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByLabelText('Market date and time')).toBeInTheDocument()
+  })
+})

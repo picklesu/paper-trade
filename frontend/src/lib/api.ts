@@ -46,6 +46,35 @@ export async function goto(time: string, future: 'replay' | 'new' = 'replay'): P
   return resp.json()
 }
 
+export interface RealPricesStatus {
+  /** Whether an Alpha Vantage key is set up (backend/.env). */
+  configured: boolean
+  /** Symbols with a saved real price, of `total`. */
+  available: number
+  total: number
+  /** Trading days of the oldest and newest saved prices ("YYYY-MM-DD"). */
+  oldest?: string | null
+  newest?: string | null
+  requests_left?: number
+  daily_requests?: number
+}
+
+export async function fetchRealPrices(): Promise<RealPricesStatus> {
+  const resp = await fetch('/api/real-prices')
+  if (!resp.ok) throw new Error(`real prices failed: ${resp.status}`)
+  return resp.json()
+}
+
+/** Continue the market from now at the saved real prices. */
+export async function syncRealPrices(): Promise<RealPricesStatus> {
+  const resp = await fetch('/api/real-prices/sync', { method: 'POST' })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new Error(body?.detail ?? `sync failed: ${resp.status}`)
+  }
+  return resp.json()
+}
+
 /** FastAPI's `detail`: a message, or a list of validation errors like "qty: must be an integer". */
 function errorText(detail: unknown): string | null {
   if (typeof detail === 'string') return detail

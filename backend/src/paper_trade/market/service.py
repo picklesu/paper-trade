@@ -7,10 +7,13 @@ import logging
 from datetime import datetime
 from typing import Literal
 
+import numpy as np
+
 from paper_trade.market.calendar import market_day, session_open, snap, trading_days_between
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
+from paper_trade.realprices import REQUEST_SPACING_SECONDS, RateLimited, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 
@@ -18,6 +21,7 @@ TICK_SECONDS = 0.5
 SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it runs
 MAX_JUMP_DAYS = 252 * 5
 PROGRESS_EVERY_DAYS = 5
+REAL_PRICES_IDLE_SECONDS = 30 * 60  # between checks when nothing is due or the budget is spent
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +36,14 @@ class BusyError(Exception):
 
 
 class MarketService:
-    def __init__(self, clock: SimClock, engine: MarketEngine, store: Store, history_days: int = HISTORY_DAYS) -> None:
+    def __init__(
+        self,
+        clock: SimClock,
+        engine: MarketEngine,
+        store: Store,
+        history_days: int = HISTORY_DAYS,
+        real: RealPrices | None = None,
+    ) -> None:
         self.clock = clock
         self.engine = engine
         self.store = store
@@ -51,6 +62,8 @@ class MarketService:
         # Bumped whenever market time jumps or history changes, so charts reload.
         self.timeline = 0
         self.history_days = history_days
+        self.real = real
+        self._real_task: asyncio.Task | None = None
 
     @property
     def jumping(self) -> bool:
@@ -184,7 +197,7 @@ class MarketService:
         self._jumping = True
         try:
             if action == "reset":
-                self.engine.reset(target)
+                self.engine.reset(target, self.real_start_prices())
                 self.broker.reset()
                 self.history.clear()
             elif action == "rewind":
@@ -220,6 +233,70 @@ class MarketService:
                     self.publish({"type": "progress", "done": i, "total": days})
                 await asyncio.sleep(0)
         self.broker.process(t, target)
+
+    # ----- real prices -------------------------------------------------------------
+
+    @property
+    def symbols(self) -> list[str]:
+        return [s.symbol for s in self.engine.specs]
+
+    def real_prices_status(self) -> dict:
+        if self.real is None:
+            return {"configured": False, "available": 0, "total": len(self.symbols)}
+        return self.real.status(self.symbols)
+
+    def real_start_prices(self) -> np.ndarray | None:
+        """Previous closes for a new market: saved real prices where there are
+        any, the specs' elsewhere (None if there are none at all)."""
+        saved = self.real.saved if self.real else {}
+        if not saved:
+            return None
+        return np.array([saved[s.symbol].price if s.symbol in saved else s.price for s in self.engine.specs])
+
+    async def sync_real_prices(self) -> dict:
+        """Continue the market from now as a new one whose prices are the saved
+        real ones (symbols without one keep their current price). The account
+        and orders are kept; the history is generated again to end here."""
+        if self._jumping:
+            raise BusyError
+        if self.building_history:
+            raise BusyError("price history is still being built; try again in a moment")
+        saved = self.real.saved if self.real else {}
+        if not saved:
+            raise ValueError("no real prices have been fetched yet")
+        self.sync()
+        quotes = self.engine.quotes
+        prices = np.array([saved[s].price if s in saved else quotes[s].last for s in self.symbols])
+        self._jumping = True
+        try:
+            self.engine.reanchor(prices)
+            self.history.clear()
+            self.save()
+            self.timeline += 1
+        finally:
+            self._jumping = False
+            self.start_history()
+            self.publish_all()
+        return self.real_prices_status()
+
+    async def _refresh_real_prices(self) -> None:
+        """Spend the daily request budget on the stalest prices, in the background."""
+        assert self.real
+        while True:
+            symbol = self.real.next_due(self.symbols)
+            if symbol is None:
+                await asyncio.sleep(REAL_PRICES_IDLE_SECONDS)
+                continue
+            self.real.count_request()
+            try:
+                price, as_of = await asyncio.to_thread(self.real.fetch, symbol)
+                self.real.record(symbol, price, as_of)
+            except RateLimited as e:
+                self.real.exhaust()
+                log.info("real prices: the service's limit was reached (%s)", e)
+            except Exception:
+                log.warning("fetching the real price of %s failed", symbol, exc_info=True)
+            await asyncio.sleep(REQUEST_SPACING_SECONDS)
 
     # ----- trading -----------------------------------------------------------------
 
@@ -288,8 +365,14 @@ class MarketService:
     def start(self) -> None:
         self.start_history()
         self._task = asyncio.create_task(self._run())
+        if self.real and self.real.key:
+            self._real_task = asyncio.create_task(self._refresh_real_prices())
 
     async def stop(self) -> None:
+        if self._real_task:
+            self._real_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._real_task
         if self._history_task:
             self._history_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

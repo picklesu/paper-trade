@@ -8,22 +8,25 @@ from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.realprices import (
-    DAILY_REQUESTS,
-    DailyLimit,
+    Credentials,
+    FetchError,
     RealPrices,
-    Throttled,
-    api_key,
-    parse_quote,
+    _refusal,
+    credentials,
+    fetch_snapshots,
+    parse_snapshots,
 )
 from paper_trade.store import Store
 
 START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
-QUOTE = {
-    "Global Quote": {
-        "01. symbol": "SPY",
-        "05. price": "772.3100",
-        "07. latest trading day": "2026-10-28",
-    }
+KEYS = Credentials("id", "secret")
+SNAPSHOTS = {
+    "SPY": {
+        "latestTrade": {"t": "2026-10-28T19:59:59.987654321Z", "p": 772.31, "s": 100, "x": "V"},
+        "dailyBar": {"t": "2026-10-28T04:00:00Z", "o": 770.0, "h": 775.0, "l": 768.0, "c": 772.3, "v": 1000},
+    },
+    # No trade in the snapshot: the day's close. 00:30 UTC is still the 28th in New York.
+    "AAPL": {"latestTrade": None, "dailyBar": {"t": "2026-10-29T00:30:00Z", "c": 270.0}},
 }
 
 
@@ -35,73 +38,90 @@ class Clock:
         return self.t
 
 
-def test_parse_quote() -> None:
-    assert parse_quote(QUOTE) == (772.31, date(2026, 10, 28))
-    with pytest.raises(DailyLimit):
-        parse_quote({"Information": "Our standard API rate limit is 25 requests per day."})
-    with pytest.raises(Throttled):
-        parse_quote({"Note": "Please consider spreading out your free API requests more sparingly (1 request per second)."})
-    with pytest.raises(ValueError, match="apikey is invalid"):  # a problem to show, not a limit to wait out
-        parse_quote({"Information": "The parameter apikey is invalid or missing."})
-    with pytest.raises(ValueError):
-        parse_quote({"Error Message": "Invalid API call."})
+def test_parse_snapshots() -> None:
+    expected = {"SPY": (772.31, date(2026, 10, 28)), "AAPL": (270.0, date(2026, 10, 28))}
+    assert parse_snapshots(SNAPSHOTS, ["SPY", "AAPL", "XOM"]) == expected  # XOM left out
+    assert parse_snapshots({"SPY": None}, ["SPY"]) == {}
 
 
-def test_api_key_from_env_file(tmp_path, monkeypatch) -> None:
-    monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
-    env = tmp_path / ".env"
-    assert api_key(env) is None
-    env.write_text("# local\nALPHAVANTAGE_API_KEY = abc123\n")
-    assert api_key(env) == "abc123"
-    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "fromenv")
-    assert api_key(env) == "fromenv"
+def test_refusals_read_as_messages() -> None:
+    assert "rejected the API keys (401 unauthorized.)" in str(_refusal(401, b'{"message": "unauthorized."}'))
+    assert "rejected the API keys (401)" in str(_refusal(401, b"<html>401 Authorization Required</html>"))
+    assert "too many requests" in str(_refusal(429, b"slow down"))
+    assert str(_refusal(500, b'{"message": "internal error"}')) == "Alpaca answered 500 internal error"
 
 
-def test_never_fetched_then_stalest_first_within_the_daily_budget() -> None:
+def test_fetch_errors_read_as_messages(monkeypatch) -> None:
+    import io
+    import urllib.request
+
+    def reset(*args, **kwargs):
+        raise ConnectionResetError(54, "Connection reset by peer")
+
+    monkeypatch.setattr(urllib.request, "urlopen", reset)
+    with pytest.raises(FetchError, match="couldn't reach Alpaca"):
+        fetch_snapshots(["SPY"], KEYS)
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: io.BytesIO(b"<html>Sign in to Wi-Fi</html>"))
+    with pytest.raises(FetchError, match="wasn't readable"):
+        fetch_snapshots(["SPY"], KEYS)
+
+
+def test_schedule_and_old_alpha_vantage_keys() -> None:
     clock = Clock()
-    real = RealPrices(Store(":memory:"), "key", fetch=lambda s, k: (1.0, date(2026, 10, 28)), now=clock)
-    symbols = ["A", "B", "C"]
-    real.record("B", 2.0, date(2026, 10, 27))
-    clock.t += timedelta(hours=1)
-    real.record("C", 3.0, date(2026, 10, 27))
-    clock.t += timedelta(hours=12)
-    assert real.due(symbols) == ["A", "B", "C"]
-    clock.t -= timedelta(hours=1)  # C was fetched under 12 hours ago
-    assert real.due(symbols) == ["A", "B"]
-
-    for _ in range(DAILY_REQUESTS):
-        real.attempt("X")
-    assert real.requests_left() == 0 and real.next_due(symbols) is None
-    clock.t += timedelta(days=1)  # a new day, a new budget
-    assert real.requests_left() == DAILY_REQUESTS and real.next_due(symbols) == "A"
-
-
-def test_a_failing_symbol_waits_and_refusals_pause() -> None:
-    clock = Clock()
-    real = RealPrices(Store(":memory:"), "key", now=clock)
-    real.attempt("A")
-    real.failed("A: timed out")
-    assert real.next_due(["A", "B"]) == "B"  # A waits an hour instead of taking the budget
-    assert real.status(["A", "B"])["last_error"] == "A: timed out"
-    clock.t += timedelta(hours=1)
-    assert real.next_due(["A", "B"]) == "A"
-
-    real.refused(Throttled("1 request per second"))
-    assert real.next_due(["A"]) is None and real.seconds_until_retry(1800) == 60
+    store = Store(":memory:")
+    store.set("real_prices_usage", {"day": "2026-10-28", "count": 3})
+    real = RealPrices(store, KEYS, now=clock)
+    assert store.get("real_prices_usage") is None  # cleaned up
+    assert real.seconds_until_refresh() == 0  # never fetched
+    real.attempt()
+    real.record({"SPY": (1.0, date(2026, 10, 28))}, ["SPY"])
+    assert real.seconds_until_refresh() == 15 * 60
     clock.t += timedelta(minutes=1)
-    assert real.next_due(["A"]) == "A"
-    real.refused(DailyLimit("25 requests per day"))
-    assert real.seconds_until_retry(1800) == 1800  # paused for the hour
-    clock.t += timedelta(hours=1)
-    assert real.next_due(["A"]) == "A"
-    real.record("A", 1.0, date(2026, 10, 28))
-    assert real.status(["A"])["last_error"] is None
+    real.attempt()
+    real.fetch_failed("couldn't reach Alpaca")
+    assert real.seconds_until_refresh() == 60  # a failure retries in a minute
+    assert real.status(["SPY"])["refresh_minutes"] == 15
 
 
-def test_nothing_is_fetched_without_a_key() -> None:
-    real = RealPrices(Store(":memory:"), None)
-    assert real.next_due(["SPY"]) is None
-    assert real.status(["SPY"])["configured"] is False
+def test_credentials_from_env_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+    env = tmp_path / ".env"
+    assert credentials(env) is None
+    env.write_text("# local\nAPCA_API_KEY_ID = abc123\n")
+    assert credentials(env) is None  # both are needed
+    env.write_text("# local\nAPCA_API_KEY_ID = abc123\nAPCA_API_SECRET_KEY='s3cret'\n")
+    assert credentials(env) == Credentials("abc123", "s3cret")
+    monkeypatch.setenv("APCA_API_KEY_ID", "fromenv")
+    assert credentials(env) == Credentials("fromenv", "s3cret")
+
+
+def test_record_saves_prices_and_notes_missing_symbols() -> None:
+    clock = Clock()
+    store = Store(":memory:")
+    real = RealPrices(store, KEYS, now=clock)
+    assert real.stale(timedelta(minutes=1))
+    real.attempt()
+    real.record({"SPY": (772.31, date(2026, 10, 28))}, ["SPY", "XOM"])
+    assert real.status(["SPY", "XOM"])["last_error"] == "no price for XOM"
+    assert not real.stale(timedelta(minutes=1))
+    clock.t += timedelta(minutes=1)
+    assert real.stale(timedelta(minutes=1))
+
+    real.record({}, ["SPY"])
+    assert real.status(["SPY"])["last_error"] == "Alpaca sent no prices"
+    real.record({"SPY": (780.0, date(2026, 10, 29))}, ["SPY"])
+    status = real.status(["SPY", "XOM"])
+    assert status["last_error"] is None and status["available"] == 1 and status["newest"] == "2026-10-29"
+    assert status["fetched"] == clock.t.isoformat()
+    # Saved prices survive a restart.
+    assert RealPrices(store, KEYS).saved["SPY"].price == 780.0
+
+
+def test_nothing_is_fetched_without_keys() -> None:
+    svc = make_service(RealPrices(Store(":memory:"), None))
+    asyncio.run(svc.refresh_real_prices())
+    assert svc.real_prices_status()["configured"] is False
 
 
 def make_service(real: RealPrices | None = None) -> MarketService:
@@ -121,14 +141,13 @@ def test_reanchor_makes_prices_equal_the_targets_now() -> None:
 
 
 def test_sync_uses_saved_prices_keeps_the_account_and_rebuilds_history() -> None:
-    real = RealPrices(Store(":memory:"), "key")
+    real = RealPrices(Store(":memory:"), KEYS)
     svc = make_service(real)
     real.store = svc.store
     asyncio.run(svc.build_history())
     order = svc.broker.place("AAPL", "buy", 1, "market")
     others = {s: q.last for s, q in svc.engine.quotes.items()}
-    real.record("SPY", 772.31, date(2026, 10, 28))
-    real.record("AAPL", 270.0, date(2026, 10, 28))
+    real.record({"SPY": (772.31, date(2026, 10, 28)), "AAPL": (270.0, date(2026, 10, 28))}, ["SPY", "AAPL"])
 
     async def sync() -> dict:
         status = await svc.sync_real_prices()
@@ -147,43 +166,123 @@ def test_sync_uses_saved_prices_keeps_the_account_and_rebuilds_history() -> None
 
 
 def test_sync_needs_saved_prices() -> None:
-    svc = make_service(RealPrices(Store(":memory:"), "key"))
+    svc = make_service(RealPrices(Store(":memory:"), KEYS))
     with pytest.raises(ValueError):
         asyncio.run(svc.sync_real_prices())
 
 
 def test_new_markets_start_from_saved_real_prices() -> None:
-    real = RealPrices(Store(":memory:"), "key")
+    real = RealPrices(Store(":memory:"), KEYS)
     svc = make_service(real)
-    real.record("SPY", 772.31, date(2026, 10, 28))
+    real.record({"SPY": (772.31, date(2026, 10, 28))}, ["SPY"])
     asyncio.run(svc.goto(datetime(2020, 3, 2, 15, 0, tzinfo=UTC)))  # before the history: a new market
     assert svc.engine.quotes["SPY"].prev_close == 772.31
     assert svc.engine.quotes["XOM"].prev_close == next(s.price for s in svc.engine.specs if s.symbol == "XOM")
 
 
-def test_refresher_records_prices_and_stops_for_the_day_when_refused(monkeypatch) -> None:
-    from paper_trade.market import service as service_mod
-
-    monkeypatch.setattr(service_mod, "REQUEST_SPACING_SECONDS", 0)
-    monkeypatch.setattr(service_mod, "REAL_PRICES_IDLE_SECONDS", 0)
+def test_refresh_fetches_every_symbol_at_once_and_reports_failures() -> None:
     calls = []
 
-    def fetch(symbol: str, key: str) -> tuple[float, date]:
-        calls.append(symbol)
-        if len(calls) == 3:
-            raise DailyLimit("25 requests per day")
-        return 100.0 + len(calls), date(2026, 10, 28)
+    def fetch(symbols: list[str], creds: Credentials) -> dict:
+        calls.append(symbols)
+        if len(calls) == 2:
+            raise FetchError("couldn't reach Alpaca (timed out)")
+        return {s: (100.0, date(2026, 10, 28)) for s in symbols}
 
     svc = make_service()
-    svc.real = RealPrices(svc.store, "key", fetch=fetch)
+    clock = Clock()
+    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
 
     async def run() -> None:
+        await asyncio.gather(svc.refresh_real_prices_if_stale(), svc.refresh_real_prices_if_stale())
+        assert len(calls) == 1 and calls[0] == svc.symbols  # the second waited for the first
+        assert svc.real_prices_status()["available"] == len(svc.symbols)
+        clock.t += timedelta(minutes=1)
+        await svc.refresh_real_prices_if_stale()
+        status = svc.real_prices_status()
+        assert status["last_error"] == "couldn't reach Alpaca (timed out)"
+        assert status["available"] == len(svc.symbols)  # the saved prices stay
+
+    asyncio.run(run())
+
+
+def test_refresher_fetches_at_startup_then_on_schedule(monkeypatch) -> None:
+    from paper_trade.market import service as service_mod
+
+    monkeypatch.setattr(service_mod, "REAL_PRICES_CHECK_SECONDS", 0.001)
+    clock = Clock()
+    calls = []
+
+    def fetch(symbols: list[str], creds: Credentials) -> dict:
+        calls.append(clock.t)
+        if len(calls) == 1:
+            raise FetchError("couldn't reach Alpaca (offline)")
+        return {s: (100.0, date(2026, 10, 28)) for s in symbols}
+
+    svc = make_service()
+    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
+    svc.real.attempt()  # a fetch just before a restart doesn't stop the one at startup
+
+    async def run() -> None:
+        async def settle() -> None:
+            for _ in range(20):
+                await asyncio.sleep(0.002)
+
         task = asyncio.create_task(svc._refresh_real_prices())
-        for _ in range(50):
-            await asyncio.sleep(0.01)
+        await settle()
+        assert len(calls) == 1  # at startup; it failed
+        clock.t += timedelta(seconds=59)
+        await settle()
+        assert len(calls) == 1
+        clock.t += timedelta(seconds=1)
+        await settle()
+        assert len(calls) == 2  # retried a minute later
+        clock.t += timedelta(minutes=14)
+        await settle()
+        assert len(calls) == 2
+        clock.t += timedelta(minutes=1)
+        await settle()
+        assert len(calls) == 3  # then every 15 minutes
         task.cancel()
 
     asyncio.run(run())
-    assert len(calls) == 3  # refused on the third: paused
-    assert set(svc.real.saved) == set(calls[:2])
-    assert svc.real.status(svc.symbols)["last_error"] == "25 requests per day"
+
+
+def test_status_fetches_when_over_a_minute_old_and_waits_at_most_a_moment(monkeypatch) -> None:
+    import time
+
+    from paper_trade.api import market as api_mod
+
+    clock = Clock()
+    calls = []
+    slow = False
+
+    def fetch(symbols: list[str], creds: Credentials) -> dict:
+        calls.append(clock.t)
+        if slow:
+            time.sleep(0.3)
+        return {s: (100.0, date(2026, 10, 28)) for s in symbols}
+
+    monkeypatch.setattr(api_mod, "STATUS_FETCH_WAIT_SECONDS", 0.05)
+    svc = make_service()
+    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
+
+    class Request:
+        class app:
+            class state:
+                market = svc
+
+    async def run() -> None:
+        assert (await api_mod.real_prices(Request))["available"] == 40
+        await api_mod.real_prices(Request)
+        assert len(calls) == 1  # fresh: not fetched again
+        clock.t += timedelta(minutes=1)
+        nonlocal slow
+        slow = True
+        started = time.monotonic()
+        await api_mod.real_prices(Request)
+        assert time.monotonic() - started < 0.25 and len(calls) == 2  # answered before the fetch finished
+        await asyncio.sleep(0.4)
+        assert svc.real.saved["SPY"].fetched == clock.t  # the fetch finished in the background
+
+    asyncio.run(run())

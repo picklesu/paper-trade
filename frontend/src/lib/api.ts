@@ -47,7 +47,7 @@ export async function goto(time: string, future: 'replay' | 'new' = 'replay'): P
 }
 
 export interface RealPricesStatus {
-  /** Whether an Alpha Vantage key is set up (backend/.env). */
+  /** Whether Alpaca API keys are set up (backend/.env). */
   configured: boolean
   /** Symbols with a saved real price, of `total`. */
   available: number
@@ -55,8 +55,10 @@ export interface RealPricesStatus {
   /** Trading days of the oldest and newest saved prices ("YYYY-MM-DD"). */
   oldest?: string | null
   newest?: string | null
-  requests_left?: number
-  daily_requests?: number
+  /** When the newest saved price was fetched (ISO time). */
+  fetched?: string | null
+  /** How often the server fetches them. */
+  refresh_minutes?: number
   /** The last problem fetching (e.g. an invalid key or a refusal), if any since the last success. */
   last_error?: string | null
 }

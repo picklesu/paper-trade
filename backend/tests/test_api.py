@@ -291,7 +291,7 @@ def test_real_prices_status_and_sync(client: TestClient) -> None:
     assert client.post("/api/real-prices/sync").status_code == 422  # nothing fetched yet
 
     svc = client.app.state.market
-    client.portal.call(svc.real.record, "SPY", 772.31, date(2026, 10, 28))  # on the app's thread
+    client.portal.call(svc.real.record, {"SPY": (772.31, date(2026, 10, 28))}, ["SPY"])  # on the app's thread
     resp = client.post("/api/real-prices/sync")
     assert resp.status_code == 200 and resp.json()["available"] == 1
     assert client.get("/api/quotes").json()[0]["last"] == 772.31

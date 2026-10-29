@@ -4,7 +4,7 @@ subscribers. Everything here runs on the event loop's thread."""
 import asyncio
 import contextlib
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 import numpy as np
@@ -13,7 +13,7 @@ from paper_trade.market.calendar import market_day, session_open, snap, trading_
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
-from paper_trade.realprices import REQUEST_SPACING_SECONDS, RateLimited, RealPrices
+from paper_trade.realprices import STATUS_REFRESH_AFTER, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 
@@ -21,7 +21,8 @@ TICK_SECONDS = 0.5
 SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it runs
 MAX_JUMP_DAYS = 252 * 5
 PROGRESS_EVERY_DAYS = 5
-REAL_PRICES_IDLE_SECONDS = 30 * 60  # between checks when nothing is due or the budget is spent
+REAL_PRICES_CHECK_SECONDS = 60  # the refresher's longest wait before checking the schedule
+STATUS_FETCH_WAIT_SECONDS = 5  # the Sync dialog's status waits this long for a fetch
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class MarketService:
         self.history_days = history_days
         self.real = real
         self._real_task: asyncio.Task | None = None
+        self._real_lock = asyncio.Lock()
 
     @property
     def jumping(self) -> bool:
@@ -279,25 +281,39 @@ class MarketService:
             self.publish_all()
         return self.real_prices_status()
 
-    async def _refresh_real_prices(self) -> None:
-        """Spend the daily request budget on the stalest prices, in the background."""
-        assert self.real
-        while True:
-            symbol = self.real.next_due(self.symbols)
-            if symbol is None:
-                await asyncio.sleep(self.real.seconds_until_retry(REAL_PRICES_IDLE_SECONDS))
-                continue
-            self.real.attempt(symbol)
+    async def refresh_real_prices(self, older_than: timedelta | None = timedelta(0)) -> None:
+        """Fetch every symbol's real price (one request, in a worker thread) unless
+        the last fetch was more recent than `older_than` (None: unless the
+        refresher's schedule says it's not time yet). A fetch already running is
+        waited for instead of repeated."""
+        if not (self.real and self.real.configured):
+            return
+        async with self._real_lock:
+            due = self.real.seconds_until_refresh() <= 0 if older_than is None else self.real.stale(older_than)
+            if not due:
+                return
+            symbols = self.symbols
+            self.real.attempt()
             try:
-                price, as_of = await asyncio.to_thread(self.real.fetch, symbol)
-                self.real.record(symbol, price, as_of)
-            except RateLimited as e:
-                self.real.refused(e)
-                log.info("real prices: the service refused for now (%s)", e)
+                prices = await asyncio.to_thread(self.real.fetch, symbols)
             except Exception as e:
-                self.real.failed(f"{symbol}: {e}")
-                log.warning("fetching the real price of %s failed", symbol, exc_info=True)
-            await asyncio.sleep(REQUEST_SPACING_SECONDS)
+                self.real.fetch_failed(str(e))
+                log.warning("fetching real prices failed: %s", e)
+            else:
+                self.real.record(prices, symbols)
+
+    async def refresh_real_prices_if_stale(self) -> None:
+        await self.refresh_real_prices(STATUS_REFRESH_AFTER)
+
+    async def _refresh_real_prices(self) -> None:
+        """Keep the saved real prices recent, in the background: a fetch at startup,
+        then on the schedule. Waits are checked against the wall clock at least
+        every minute, as a sleeping computer pauses asyncio's clock."""
+        assert self.real
+        await self.refresh_real_prices()
+        while True:
+            await asyncio.sleep(min(REAL_PRICES_CHECK_SECONDS, self.real.seconds_until_refresh()))
+            await self.refresh_real_prices(None)
 
     # ----- trading -----------------------------------------------------------------
 
@@ -366,7 +382,7 @@ class MarketService:
     def start(self) -> None:
         self.start_history()
         self._task = asyncio.create_task(self._run())
-        if self.real and self.real.key:
+        if self.real and self.real.configured:
             self._real_task = asyncio.create_task(self._refresh_real_prices())
 
     async def stop(self) -> None:

@@ -40,7 +40,7 @@ def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: 
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         store = Store(db_path or os.environ.get("PAPER_TRADE_DB") or DEFAULT_DB)
         clock, engine = load_market(store, seed)
-        real = realprices.RealPrices(store, realprices.api_key())
+        real = realprices.RealPrices(store, realprices.credentials())
         svc = MarketService(clock, engine, store, history_days, real)
         app.state.market = svc
         svc.start()

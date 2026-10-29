@@ -28,6 +28,9 @@ class Store:
     def set(self, key: str, value) -> None:
         self._db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, json.dumps(value)))
 
+    def delete(self, key: str) -> None:
+        self._db.execute("DELETE FROM meta WHERE key = ?", (key,))
+
     def load_orders(self) -> list[Order]:
         rows = self._db.execute("SELECT data FROM orders ORDER BY id").fetchall()
         return [Order.from_dict(json.loads(data)) for (data,) in rows]

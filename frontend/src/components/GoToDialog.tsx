@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Modal } from './Modal'
 import { fetchRealPrices, goto, previewGoto, syncRealPrices, type GotoResult, type RealPricesStatus } from '../lib/api'
 import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
@@ -28,15 +28,26 @@ export function GoToDialog({ clock, onClose }: Props) {
   // Set while offering to sync to real prices.
   const [real, setReal] = useState<RealPricesStatus | 'loading' | null>(null)
 
+  // Counts sync views opened, so a status that arrives after Back is ignored.
+  const syncView = useRef(0)
+
   const openSync = async () => {
+    const view = ++syncView.current
     setReal('loading')
     setError(null)
     try {
-      setReal(await fetchRealPrices())
+      const status = await fetchRealPrices()
+      if (view === syncView.current) setReal(status)
     } catch (err) {
+      if (view !== syncView.current) return
       setError(err instanceof Error ? err.message : String(err))
       setReal(null)
     }
+  }
+
+  const closeSync = () => {
+    syncView.current++
+    setReal(null)
   }
 
   const sync = async () => {
@@ -90,7 +101,7 @@ export function GoToDialog({ clock, onClose }: Props) {
   return (
     <Modal labelledBy="goto-title" onClose={onClose}>
       {real !== null ? (
-        <SyncToReal status={real} busy={busy} onSync={sync} onBack={() => setReal(null)} />
+        <SyncToReal status={real} busy={busy} onSync={sync} onBack={closeSync} />
       ) : preview?.action === 'rewind' ? (
         <>
           <h2 id="goto-title">Go back to {marketDateTime(preview.target)}?</h2>
@@ -213,6 +224,11 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
       </>
     )
   }
+  const problem = status.last_error && (
+    <p className="warn-text">
+      The last fetch failed: {status.last_error}
+    </p>
+  )
   if (status.available === 0) {
     return (
       <>
@@ -221,6 +237,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
           No real prices yet. They're fetched in the background, up to {status.daily_requests} a day (Alpha Vantage's
           free limit), so all {status.total} symbols take two days. Symbols can be synced as soon as some arrive.
         </p>
+        {problem}
         <div className="dialog-actions">{back}</div>
       </>
     )
@@ -243,8 +260,9 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
       <p className="muted">
         The market continues from here: its 5-year history is generated again to end at these prices, and going back
         before now starts a new market. Your cash, positions and orders are kept; positions are valued at the new
-        prices.
+        prices, and working orders whose stop or limit the move crosses will trigger or fill at them.
       </p>
+      {problem}
       <div className="dialog-actions">
         <button className="btn primary" disabled={busy} onClick={onSync}>
           Sync prices

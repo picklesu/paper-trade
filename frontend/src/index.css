@@ -650,6 +650,9 @@ body {
   gap: 8px;
   margin-top: 16px;
 }
+.warn-text {
+  color: var(--warn);
+}
 .dialog-footer {
   margin-top: 14px;
   padding-top: 10px;

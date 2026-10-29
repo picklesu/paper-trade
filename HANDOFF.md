@@ -151,10 +151,13 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `backend/.env` (git-ignored; the user's key lives there; **never commit it or put it in PR
     text**). `RealPrices` saves prices in the store (`real_prices`: price, trading day, fetched
     time) and the day's request count (`real_prices_usage`, New York date); `next_due` picks
-    never-fetched symbols, then the oldest (a price is fresh for 12 hours). `MarketService`'s
-    background `_refresh_real_prices` fetches one symbol every 15s in a worker thread (the store
-    is only touched on the loop thread: SQLite connections are per thread), idles 30 minutes when
-    nothing is due, and gives up the day on a rate-limit reply. `sync_real_prices()` (POST
+    never-fetched symbols, then the oldest (a price is fresh for 12 hours; a symbol whose fetch
+    failed waits an hour, so one bad symbol can't take the budget). `MarketService`'s background
+    `_refresh_real_prices` fetches one symbol every 15s in a worker thread (the store is only
+    touched on the loop thread: SQLite connections are per thread). Replies: a burst limit
+    (`Throttled`) pauses a minute, the daily limit (`DailyLimit`) an hour (the service's day
+    boundary isn't documented), anything else (e.g. an invalid key) is an error; the last
+    problem is saved and shown in the Sync dialog until a fetch succeeds. `sync_real_prices()` (POST
     `/api/real-prices/sync`; GET `/api/real-prices` for status) calls `engine.reanchor(prices)`:
     a new market at the current time whose prices **now** equal the targets (previous closes
     scaled by today's simulated move so far), symbols without a real price keep their current
@@ -299,7 +302,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 193 (pytest), frontend 107 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 194 (pytest), frontend 109 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

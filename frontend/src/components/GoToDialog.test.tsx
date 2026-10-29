@@ -195,6 +195,28 @@ describe('GoToDialog: sync to real prices', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/real-prices/sync' && init?.method === 'POST')).toBe(true)
   })
 
+  it('shows the last fetch problem', async () => {
+    mockReal({ configured: true, available: 0, total: 40, daily_requests: 25, last_error: 'The parameter apikey is invalid or missing.' })
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    expect(await screen.findByText(/The last fetch failed: The parameter apikey is invalid/)).toBeInTheDocument()
+  })
+
+  it('ignores a status that arrives after Back', async () => {
+    let answer: (v: unknown) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise((resolve) => (answer = resolve))),
+    )
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    answer({ ok: true, json: async () => ({ configured: true, available: 5, total: 40 }) })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.getByLabelText('Market date and time')).toBeInTheDocument()
+    expect(screen.queryByText(/Sync to real prices\?/)).not.toBeInTheDocument()
+  })
+
   it('explains when there is no key or nothing fetched yet', async () => {
     mockReal({ configured: false, available: 0, total: 40 })
     const { unmount } = render(<GoToDialog clock={clock} onClose={() => {}} />)

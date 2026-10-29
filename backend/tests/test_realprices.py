@@ -7,7 +7,14 @@ import pytest
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
-from paper_trade.realprices import DAILY_REQUESTS, RateLimited, RealPrices, api_key, parse_quote
+from paper_trade.realprices import (
+    DAILY_REQUESTS,
+    DailyLimit,
+    RealPrices,
+    Throttled,
+    api_key,
+    parse_quote,
+)
 from paper_trade.store import Store
 
 START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
@@ -30,8 +37,12 @@ class Clock:
 
 def test_parse_quote() -> None:
     assert parse_quote(QUOTE) == (772.31, date(2026, 10, 28))
-    with pytest.raises(RateLimited):
+    with pytest.raises(DailyLimit):
         parse_quote({"Information": "Our standard API rate limit is 25 requests per day."})
+    with pytest.raises(Throttled):
+        parse_quote({"Note": "Please consider spreading out your free API requests more sparingly (1 request per second)."})
+    with pytest.raises(ValueError, match="apikey is invalid"):  # a problem to show, not a limit to wait out
+        parse_quote({"Information": "The parameter apikey is invalid or missing."})
     with pytest.raises(ValueError):
         parse_quote({"Error Message": "Invalid API call."})
 
@@ -59,12 +70,32 @@ def test_never_fetched_then_stalest_first_within_the_daily_budget() -> None:
     assert real.due(symbols) == ["A", "B"]
 
     for _ in range(DAILY_REQUESTS):
-        real.count_request()
+        real.attempt("X")
     assert real.requests_left() == 0 and real.next_due(symbols) is None
     clock.t += timedelta(days=1)  # a new day, a new budget
     assert real.requests_left() == DAILY_REQUESTS and real.next_due(symbols) == "A"
-    real.exhaust()
-    assert real.next_due(symbols) is None
+
+
+def test_a_failing_symbol_waits_and_refusals_pause() -> None:
+    clock = Clock()
+    real = RealPrices(Store(":memory:"), "key", now=clock)
+    real.attempt("A")
+    real.failed("A: timed out")
+    assert real.next_due(["A", "B"]) == "B"  # A waits an hour instead of taking the budget
+    assert real.status(["A", "B"])["last_error"] == "A: timed out"
+    clock.t += timedelta(hours=1)
+    assert real.next_due(["A", "B"]) == "A"
+
+    real.refused(Throttled("1 request per second"))
+    assert real.next_due(["A"]) is None and real.seconds_until_retry(1800) == 60
+    clock.t += timedelta(minutes=1)
+    assert real.next_due(["A"]) == "A"
+    real.refused(DailyLimit("25 requests per day"))
+    assert real.seconds_until_retry(1800) == 1800  # paused for the hour
+    clock.t += timedelta(hours=1)
+    assert real.next_due(["A"]) == "A"
+    real.record("A", 1.0, date(2026, 10, 28))
+    assert real.status(["A"])["last_error"] is None
 
 
 def test_nothing_is_fetched_without_a_key() -> None:
@@ -140,7 +171,7 @@ def test_refresher_records_prices_and_stops_for_the_day_when_refused(monkeypatch
     def fetch(symbol: str, key: str) -> tuple[float, date]:
         calls.append(symbol)
         if len(calls) == 3:
-            raise RateLimited("25 requests per day")
+            raise DailyLimit("25 requests per day")
         return 100.0 + len(calls), date(2026, 10, 28)
 
     svc = make_service()
@@ -153,6 +184,6 @@ def test_refresher_records_prices_and_stops_for_the_day_when_refused(monkeypatch
         task.cancel()
 
     asyncio.run(run())
-    assert len(calls) == 3  # refused on the third: nothing more today
+    assert len(calls) == 3  # refused on the third: paused
     assert set(svc.real.saved) == set(calls[:2])
-    assert svc.real.requests_left() == 0
+    assert svc.real.status(svc.symbols)["last_error"] == "25 requests per day"

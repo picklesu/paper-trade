@@ -285,16 +285,17 @@ class MarketService:
         while True:
             symbol = self.real.next_due(self.symbols)
             if symbol is None:
-                await asyncio.sleep(REAL_PRICES_IDLE_SECONDS)
+                await asyncio.sleep(self.real.seconds_until_retry(REAL_PRICES_IDLE_SECONDS))
                 continue
-            self.real.count_request()
+            self.real.attempt(symbol)
             try:
                 price, as_of = await asyncio.to_thread(self.real.fetch, symbol)
                 self.real.record(symbol, price, as_of)
             except RateLimited as e:
-                self.real.exhaust()
-                log.info("real prices: the service's limit was reached (%s)", e)
-            except Exception:
+                self.real.refused(e)
+                log.info("real prices: the service refused for now (%s)", e)
+            except Exception as e:
+                self.real.failed(f"{symbol}: {e}")
                 log.warning("fetching the real price of %s failed", symbol, exc_info=True)
             await asyncio.sleep(REQUEST_SPACING_SECONDS)
 

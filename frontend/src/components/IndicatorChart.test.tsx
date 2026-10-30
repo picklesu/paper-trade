@@ -62,6 +62,13 @@ describe('chart indicators', () => {
     const macdPane = calls.indicators.filter((s) => s.paneIndex === 2)
     expect(macdPane.map((s) => s.type).sort()).toEqual(['Histogram', 'Line', 'Line'])
 
+    // Their values sit at the top of their own panes (100px apart in the mock), not with the price's.
+    expect(screen.getByLabelText('Bar details')).not.toHaveTextContent('RSI')
+    const rsiLegend = await screen.findByLabelText('RSI 14 values')
+    expect(rsiLegend).toHaveTextContent('RSI 14 100.00')
+    expect(rsiLegend.style.top).toBe('104px')
+    expect(screen.getByLabelText('MACD 12 26 9 values').style.top).toBe('204px')
+
     fireEvent.click(within(panel).getByRole('checkbox', { name: 'RSI 14' }))
     fireEvent.click(within(panel).getByRole('checkbox', { name: 'MACD 12 26 9' }))
     expect(calls.panes).toBe(1)

@@ -29,7 +29,7 @@ import {
   rangeStart,
 } from '../lib/bars'
 import { direction, percent, price, volume } from '../lib/format'
-import { compute, DEFAULT_SETTINGS, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
+import { compute, DEFAULT_SETTINGS, type IndicatorId, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
 import type { ClockState, Order, Quote } from '../lib/types'
 import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
 import { IndicatorMenu } from './IndicatorMenu'
@@ -221,6 +221,50 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     // Only settings and bar size reconfigure; symbol and timeline changes reload the bars (show()).
   }, [settings, interval]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Where each pane starts within the chart area, so RSI and MACD values sit at the top of
+  // their own panes. The chart builds pane elements on its next frame, so they're measured
+  // then, after every indicator change, and again whenever any of them resizes (the
+  // window, or a divider drag); panes not laid out yet show no legend.
+  const area = useRef<HTMLDivElement>(null)
+  // Measured for these settings: an older layout says nothing about the panes now.
+  const layoutKey = `${interval}|${JSON.stringify(settings)}`
+  const [measured, setLayout] = useState<{ key: string; tops: (number | null)[]; paneOf: Partial<Record<IndicatorId, number>> } | null>(null)
+  const layout = measured?.key === layoutKey ? measured : { tops: [], paneOf: {} as Partial<Record<IndicatorId, number>> }
+  useEffect(() => {
+    const c = chart.current
+    const host = area.current
+    if (!c || !host) return
+    const watched = new Set<HTMLElement>()
+    const measure = () => {
+      const base = host.getBoundingClientRect().top
+      const tops = c.panes().map((p) => {
+        const el = p.getHTMLElement()
+        if (!el) return null
+        if (!watched.has(el)) {
+          watched.add(el)
+          observer.observe(el)
+        }
+        return el.getBoundingClientRect().top - base
+      })
+      const paneOf = indicators.current?.ownPanes() ?? {}
+      setLayout((old) =>
+        old?.key === layoutKey &&
+        old.tops.length === tops.length &&
+        old.tops.every((t, i) => t === tops[i]) &&
+        JSON.stringify(old.paneOf) === JSON.stringify(paneOf)
+          ? old
+          : { key: layoutKey, tops, paneOf },
+      )
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(host)
+    let frame = requestAnimationFrame(() => (frame = requestAnimationFrame(measure)))
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  }, [layoutKey])
+
   const changeSettings = (next: IndicatorSettings) => {
     setSettings(next)
     saveSettings(next)
@@ -381,6 +425,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       INDICATORS.filter((i) => settings[i.id].on && applicable(i.id, interval)).map((info) => ({
         id: info.id,
         label: indicatorLabel(info.id, settings[info.id]),
+        ownPane: info.pane === 'own',
         lines: compute(info.id, settings[info.id].params, bars).lines,
       })),
     [bars, settings, interval],
@@ -392,6 +437,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       : indicatorSeries.map((s) => ({
           id: s.id,
           label: s.label,
+          ownPane: s.ownPane,
           values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
         }))
 
@@ -467,10 +513,11 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
           Latest ⇥
         </button>
       </div>
-      <div className="chart-area">
+      <div className="chart-area" ref={area}>
         <div ref={box} className="chart-canvas" data-testid="chart" />
         {legend && (
-          <div className="chart-legend" aria-label="Bar details">
+          // Kept within the price pane (it wraps with many overlays).
+          <div className="chart-legend" aria-label="Bar details" style={layout.tops[1] ? { maxHeight: layout.tops[1] - 8 } : undefined}>
             <span className="muted">{formatBarTime(legend[0], interval)}</span>
             <span>O {price(legend[1])}</span>
             <span>H {price(legend[2])}</span>
@@ -478,22 +525,29 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             <span className={direction(legend[4] - legend[1])}>C {price(legend[4])}</span>
             <span className={direction(legend[4] - legend[1])}>{percent(((legend[4] - legend[1]) / legend[1]) * 100)}</span>
             <span className="muted">Vol {volume(legend[5])}</span>
-            {indicatorValues.length > 0 && (
+            {indicatorValues.some((iv) => !iv.ownPane) && (
               <span className="legend-indicators">
-                {indicatorValues.map((iv) => (
-                  <span key={iv.id}>
-                    <span className="muted">{iv.label}</span>{' '}
-                    {iv.values.map((v) => (
-                      <span key={v.key} style={{ color: v.color }}>
-                        {v.value === null ? '–' : price(v.value)}{' '}
-                      </span>
-                    ))}
-                  </span>
-                ))}
+                {indicatorValues
+                  .filter((iv) => !iv.ownPane)
+                  .map((iv) => (
+                    <IndicatorValues key={iv.id} {...iv} />
+                  ))}
               </span>
             )}
           </div>
         )}
+        {/* RSI and MACD: at the top of the pane each is drawn in. */}
+        {indicatorValues
+          .filter((iv) => iv.ownPane)
+          .map((iv) => {
+            const pane = layout.paneOf[iv.id]
+            const top = pane === undefined ? null : layout.tops[pane]
+            return top == null ? null : (
+              <div key={iv.id} className="chart-legend pane-legend" style={{ top: top + 4 }} aria-label={`${iv.label} values`}>
+                <IndicatorValues {...iv} />
+              </div>
+            )
+          })}
         {(loading || error || clock.building_history) && (
           <div className="chart-status">
             {error
@@ -506,5 +560,19 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       </div>
       {toolbar}
     </div>
+  )
+}
+
+/** An indicator's label and its values at the legend's bar, each in its line's color. */
+function IndicatorValues({ label, values }: { label: string; values: { key: string; value: number | null; color: string }[] }) {
+  return (
+    <span>
+      <span className="muted">{label}</span>{' '}
+      {values.map((v) => (
+        <span key={v.key} style={{ color: v.color }}>
+          {v.value === null ? '–' : price(v.value)}{' '}
+        </span>
+      ))}
+    </span>
   )
 }

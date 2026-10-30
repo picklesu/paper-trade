@@ -42,10 +42,23 @@ export function sanitizeChainColumns(raw: unknown): ChainColumnId[] | null {
 export const CHAIN_COLUMNS_KEY = 'paper-trade.options.columns.v2'
 const OLD_CHAIN_COLUMNS_KEY = 'paper-trade.options.columns'
 
-/** Columns saved before Mid could be clicked: kept, with Mid added beside Bid and Ask. */
+let migrated: { raw: string | null; columns: ChainColumnId[] } | null = null
+
+/** Columns saved before Mid could be clicked: kept, with Mid added beside Bid and Ask
+ *  (parsed once per saved value: the chain re-renders on every tick). */
 export function savedChainColumns(): ChainColumnId[] {
+  let raw: string | null = null
   try {
-    const raw = localStorage.getItem(OLD_CHAIN_COLUMNS_KEY)
+    raw = localStorage.getItem(OLD_CHAIN_COLUMNS_KEY)
+  } catch {
+    // Storage blocked: the defaults.
+  }
+  if (migrated?.raw !== raw) migrated = { raw, columns: migrate(raw) }
+  return migrated.columns
+}
+
+function migrate(raw: string | null): ChainColumnId[] {
+  try {
     const old = raw === null ? null : sanitizeChainColumns(JSON.parse(raw))
     if (!old) return DEFAULT_CHAIN_COLUMNS
     return old.includes('bid') && old.includes('ask') ? sanitizeChainColumns([...old, 'mid'])! : old

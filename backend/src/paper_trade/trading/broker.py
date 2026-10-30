@@ -139,7 +139,8 @@ class Broker:
         self.calibration: Callable[[str], Calibration] = lambda symbol: options.DEFAULT
         self._ledger: Ledger | None = None
         self._day_start: tuple[date, Ledger, dict[str, float]] | None = None
-        self._volumes: dict[tuple[str, date], float] = {}  # contracts expected to trade a session
+        self._volumes: dict[tuple, float] = {}  # contracts expected to trade a session
+        self._mid_fills: dict[tuple, np.ndarray] = {}  # seconds a limit inside the spread fills
 
     def _invalidate(self) -> None:
         """Fills changed: rebuild the ledger and the start-of-day snapshot on next use."""
@@ -371,7 +372,8 @@ class Broker:
                 if type == "stop"
                 else "Once the stop triggers, the order only fills at the limit price or better, and may not fill."
             )
-        if o.has_limit and last > 0 and abs(o.limit_price - last) / last > (0.25 if c else 0.10):
+        inside = c is not None and o.type == "limit" and bid < o.limit_price < ask  # can fill at any time
+        if o.has_limit and not inside and last > 0 and abs(o.limit_price - last) / last > (0.25 if c else 0.10):
             pct = abs(o.limit_price - last) / last * 100
             what = "the mid" if c else "the last price"
             warnings.append(f"The limit is {pct:.0f}% away from {what} ({last:,.2f}), so it may take a long time to fill.")
@@ -397,10 +399,10 @@ class Broker:
             "warnings": warnings,
         }
         if c:
-            out |= self._option_preview(o, c, est, warnings)
+            out |= self._option_preview(o, c, est, warnings, q)
         return out
 
-    def _option_preview(self, o: Order, c: Contract, est: float, warnings: list[str]) -> dict:
+    def _option_preview(self, o: Order, c: Contract, est: float, warnings: list[str], q: dict) -> dict:
         """What's particular to an option order: what it opens or closes, cash or
         shares it ties up, and (opening) its breakeven and worst case."""
         n = o.qty * MULTIPLIER
@@ -422,7 +424,6 @@ class Broker:
                 else f"Cash-secured put: {money(c.strike * n)} is set aside; if the price is below {c.strike:g} "
                 f"at expiration, you buy {n:,} shares at {c.strike:g}."
             )
-        q = self.option_quote(c)
         if o.type == "limit" and q["bid"] < o.limit_price < q["ask"]:
             rate = float(self._mid_fill_rate(o, c, np.array([q["bid"]]), np.array([q["ask"]]), market_day(self.engine.time))[0])
             warnings.append(
@@ -862,7 +863,8 @@ class Broker:
         width = np.maximum(ask - bid, 1e-9)
         x = (o.limit_price - bid) / width if o.side == "buy" else (ask - o.limit_price) / width
         inside = (bid < o.limit_price) & (o.limit_price < ask)
-        key = (c.symbol, day)
+        # Keyed by the session's path too: a new future (or a reset) has other prices.
+        key = (c.symbol, day, self.engine.option_inputs(day, self.engine.symbol_index(c.underlying)).minute_seed)
         if key not in self._volumes:
             if len(self._volumes) > 256:
                 self._volumes.clear()
@@ -871,24 +873,32 @@ class Broker:
         per_minute = max(self._volumes[key], MIN_DAY_VOLUME) / MINUTES_PER_SESSION / 2
         return np.where(inside, per_minute * np.clip(x, 0, 1) ** 2, 0.0)
 
+    def _mid_fill_seconds(self, o: Order, c: Contract, day: date, inputs, cal) -> np.ndarray:
+        """The seconds of `day` at which a limit inside the spread is traded with,
+        one chance a minute (quoted at its first second): a draw keyed to the
+        market's path and the order picks whether, and which second, so the
+        answer is the same however finely time is processed, and a replay
+        repeats it. Worked out once per order and session."""
+        key = (o.id, o.limit_price, day, inputs.minute_seed)
+        if key not in self._mid_fills:
+            if len(self._mid_fills) > 1024:
+                self._mid_fills.clear()
+            minutes = np.arange(len(inputs.opens))
+            p = options.price(self.engine, c.underlying, c.expiry, c.strike, day, 60 * minutes, inputs.opens, cal, inputs)
+            side = getattr(p, c.right)
+            chance = -np.expm1(-self._mid_fill_rate(o, c, side["bid"][:, 0], side["ask"][:, 0], day))
+            seeds = (inputs.minute_seeds.astype(np.uint64) ^ np.uint64(_key(f"mid:{o.id}"))) % np.uint64(2**64 - 1)
+            u = _unit_hash(seeds)
+            hit = u < chance
+            at = np.minimum(59, (u / np.where(hit, chance, 1) * 60).astype(int))
+            self._mid_fills[key] = (60 * minutes + at)[hit]
+        return self._mid_fills[key]
+
     def _next_mid_fill(self, o: Order, c: Contract, day: date, lo: int, hi: int, inputs, cal) -> int | None:
-        """First second in [lo, hi] at which a limit inside the spread is traded
-        with: each minute (priced at its first second) is a draw keyed to the
-        market's path and the order, so a replay repeats it."""
-        minutes = np.arange(lo // 60, hi // 60 + 1)
-        start = np.maximum(60 * minutes, lo)
-        covered = np.minimum(60 * minutes + 59, hi) - start + 1
-        p = options.price(self.engine, c.underlying, c.expiry, c.strike, day, start, inputs.opens[minutes], cal, inputs)
-        side = getattr(p, c.right)
-        rate = self._mid_fill_rate(o, c, side["bid"][:, 0], side["ask"][:, 0], day)
-        chance = -np.expm1(-rate * covered / 60)
-        seeds = (inputs.minute_seeds[minutes].astype(np.uint64) ^ np.uint64(_key(f"mid:{o.id}"))) % np.uint64(2**64 - 1)
-        u = _unit_hash(seeds)
-        hits = np.flatnonzero(u < chance)
-        if not hits.size:
-            return None
-        i = int(hits[0])
-        return int(start[i] + min(covered[i] - 1, int(u[i] / chance[i] * covered[i])))
+        """First second in [lo, hi] at which a limit inside the spread is traded with."""
+        seconds = self._mid_fill_seconds(o, c, day, inputs, cal)
+        i = int(np.searchsorted(seconds, lo))
+        return int(seconds[i]) if i < len(seconds) and seconds[i] <= hi else None
 
     def _next_option_event(self, o: Order, c: Contract, day: date, lo: int, hi: int) -> int | None:
         """First second in [lo, hi] at which an option limit fills: the model's

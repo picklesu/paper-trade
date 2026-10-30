@@ -58,8 +58,11 @@ rounded to the cent and keeps the ticket's side (`TicketRequest.side` null). A r
 limit strictly inside the spread can fill at its price: per minute, a chance 1 - exp(-rate)
 with rate = (contract's expected session volume, `options.expected_volume`, at least
 `MIN_DAY_VOLUME` 40) / 390 / 2 x x² (x: how far into the spread toward the other side; a quarter
-at the mid), priced at each minute's first second, drawn from the minute's seed and the order id
-(replays repeat it); `Broker._next_mid_fill`. The review gives the typical wait (`_wait`).
+at the mid), priced at each minute's first second. The draw (the minute's seed and the order id)
+decides the minute *and the second* it fills, worked out once per order and session
+(`Broker._mid_fill_seconds`), so live play (about a second per tick) and jumps give the same
+fills, and replays repeat them. With a one-cent spread there's no price inside it, so a mid click
+rounds onto the bid or ask. The review gives the typical wait (`_wait`).
 
 Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
@@ -485,7 +488,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 289 (pytest), frontend 158 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 290 (pytest), frontend 158 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

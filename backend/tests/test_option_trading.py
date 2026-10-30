@@ -372,3 +372,22 @@ def test_even_quiet_contracts_fill_at_the_mid_eventually() -> None:
     order = broker_module.Order(1, deep.symbol, "buy", 1, "limit", "day", round((q["bid"] + q["ask"]) / 2, 2), None, e.time)
     rate = b._mid_fill_rate(order, deep, np.array([q["bid"]]), np.array([q["ask"]]), date(2026, 1, 14))[0]
     assert 1 / 200 < rate < 1 / 20  # within a few hours, not minutes
+
+
+def test_mid_fills_dont_depend_on_how_time_is_processed() -> None:
+    """Live play processes about a second at a time; a jump does the stretch at once."""
+
+    def fill_time(step: int | None) -> datetime | None:
+        e, b = setup(et(2026, 1, 13, 10, 0))
+        c = contract(e, "put", 1.0)
+        order = b.place(c.symbol, "buy", 1, "limit", limit_price=mid_limit(b, c, "buy", 0.5))
+        end = et(2026, 1, 13, 10, 30)
+        if step is None:
+            advance(e, b, end)
+        else:
+            while e.time < end and order.status == "working":
+                advance(e, b, min(end, e.time + timedelta(seconds=step)))
+        return order.filled_at
+
+    at_once = fill_time(None)
+    assert at_once is not None and at_once == fill_time(1)

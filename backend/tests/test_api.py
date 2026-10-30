@@ -334,3 +334,26 @@ def test_watchlist_endpoints_and_stream(client: TestClient) -> None:
 def test_symbols_endpoint(client: TestClient) -> None:
     symbols = client.get("/api/symbols").json()
     assert len(symbols) == 40 and symbols[0] == {"symbol": "SPY", "name": "S&P 500 ETF", "sector": None}
+
+
+def test_option_endpoints_and_streamed_chain(client: TestClient) -> None:
+    expirations = client.get("/api/options/expirations", params={"symbol": "spy"}).json()
+    assert expirations[0]["days"] == 0 and {"daily", "monthly", "leaps"} <= {e["kind"] for e in expirations}
+    assert client.get("/api/options/expirations", params={"symbol": "NOPE"}).status_code == 404
+    exp = expirations[2]["date"]
+    chain = client.get("/api/options/chain", params={"symbol": "SPY", "expiration": exp}).json()
+    assert chain["expiration"] == exp and len(chain["strikes"]) == len(chain["call"]["bid"]) == len(chain["put"]["delta"])
+    assert client.get("/api/options/chain", params={"symbol": "SPY", "expiration": "2026-01-17"}).status_code == 422
+
+    client.post("/api/clock", json={"paused": True})
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "subscribe", "symbols": ["SPY"], "chain": {"symbol": "SPY", "expiration": exp}})
+        tick = next_message(ws, "tick")
+        while "chain" not in tick:
+            tick = next_message(ws, "tick")
+        assert tick["chain"]["strikes"] == chain["strikes"] and [q["symbol"] for q in tick["quotes"]] == ["SPY"]
+        ws.send_json({"type": "subscribe", "symbols": ["SPY"], "chain": {"symbol": "SPY", "expiration": "2026-01-17"}})
+        tick = next_message(ws, "tick")
+        while tick.get("chain", "missing") == chain:
+            tick = next_message(ws, "tick")
+        assert tick["chain"] is None  # no such expiration

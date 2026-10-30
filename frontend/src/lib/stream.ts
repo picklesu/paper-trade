@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { HistoryMessage, Order, ProgressMessage, Quote, StreamMessage, TickMessage, Watchlist } from './types'
+import type { HistoryMessage, OptionChain, Order, ProgressMessage, Quote, StreamMessage, TickMessage, Watchlist } from './types'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -29,9 +29,16 @@ export function mergeQuotes(prev: QuoteMap, incoming: Quote[], fresh = false): Q
   return next
 }
 
+/** The option chain a client shows: its ticks then carry it. */
+export interface ChainRequest {
+  symbol: string
+  expiration: string
+}
+
 /** Single WebSocket to the backend, reconnecting automatically when it drops.
- *  `subscribe(symbols)` asks for only those symbols' quotes (sent again after a
- *  reconnect); until it's called, every symbol's quotes arrive. */
+ *  `subscribe(symbols, chain)` asks for only those symbols' quotes and that option
+ *  chain (sent again after a reconnect); until it's called, every symbol's quotes
+ *  arrive and no chain. */
 export function useStream() {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [tick, setTick] = useState<TickMessage | null>(null)
@@ -40,12 +47,13 @@ export function useStream() {
   const [orders, setOrders] = useState<Order[]>([])
   const [history, setHistory] = useState<HistoryMessage | null>(null)
   const [watchlists, setWatchlists] = useState<Watchlist[] | null>(null)
+  const [chain, setChain] = useState<OptionChain | null>(null)
   const socket = useRef<WebSocket | null>(null)
-  const wanted = useRef<string[] | null>(null)
+  const wanted = useRef<{ symbols: string[]; chain: ChainRequest | null } | null>(null)
   const timeline = useRef<number | null>(null)
 
   const sendSubscription = (ws: WebSocket | null) => {
-    if (ws && wanted.current && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', symbols: wanted.current }))
+    if (ws && wanted.current && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', ...wanted.current }))
   }
 
   useEffect(() => {
@@ -68,6 +76,7 @@ export function useStream() {
           const jumped = timeline.current !== null && timeline.current !== msg.clock.timeline
           timeline.current = msg.clock.timeline
           setQuotes((prev) => mergeQuotes(prev, msg.quotes, jumped))
+          setChain(msg.chain ?? null)
           setProgress(null)
         } else if (msg.type === 'progress') {
           setProgress(msg)
@@ -94,12 +103,12 @@ export function useStream() {
     }
   }, [])
 
-  const subscribe = useCallback((symbols: string[]) => {
-    const same = wanted.current && wanted.current.length === symbols.length && wanted.current.every((s, i) => s === symbols[i])
-    if (same) return
-    wanted.current = symbols
+  const subscribe = useCallback((symbols: string[], chain: ChainRequest | null = null) => {
+    const next = { symbols, chain }
+    if (wanted.current && JSON.stringify(wanted.current) === JSON.stringify(next)) return
+    wanted.current = next
     sendSubscription(socket.current)
   }, [])
 
-  return { status, tick, quotes, progress, orders, history, watchlists, subscribe }
+  return { status, tick, quotes, progress, orders, history, watchlists, chain, subscribe }
 }

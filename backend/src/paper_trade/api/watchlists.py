@@ -1,5 +1,8 @@
-"""Watchlists, the symbol list for lookups, and the extra quote data the
-watchlist and quote header show (52-week ranges, average volume, sparklines)."""
+"""Watchlists, the symbol list for lookups, the extra quote data the watchlist
+and quote header show (52-week ranges, average volume, sparklines), and option
+chains."""
+
+from datetime import date
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -24,6 +27,24 @@ async def get_quote_stats(request: Request) -> dict:
 async def get_sparklines(request: Request, symbols: str) -> dict:
     """Today's prices every few minutes for comma-separated `symbols`."""
     return market(request).sparklines([s.strip().upper() for s in symbols.split(",") if s.strip()])
+
+
+@router.get("/options/expirations")
+async def get_option_expirations(request: Request, symbol: str) -> list[dict]:
+    """{date, kind, days} for each open expiration, soonest first."""
+    svc = market(request)
+    if symbol.upper() not in svc.symbols:
+        raise HTTPException(404, f"unknown symbol: {symbol}")
+    return svc.option_expirations(symbol.upper())
+
+
+@router.get("/options/chain")
+async def get_option_chain(request: Request, symbol: str, expiration: str) -> dict:
+    """Every strike's call and put for one expiration (columns of values by strike)."""
+    try:
+        return market(request).option_chain(symbol.upper(), date.fromisoformat(expiration))
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
 
 
 @router.get("/watchlists")

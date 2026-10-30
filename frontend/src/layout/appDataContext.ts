@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { useStream } from '../lib/stream'
+import type { ChainRequest, useStream } from '../lib/stream'
 import type { QuoteStats, SymbolInfo, Watchlist } from '../lib/types'
 
 export type AppData = Omit<ReturnType<typeof useStream>, 'subscribe'> & {
@@ -13,6 +13,8 @@ export type AppData = Omit<ReturnType<typeof useStream>, 'subscribe'> & {
   /** The symbol lookup's starting text while it's open; null when closed. */
   lookup: string | null
   setLookup: (text: string | null) => void
+  /** Stream this option chain (null: none, e.g. the Options panel is collapsed). */
+  setChainRequest: (request: ChainRequest | null) => void
 }
 
 export const AppDataContext = createContext<AppData | null>(null)

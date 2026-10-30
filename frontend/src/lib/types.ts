@@ -124,12 +124,58 @@ export interface OrderPreview {
   warnings: string[]
 }
 
+export interface Expiration {
+  /** "YYYY-MM-DD"; options expire at that day's 4:00 PM close. */
+  date: string
+  kind: 'daily' | 'weekly' | 'monthly' | 'leaps'
+  /** Calendar days from today. */
+  days: number
+}
+
+/** One side of a chain: a value per strike, in the chain's strike order. */
+export interface ChainSide {
+  bid: number[]
+  ask: number[]
+  mark: number[]
+  iv: number[]
+  delta: number[]
+  gamma: number[]
+  /** Per calendar day. */
+  theta: number[]
+  /** Per 1 point of implied volatility. */
+  vega: number[]
+  /** Per 1 point of the interest rate. */
+  rho: number[]
+  volume: number[]
+  oi: number[]
+}
+
+export interface OptionChain {
+  symbol: string
+  expiration: string
+  kind: Expiration['kind']
+  days: number
+  years: number
+  spot: number
+  rate: number
+  atm_iv: number
+  /** One standard deviation of the price at expiration, in dollars. */
+  expected_move: number
+  /** An earnings report falls before expiration (implied volatility is higher until it passes). */
+  earnings: boolean
+  strikes: number[]
+  call: ChainSide
+  put: ChainSide
+}
+
 export interface TickMessage {
   type: 'tick'
   clock: ClockState
   regime: Regime
   quotes: Quote[]
   account: Account
+  /** The option chain this client subscribed to (null: no such expiration; absent: none asked for). */
+  chain?: OptionChain | null
 }
 
 /** Every order, newest first; sent on connect and whenever an order changes. */

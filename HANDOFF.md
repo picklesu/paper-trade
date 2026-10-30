@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-30, after Phase 6 (watchlists and quotes)._
+_Last updated: 2026-10-30, after Phase 7 (options chain with Greeks)._
 
 ## Where things stand
 
@@ -25,13 +25,14 @@ _Last updated: 2026-10-30, after Phase 6 (watchlists and quotes)._
 | Fix: Alpaca certificate checks on macOS (truststore) | Merged | #28 |
 | 6. Watchlists and quotes (the user approved the proposal as is) | Merged | #29 |
 | Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
-| 7. Options chain with Greeks | **Next, when the user says so.** | — |
+| 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
+| 8. Option trading, expiration, exercise, assignment | **Next, when the user says so.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Waiting on the user** to test Phase 6 and say when to start Phase 7. Decisions so far (2026-10-30):
+**Waiting on the user** to say when to start Phase 8. Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
   (they were the 5.5c steps). Don't propose them again.
 - **Done in 5.7:** 40 symbols, sector factors, volume following moves, spreads widening with
@@ -47,8 +48,16 @@ _Last updated: 2026-10-30, after Phase 6 (watchlists and quotes)._
   (free, all symbols per request; its free history back to ~2016 can serve Phase 12). Option 3, discussed and deferred to Phase 12: real
   5-year daily history (minutes bridged through real daily bars) plus parameters calibrated from
   it; real days would only replay.
-- **Later realism:** exchange holidays/half days with Phase 7; earnings volatility dynamics (IV
-  crush), a VIX-like index and dividends with Phases 7–8.
+- **Phase 7 (approved proposal, "without trading"):** chain + Greeks + holidays. Option trading
+  moved to Phase 8, which the user's approval implies: buy calls/puts and sell to close, covered
+  calls and cash-secured puts (a cash account allows no other option sales), positions with
+  value/P&L/Greeks, clicking a chain bid/ask to fill the ticket, then expiration, exercise and
+  assignment (shares delivered, early assignment). Propose the details before building.
+- **Half days (early 1:00 PM closes) were not built** (in the Phase 7 proposal; told the user):
+  the engine, 30-minute bars, clock arithmetic and day-order expiry all assume 390-minute
+  sessions. Those days are full sessions. Revisit only if the user asks.
+- **Later realism:** a VIX-like index and dividends with Phase 8 (dividends change option prices
+  and early exercise).
 - **Phase 6 decisions (Claude's, within the approved proposal):** the lookup opens on any letter
   except F (full screen's shortcut) or "/"; default lists "Main" (the original 10) and "All
   symbols"; columns and sort are per browser (localStorage), lists are on the server; default
@@ -78,7 +87,11 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 ## Architecture
 
 - **backend/** (Python 3.14, FastAPI, numpy, uv)
-  - `market/calendar.py`: sessions are 9:30 AM–4:00 PM ET, Monday–Friday (no holidays).
+  - `market/calendar.py`: sessions are 9:30 AM–4:00 PM ET, Monday–Friday, except NYSE holidays
+    (7: `nyse_holidays(year)` with today's rules for every year 1900–3000, Juneteenth from 2022,
+    Saturday holidays observed Friday except New Year's Day, Sunday ones Monday; `HOLIDAYS` and a
+    numpy `busdaycalendar` passed to every busday call). No half days. `MODEL_VERSION` 4 marks
+    the change: older saves continue as a new market and history is rebuilt.
     `snap`, `add_trading_seconds`, `trading_days_between` and so on use numpy business-day
     arithmetic, so they take constant time however far apart the dates are.
   - `market/clock.py`: `SimClock`. Market time = anchor + real elapsed × speed, counted in
@@ -177,6 +190,23 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     prices…" (a footer link) → confirmation with how many symbols have prices and from when.
     Alpaca's response format was checked against the official alpaca-py SDK (the docs site blocks
     scripts). Old store keys `real_prices_usage`/`_attempts`/`_pause` from 5.8 are deleted on load.
+  - `market/options.py` (7): `expirations(symbol, now)` (dailies for SPY/QQQ/IWM over 10
+    trading days, Friday weeklies 6 weeks, third-Friday monthlies 12 months, January LEAPS 2
+    years; holiday → the trading day before; today's drops at the close), `strikes` (standard
+    steps by price, doubled past 60 days; ±3 sd, at least ±12%, at most ±0.9 in log terms, ≤160),
+    `atm_variance` (today's vol = spec vol × `engine.vol_ratio()` [market GARCH variance × regime
+    for the ρ² part, own variance × regime for the rest] reverting to normal at κ=4/yr, plus
+    `earnings_move²` per report between tomorrow and expiry: the IV crush is that term vanishing),
+    `smile` (SSVI: ρ −0.7 index funds, −0.35 stocks, +0.1 GLD, −0.15 TLT; η 1.1/0.9; γ 0.5),
+    `black_scholes` (vectorized; erf via `np.frompyfunc(math.erf)`; theta per day, vega/rho per
+    point; RATE 4%, no dividends), `quote_prices` (ticks: pennies for SPY/QQQ/IWM and under $3,
+    else nickels; width 1%/2% of price × (1..3 by |Δ|) × (1+0.3 yrs) × the stock's spread
+    factor), `activity` (made-up OI anchored to the previous close, steady all day; volume grows
+    with the session), `chain(engine, symbol, expiry)` (columns: strikes, call/put lists).
+    Engine helpers: `vol_ratio`, `earnings_days(spec, start, end)`. `MarketService.option_chain`
+    caches per market time; `GET /api/options/expirations?symbol=`,
+    `GET /api/options/chain?symbol=&expiration=`; a stream subscription may add
+    `"chain": {symbol, expiration}` and its ticks then carry `chain` (null if no such expiration).
   - `watchlists.py` (6): `Watchlists`, named lists in the store's `watchlists` key (`next_id`,
     `lists` of {id, name, symbols in order}); ids never reused; names tidied, unique ignoring
     case, ≤40 chars; symbols must be known, duplicates dropped; the last list can't be deleted.
@@ -240,10 +270,10 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
   - `layout/`: the workspace (dockview-react **8.5.1, pinned with `overrides` for dockview and
     dockview-core**). **User's design (2026-10-28): chart first, uncluttered; panels on any
     edge, no floating windows.** The chart is always docked in the middle; Watchlist, Order
-    Entry, Positions and Orders (`SIDE_PANELS`, in their order along an edge) each sit on an
-    edge: left/right columns (stacked top to bottom) or top/bottom rows (side by side, between
-    the columns). Default (`DEFAULT_EDGE`): Watchlist and Order Entry left, Positions and
-    Orders bottom, all collapsed. No tab bars (`group.header.hidden` on every group,
+    Entry, Options, Positions and Orders (`SIDE_PANELS`, in their order along an edge) each sit
+    on an edge: left/right columns (stacked top to bottom) or top/bottom rows (side by side,
+    between the columns). Default (`DEFAULT_EDGE`): Watchlist and Order Entry left, Options,
+    Positions and Orders bottom, all collapsed. No tab bars (`group.header.hidden` on every group,
     `disableDnd`, `disableFloatingGroups`), so every panel is a group of its own. Each edge
     has a **strip of tabs** for its panels; a tab toggles open/collapsed (it stays as left).
     The **Panels menu** sets each panel's edge (◀ ▶ ▲ ▼) and On/Off (On opens it; a panel
@@ -263,7 +293,10 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `Workspace.tsx`: `LayoutProvider` (dockview API for the Panels menu: `places`, `setOn`,
     `setEdge` reading live visibility, `reset`), `Workspace` (restore from `localStorage`
     `paper-trade.layout.v3` (`loadLayout` drops panels that no longer exist), falling back to
-    the default when it's bad; save 300ms after changes and immediately on `pagehide`. Don't
+    the default when it's bad; panels added to the app since the layout was saved
+    (`panelsAddedSinceSave`, from `paper-trade.layout.panels`; layouts from before it had the
+    first five) are added collapsed at their default edge, so Options appears for existing
+    users; save 300ms after changes and immediately on `pagehide`. Don't
     clear the API ref in effect cleanup: StrictMode's dev double-mount broke saving that way,
     and `App.test` covers it under StrictMode), and `keepSidePanelSizes` (after a structural
     change (a panel added, removed, moved, opened or collapsed) or a workspace resize, each
@@ -313,7 +346,11 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `useSparklines` refetches on a new 5-minute stretch, at most every 2s), `SymbolSearch`
     (combobox with `matchSymbols` from `lib/symbols.ts`), `SymbolLookup` (global: a letter
     other than F or "/" outside fields and dialogs opens it; `lookup` state in AppData),
-    `QuoteDetail` (bid/ask with sizes, day range bar, volume, then minor: spread, 52W range, avg
+    `OptionChain` (7: expiration picker, strikes count, ⋯ columns (both sides, saved), calls
+    mirrored left, strike, puts; ITM shading; price line, centered when the chain or count
+    changes; pure logic in `lib/options.ts`), `OptionsView` (in `PanelViews.tsx`: expirations
+    via REST on symbol/day/timeline; `pickExpiration` keeps the picked date or the next;
+    `setChainRequest` only while `usePanelShown` (panel and group visible)), `QuoteDetail` (bid/ask with sizes, day range bar, volume, then minor: spread, 52W range, avg
     vol, open, prev close), `OrderTicket` (form → `OrderReview` from the
     server preview → place; `OrderStatusLine` follows the placed order through the stream,
     including replacements), `AccountViews` (Positions with "Reset account…", Orders with filters, Modify
@@ -346,7 +383,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 216 (pytest), frontend 136 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 230 (pytest), frontend 145 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -373,7 +410,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
   other working buys; otherwise the order is rejected.
 - The ledger is rebuilt from all fills when it changes. That's fine for thousands of trades;
   revisit if history grows very large.
-- No exchange holidays; weekends only.
+- No early closes (half days); one-off closures (e.g. national days of mourning) aren't modeled.
+- Options: no dividends, a fixed 4% rate, made-up volume/OI; the chain streams to the browser in
+  full each tick for one expiration (fine at ~150 strikes).
 - Reset (going before the history) starts at the spec prices. A new market always begins at
   the same prices whatever the date.
 - Five-year samples vary around the spec vol (persistent volatility); the average over many runs

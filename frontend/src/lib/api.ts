@@ -1,5 +1,5 @@
 import type { Bar, Interval } from './bars'
-import type { Account, ClockState, GotoAction, Order, OrderPreview, OrderType, QuoteStats, Side, SymbolInfo, TimeInForce, Watchlist } from './types'
+import type { Account, ClockState, Expiration, GotoAction, Order, OrderPreview, OrderType, QuoteStats, Side, SymbolInfo, TimeInForce, Watchlist } from './types'
 
 export async function updateClock(update: { speed?: number; paused?: boolean }): Promise<ClockState> {
   const resp = await fetch('/api/clock', {
@@ -188,4 +188,9 @@ export function updateWatchlist(id: number, change: { name?: string; symbols?: s
 
 export function deleteWatchlist(id: number): Promise<{ deleted: number }> {
   return send(`/api/watchlists/${id}`, 'DELETE')
+}
+
+export async function fetchExpirations(symbol: string): Promise<Expiration[]> {
+  const list = await send<unknown>(`/api/options/expirations?symbol=${encodeURIComponent(symbol)}`, 'GET')
+  return Array.isArray(list) ? list.filter((e): e is Expiration => isObject(e) && typeof e.date === 'string') : []
 }

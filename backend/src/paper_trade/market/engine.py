@@ -132,7 +132,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 3
+MODEL_VERSION = 4  # 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -456,10 +456,24 @@ class MarketEngine:
     @property
     def regime(self) -> str:
         """The regime that drove the latest price move (the gap's at the open)."""
+        return REGIMES[self._regime_index()][0]
+
+    def _regime_index(self) -> int:
         day = market_day(self._time)
         s = min(int(session_seconds(self._time)), _S - 1)
-        r = self._starts[day].regime if s == 0 else self._skeleton(day).regimes[(s - 1) // 60]
-        return REGIMES[r][0]
+        return self._starts[day].regime if s == 0 else int(self._skeleton(day).regimes[(s - 1) // 60])
+
+    def vol_ratio(self) -> np.ndarray:
+        """(N,) each symbol's volatility now as a multiple of its normal level:
+        the market factor's GARCH variance and regime for the part the market
+        explains, the symbol's own variance and the regime for the rest (option
+        prices start from this)."""
+        start = self._starts[market_day(self._time)]
+        r = self._regime_index()
+        own = start.own_variance if start.own_variance is not None else np.ones(len(self.specs))
+        rho2 = self._rho**2
+        var = rho2 * start.variance * self._market_mults[r] ** 2 + (1 - rho2) * own * self._own_mults[r] ** 2
+        return np.sqrt(var)
 
     def spread_factor(self, t: datetime) -> float:
         """How many times wider than normal spreads are at market time `t`."""
@@ -963,9 +977,27 @@ class MarketEngine:
             month, dom = spec.earnings
             if (day.month - 1) % 3 != month:
                 continue
-            target = date(day.year, day.month, dom)
-            on[i] = day == (target if is_trading_day(target) else next_trading_day(target))
+            on[i] = day == _earnings_session(day.year, day.month, dom)
         return on
+
+
+def earnings_days(spec: SymbolSpec, start: date, end: date) -> list[date]:
+    """The sessions in [start, end] that open with `spec`'s earnings move."""
+    if spec.earnings is None:
+        return []
+    month, dom = spec.earnings
+    out = []
+    for year in range(start.year, end.year + 1):
+        for m in range(month + 1, 13, 3):
+            day = _earnings_session(year, m, dom)
+            if start <= day <= end:
+                out.append(day)
+    return out
+
+
+def _earnings_session(year: int, month: int, dom: int) -> date:
+    target = date(year, month, dom)
+    return target if is_trading_day(target) else next_trading_day(target)
 
 
 def _key(name: str) -> int:

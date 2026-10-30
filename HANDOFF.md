@@ -384,6 +384,8 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     The **Panels menu** sets each panel's edge (◀ ▶ ▲ ▼) and On/Off (On opens it; a panel
     turned back on returns to its last edge). No date axis on the chart; range and bar size
     along its bottom, Indicators and Latest at the right of the quote line.
+    **The quote line (user's request, after 8a): only symbol, name, price and change** (the name
+    hides under 520px); everything else it had is a Watchlist column (Open and Prev Close added).
     `AppData.tsx`/`appDataContext.ts` hold the stream data and the selected symbol, shared by
     panels. `PanelViews.tsx` has the panel components; each is wrapped in
     `<div class="dock-panel" data-panel="Title">`. `panels.ts`: the registry,
@@ -488,7 +490,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 290 (pytest), frontend 158 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 290 (pytest), frontend 160 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

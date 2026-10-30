@@ -500,31 +500,34 @@ body {
   height: 100%;
   container-type: inline-size;
 }
-/* A narrower chart drops the less important parts of the quote line. */
-@container (max-width: 900px) {
+/* A narrow chart drops the company name from the quote line. */
+@container (max-width: 520px) {
   .quote-name {
     display: none;
   }
 }
-@container (max-width: 760px) {
-  .quote-stats .minor {
-    display: none;
-  }
-}
-/* One line: what doesn't fit at the right is cut off rather than taking another row. */
+/* One line. A long company name shrinks (with an ellipsis) before the price or change would be cut. */
 .quote-detail {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
+}
+.quote-detail > :not(.quote-name) {
+  flex-shrink: 0;
 }
 .quote-symbol {
   font-size: 14px;
   font-weight: 700;
 }
 .quote-name {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--muted);
   font-size: 12px;
 }
@@ -532,23 +535,6 @@ body {
   margin-left: 4px;
   font-size: 15px;
   font-weight: 600;
-}
-.quote-stats {
-  display: flex;
-  gap: 16px;
-  margin: 0 0 0 12px;
-}
-.quote-stats div {
-  display: flex;
-  gap: 6px;
-}
-.quote-stats dt {
-  color: var(--muted);
-  font-size: 11px;
-  align-self: center;
-}
-.quote-stats dd {
-  margin: 0;
 }
 .price-chart {
   flex: 1;
@@ -1153,15 +1139,6 @@ body {
   height: 8px;
   margin-left: -1px;
   background: var(--text);
-}
-.range-stat dd {
-  display: flex;
-  align-items: center;
-}
-.quote-size {
-  margin-left: 3px;
-  color: var(--muted);
-  font-size: 11px;
 }
 .quote-symbol {
   padding: 0;

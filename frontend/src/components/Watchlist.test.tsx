@@ -107,6 +107,14 @@ describe('Watchlist', () => {
     expect(rowSymbols()).toEqual(['SPY', 'AAPL', 'MSFT'])
   })
 
+  it('has open and previous close columns', () => {
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Watchlist menu' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Today’s open/ }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Previous close/ }))
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Symbol', 'Last', 'Chg %', 'Today', 'Open', 'Prev Close', ''])
+  })
+
   it('chooses columns from the menu (saved)', () => {
     renderList()
     fireEvent.click(screen.getByRole('button', { name: 'Watchlist menu' }))

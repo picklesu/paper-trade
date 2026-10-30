@@ -28,7 +28,7 @@ function Frame({ label, children }: { label: string; children: ReactNode }) {
 const waiting = <Placeholder text="Waiting for market data…" />
 
 export function ChartView() {
-  const { tick, quotes, stats, orders, history, selected, setLookup } = useAppData()
+  const { tick, quotes, orders, history, selected, setLookup } = useAppData()
   const quote = quotes.get(selected)
   return (
     <Frame label="Chart">
@@ -39,7 +39,7 @@ export function ChartView() {
             clock={tick.clock}
             orders={orders}
             history={history}
-            header={<QuoteDetail quote={quote} stats={stats[selected]} onLookup={() => setLookup('')} />}
+            header={<QuoteDetail quote={quote} onLookup={() => setLookup('')} />}
           />
         </div>
       ) : (

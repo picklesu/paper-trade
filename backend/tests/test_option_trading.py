@@ -121,9 +121,11 @@ def test_working_option_buys_set_cash_aside() -> None:
         b.place(c.symbol, "buy", 2000, "limit", limit_price=0.05)
 
 
-def test_option_limits_fill_at_the_first_second_the_model_reaches_them() -> None:
-    """The minute-skipping search finds the same second as pricing every second."""
+def test_option_limits_fill_at_the_first_second_the_model_reaches_them(monkeypatch) -> None:
+    """The minute-skipping search finds the same second as pricing every second
+    (fills inside the spread are left out here)."""
     e, b = setup(et(2026, 1, 13, 9, 30))
+    monkeypatch.setattr(b, "_mid_fill_rate", lambda o, c, bid, ask, day: np.zeros(np.shape(bid)))
     day = date(2026, 1, 13)
     for right, side in (("call", "buy"), ("put", "buy"), ("call", "sell"), ("put", "sell")):
         c = contract(e, right, 1.0)
@@ -252,9 +254,9 @@ def test_day_pnl_counts_options_from_the_previous_close() -> None:
     b.place(c.symbol, "buy", 1, "market")
     advance(e, b, et(2026, 1, 14, 9, 30, 1))
     s = b.summary(e.quotes)
-    # At the open, the day's P&L is just how far the mark moved from yesterday's closing mark.
-    mark_then = b._mark_at_close(c, date(2026, 1, 13))
-    assert s["day_pnl"] == pytest.approx((s["positions"][0]["last"] - mark_then) * 100, abs=1.0)
+    # At the open, the day's P&L is just how far the mid moved from yesterday's closing mid.
+    mid_then = b._mid_at_close(c, date(2026, 1, 13))
+    assert s["day_pnl"] == pytest.approx((s["positions"][0]["last"] - mid_then) * 100, abs=1.0)
 
 
 def test_held_contracts_stay_listed_when_the_pattern_drops_them() -> None:
@@ -293,7 +295,7 @@ def test_early_assignment_chance_is_capped(monkeypatch) -> None:
     b.place(c.symbol, "sell", 1, "market")
     # Price the put below its intrinsic value: the chance stays at most EARLY_ASSIGNMENT.
     real = b._quote_at
-    monkeypatch.setattr(b, "_quote_at", lambda *a: real(*a) | {"mark": 0.0})
+    monkeypatch.setattr(b, "_quote_at", lambda *a: real(*a) | {"mid": 0.0})
     seen = []
     monkeypatch.setattr(broker_module, "_unit_hash", lambda x: seen.append(1) or np.array([broker_module.EARLY_ASSIGNMENT + 1e-6]))
     advance(e, b, et(2026, 1, 14, 10, 0))
@@ -314,3 +316,59 @@ def test_opening_previews_realize_nothing() -> None:
     e, b = setup(cash=50_000)
     c = contract(e, "put", 0.9)
     assert b.preview(c.symbol, "sell", 1, "market")["estimated_realized"] is None
+
+
+def mid_limit(b: Broker, c: o.Contract, side: str, x: float) -> float:
+    """A limit `x` of the way into the spread from the order's own side."""
+    q = b.option_quote(c)
+    edge, far = (q["bid"], q["ask"]) if side == "buy" else (q["ask"], q["bid"])
+    return round(edge + (far - edge) * x, 2)
+
+
+def test_limits_at_the_mid_fill_when_someone_trades_with_them() -> None:
+    def run() -> list:
+        e, b = setup(et(2026, 1, 13, 10, 0))
+        call, put = contract(e, "call", 1.0), contract(e, "put", 1.0)  # near the money: busy
+        orders = [b.place(c.symbol, side, 1, "limit", limit_price=mid_limit(b, c, side, 0.5)) for c, side in ((call, "buy"), (put, "sell"))]
+        assert all(x.status == "working" for x in orders)
+        advance(e, b, et(2026, 1, 13, 15, 0))
+        return [(x.status, x.fill_price, x.filled_at, x.limit_price) for x in orders]
+
+    first = run()
+    assert all(status == "filled" and price == limit for status, price, _, limit in first)
+    assert first == run()  # the same market path fills them at the same moments
+
+
+def test_the_chance_grows_toward_the_far_side_of_the_spread() -> None:
+    e, b = setup()
+    c = contract(e, "put", 1.0)
+    q = b.option_quote(c)
+    bid, ask = np.array([q["bid"]]), np.array([q["ask"]])
+    order = lambda limit: broker_module.Order(1, c.symbol, "buy", 1, "limit", "day", limit, None, e.time)  # noqa: E731
+    near_bid = b._mid_fill_rate(order(mid_limit(b, c, "buy", 0.1)), c, bid, ask, date(2026, 1, 14))[0]
+    mid = b._mid_fill_rate(order(mid_limit(b, c, "buy", 0.5)), c, bid, ask, date(2026, 1, 14))[0]
+    near_ask = b._mid_fill_rate(order(mid_limit(b, c, "buy", 0.9)), c, bid, ask, date(2026, 1, 14))[0]
+    assert 0 < near_bid < mid < near_ask
+    assert b._mid_fill_rate(order(q["bid"]), c, bid, ask, date(2026, 1, 14))[0] == 0  # at the bid: waits for the ask
+    # A far, quiet contract fills more slowly than one near the money.
+    far = contract(e, "put", 0.7)
+    qf = b.option_quote(far)
+    far_order = broker_module.Order(2, far.symbol, "buy", 1, "limit", "day", round((qf["bid"] + qf["ask"]) / 2, 2), None, e.time)
+    far_rate = b._mid_fill_rate(far_order, far, np.array([qf["bid"]]), np.array([qf["ask"]]), date(2026, 1, 14))[0]
+    assert far_rate < mid
+
+
+def test_the_review_says_a_limit_inside_the_spread_may_fill() -> None:
+    e, b = setup()
+    c = contract(e, "call", 1.0)
+    warnings = b.preview(c.symbol, "buy", 1, "limit", limit_price=mid_limit(b, c, "buy", 0.5))["warnings"]
+    assert any("between the bid" in w and "at today's activity" in w for w in warnings)
+
+
+def test_even_quiet_contracts_fill_at_the_mid_eventually() -> None:
+    e, b = setup()
+    deep = contract(e, "call", 0.8)  # deep in the money: little volume, but market makers trade it
+    q = b.option_quote(deep)
+    order = broker_module.Order(1, deep.symbol, "buy", 1, "limit", "day", round((q["bid"] + q["ask"]) / 2, 2), None, e.time)
+    rate = b._mid_fill_rate(order, deep, np.array([q["bid"]]), np.array([q["ask"]]), date(2026, 1, 14))[0]
+    assert 1 / 200 < rate < 1 / 20  # within a few hours, not minutes

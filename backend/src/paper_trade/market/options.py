@@ -456,6 +456,27 @@ def activity(engine: MarketEngine, spec: SymbolSpec, expiry: date, kind: str, st
     return out
 
 
+def expected_volume(engine: MarketEngine, c: "Contract", day: date, cal: Calibration = DEFAULT) -> float:
+    """Contracts of `c` expected to trade in a whole session on `day`, as the
+    chain's volume works it out (its share of the symbol's option volume, over
+    the strikes the chain lists)."""
+    col = engine.symbol_index(c.underlying)
+    spec = engine.specs[col]
+    anchor = engine.option_inputs(day, col).prev_close
+    days = max((c.expiry - day).days, 1)
+    sd = spec.vol * math.sqrt(days / 365)
+    grid = np.union1d(strikes(c.underlying, anchor, spec.vol, days / 365, days), [c.strike])
+    k = int(np.flatnonzero(grid == c.strike)[0])
+    z = np.log(grid / anchor) / max(sd, 0.005)
+    if (shape := cal.volume) and c.right in shape["strikes"]:
+        return float(_real_share(shape, c.right, z, volume_bucket(days))[k] * spec.daily_volume)
+    kind = {e.day: e.kind for e in expirations(c.underlying, session_open(day), cal.pattern)}.get(c.expiry, "weekly")
+    base = spec.daily_volume / 3000 * {"daily": 0.6, "weekly": 0.8, "quarterly": 0.8, "monthly": 1.5, "leaps": 0.5}[kind]
+    # The made-up open interest at its average, times the average share of it traded (0.25).
+    near = math.exp(-0.5 * (math.log(c.strike / anchor) / max(sd, 0.02) / 1.2) ** 2)
+    return base * near * 0.25 * (2.5 if kind == "daily" else 1)
+
+
 def volume_bucket(days: int) -> int:
     return int(np.searchsorted(VOLUME_BUCKETS, days, side="right"))
 
@@ -580,11 +601,11 @@ def _now(engine: MarketEngine) -> tuple[date, int]:
 
 
 def contract_quote(engine: MarketEngine, contract: Contract, cal: Calibration = DEFAULT) -> dict:
-    """One contract's quote now: bid, ask, mark and Greeks (per share)."""
+    """One contract's quote now: bid, ask, mid and Greeks (per share)."""
     day, sec = _now(engine)
     p = price(engine, contract.underlying, contract.expiry, contract.strike, day, sec, engine.quotes[contract.underlying].last, cal)
     side = getattr(p, contract.right)
-    return {k: float(v[0, 0]) for k, v in side.items()} | {"mark": float((side["bid"][0, 0] + side["ask"][0, 0]) / 2)}
+    return {k: float(v[0, 0]) for k, v in side.items()} | {"mid": float((side["bid"][0, 0] + side["ask"][0, 0]) / 2)}
 
 
 def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DEFAULT, held: set[float] | None = None) -> dict:
@@ -632,7 +653,7 @@ def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DE
             "ask": ask.tolist(),
             "bid_size": np.where(bid > 0, bid_size, 0).tolist(),
             "ask_size": ask_size.tolist(),
-            "mark": np.round((bid + ask) / 2, 3).tolist(),
+            "mid": np.round((bid + ask) / 2, 3).tolist(),
             "iv": np.round(p.iv[0], 4).tolist(),
             "delta": np.round(m["delta"], 4).tolist(),
             "gamma": np.round(m["gamma"], 5).tolist(),

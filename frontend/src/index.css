@@ -1293,6 +1293,10 @@ body {
 .chain-trade.sell:focus-visible {
   background: color-mix(in srgb, var(--down) 30%, transparent);
 }
+.chain-trade.mid:hover,
+.chain-trade.mid:focus-visible {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
 .chain-calibration {
   cursor: help;
   text-decoration: underline dotted;

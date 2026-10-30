@@ -15,10 +15,10 @@ const count = (v: number) => v.toLocaleString('en-US')
 /** In the order they sit outward from the strike, on both sides. */
 export const CHAIN_COLUMNS: ChainColumn[] = [
   { id: 'bid', label: 'Bid', title: 'Bid', format: fixed(2) },
+  { id: 'mid', label: 'Mid', title: 'Mid (halfway between bid and ask)', format: fixed(2) },
   { id: 'ask', label: 'Ask', title: 'Ask', format: fixed(2) },
   { id: 'bid_size', label: 'Bid Sz', title: 'Bid size (contracts)', format: count },
   { id: 'ask_size', label: 'Ask Sz', title: 'Ask size (contracts)', format: count },
-  { id: 'mark', label: 'Mark', title: 'Mark (between bid and ask)', format: fixed(2) },
   { id: 'iv', label: 'IV', title: 'Implied volatility', format: (v) => `${(v * 100).toFixed(1)}%` },
   { id: 'delta', label: 'Delta', title: 'Delta', format: fixed(2) },
   { id: 'gamma', label: 'Gamma', title: 'Gamma', format: fixed(4) },
@@ -30,12 +30,28 @@ export const CHAIN_COLUMNS: ChainColumn[] = [
 ]
 
 export const CHAIN_COLUMN_BY_ID = Object.fromEntries(CHAIN_COLUMNS.map((c) => [c.id, c])) as Record<ChainColumnId, ChainColumn>
-export const DEFAULT_CHAIN_COLUMNS: ChainColumnId[] = ['bid', 'ask', 'iv', 'delta', 'oi']
+export const DEFAULT_CHAIN_COLUMNS: ChainColumnId[] = ['bid', 'mid', 'ask', 'iv', 'delta', 'oi']
 
 export function sanitizeChainColumns(raw: unknown): ChainColumnId[] | null {
   if (!Array.isArray(raw)) return null
-  const ids = raw.filter((c): c is ChainColumnId => typeof c === 'string' && c in CHAIN_COLUMN_BY_ID)
-  return ids.length ? [...new Set(ids)] : null // none: the defaults
+  const named = raw.map((c) => (c === 'mark' ? 'mid' : c)) // "Mark" was renamed "Mid"
+  const ids = named.filter((c): c is ChainColumnId => typeof c === 'string' && c in CHAIN_COLUMN_BY_ID)
+  return ids.length ? CHAIN_COLUMNS.map((c) => c.id).filter((c) => ids.includes(c)) : null // none: the defaults
+}
+
+export const CHAIN_COLUMNS_KEY = 'paper-trade.options.columns.v2'
+const OLD_CHAIN_COLUMNS_KEY = 'paper-trade.options.columns'
+
+/** Columns saved before Mid could be clicked: kept, with Mid added beside Bid and Ask. */
+export function savedChainColumns(): ChainColumnId[] {
+  try {
+    const raw = localStorage.getItem(OLD_CHAIN_COLUMNS_KEY)
+    const old = raw === null ? null : sanitizeChainColumns(JSON.parse(raw))
+    if (!old) return DEFAULT_CHAIN_COLUMNS
+    return old.includes('bid') && old.includes('ask') ? sanitizeChainColumns([...old, 'mid'])! : old
+  } catch {
+    return DEFAULT_CHAIN_COLUMNS
+  }
 }
 
 /** Turn a column on or off; the last one stays (a chain of bare strikes shows nothing). */

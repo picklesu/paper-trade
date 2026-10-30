@@ -73,7 +73,7 @@ export interface Position {
   qty: number
   /** Per share (an option's price per share; a contract is 100). */
   avg_cost: number
-  /** The last price, or an option's mark (between bid and ask). */
+  /** The last price, or an option's mid (halfway between bid and ask). */
   last: number
   market_value: number
   unrealized: number
@@ -195,7 +195,8 @@ export interface ChainSide {
   /** Contracts shown at the bid and ask. */
   bid_size: number[]
   ask_size: number[]
-  mark: number[]
+  /** Halfway between the bid and ask. */
+  mid: number[]
   iv: number[]
   delta: number[]
   gamma: number[]

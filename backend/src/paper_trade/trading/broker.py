@@ -66,6 +66,12 @@ CLOSEOUT_SECOND = SESSION_SECONDS - 60  # 3:59 PM: unexercisable options are sol
 EARLY_ASSIGNMENT = 0.2
 EARLY_TIME_VALUE = 0.05
 MATCH_MARGIN = 0.01  # an option minute is looked at second by second if within 1% (and a cent)
+# A limit inside an option's spread is the best price on its side, so it fills
+# when someone trades with it: of the contract's trades (half on each side) a
+# share that grows with how far into the spread it is, squared (none at the
+# far edge, a quarter at the mid, all at the near one).
+MINUTES_PER_SESSION = SESSION_SECONDS / 60
+MIN_DAY_VOLUME = 40  # a quiet contract's trades a session, for fills inside the spread
 
 
 class OrderError(ValueError):
@@ -133,6 +139,7 @@ class Broker:
         self.calibration: Callable[[str], Calibration] = lambda symbol: options.DEFAULT
         self._ledger: Ledger | None = None
         self._day_start: tuple[date, Ledger, dict[str, float]] | None = None
+        self._volumes: dict[tuple[str, date], float] = {}  # contracts expected to trade a session
 
     def _invalidate(self) -> None:
         """Fills changed: rebuild the ledger and the start-of-day snapshot on next use."""
@@ -220,7 +227,7 @@ class Broker:
         return out
 
     def option_quote(self, c: Contract) -> dict:
-        """A contract's quote now: bid, ask, mark and Greeks (per share)."""
+        """A contract's quote now: bid, ask, mid and Greeks (per share)."""
         sec = min(int(session_seconds(self.engine.time)), SESSION_SECONDS - 1)
         return self._quote_at(c, market_day(self.engine.time), sec, self.engine.quotes[c.underlying].last)
 
@@ -233,7 +240,7 @@ class Broker:
             c = Contract.parse(p.symbol)
             mult = MULTIPLIER if c else 1
             q = self.option_quote(c) if c else None
-            last = q["mark"] if q else quotes[p.symbol].last
+            last = q["mid"] if q else quotes[p.symbol].last
             cost = p.avg_cost * p.qty * mult
             value = last * p.qty * mult
             row = {
@@ -266,28 +273,28 @@ class Broker:
 
     def _start_of_day_value(self, quotes: dict[str, Quote]) -> float:
         """Account value at the previous close: holdings before today's open at
-        the previous close (options at their mark then)."""
+        the previous close (options at their mid then)."""
         day = market_day(self.engine.time)
         if self._day_start is None or self._day_start[0] != day:
             led = self.ledger(before=session_open(day))
-            marks = {}
+            mids = {}
             for p in led.positions.values():
                 if p.qty and (c := Contract.parse(p.symbol)):
-                    marks[p.symbol] = self._mark_at_close(c, previous_trading_day(day))
-            self._day_start = (day, led, marks)
-        _, led, marks = self._day_start
+                    mids[p.symbol] = self._mid_at_close(c, previous_trading_day(day))
+            self._day_start = (day, led, mids)
+        _, led, mids = self._day_start
         total = led.cash
         for p in led.positions.values():
             if not p.qty:
                 continue
-            if p.symbol in marks:
-                total += p.qty * MULTIPLIER * marks[p.symbol]
+            if p.symbol in mids:
+                total += p.qty * MULTIPLIER * mids[p.symbol]
             else:
                 total += p.qty * quotes[p.symbol].prev_close
         return total
 
-    def _mark_at_close(self, c: Contract, day: date) -> float:
-        """A contract's mark at a session's close (its intrinsic value if it had
+    def _mid_at_close(self, c: Contract, day: date) -> float:
+        """A contract's mid at a session's close (its intrinsic value if it had
         expired, or if that session's prices aren't available)."""
         col = self.engine.symbol_index(c.underlying)
         try:
@@ -296,12 +303,12 @@ class Broker:
             return float(c.intrinsic(self.engine.quotes[c.underlying].prev_close))
         if c.expiry < day:
             return float(c.intrinsic(spot))
-        return self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mark"]
+        return self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"]
 
     def _quote_at(self, c: Contract, day: date, sec: int, spot: float) -> dict:
         p = options.price(self.engine, c.underlying, c.expiry, c.strike, day, sec, spot, self.calibration(c.underlying))
         q = {k: float(v[0, 0]) for k, v in getattr(p, c.right).items()}
-        return q | {"mark": (q["bid"] + q["ask"]) / 2}
+        return q | {"mid": (q["bid"] + q["ask"]) / 2}
 
     # ----- order entry -----------------------------------------------------------
 
@@ -322,7 +329,7 @@ class Broker:
         mult = MULTIPLIER if c else 1
         if c:
             q = self.option_quote(c)
-            last, bid, ask = q["mark"], q["bid"], q["ask"]
+            last, bid, ask = q["mid"], q["bid"], q["ask"]
             triggered, fill = False, _option_fill(o, q)
         else:
             sq = self.engine.quotes[symbol]
@@ -366,7 +373,7 @@ class Broker:
             )
         if o.has_limit and last > 0 and abs(o.limit_price - last) / last > (0.25 if c else 0.10):
             pct = abs(o.limit_price - last) / last * 100
-            what = "the mark" if c else "the last price"
+            what = "the mid" if c else "the last price"
             warnings.append(f"The limit is {pct:.0f}% away from {what} ({last:,.2f}), so it may take a long time to fill.")
         if fill is None and tif == "day" and type != "market":
             day = market_day(self.engine.time).strftime("%a %b %-d")
@@ -414,6 +421,14 @@ class Broker:
                 if call
                 else f"Cash-secured put: {money(c.strike * n)} is set aside; if the price is below {c.strike:g} "
                 f"at expiration, you buy {n:,} shares at {c.strike:g}."
+            )
+        q = self.option_quote(c)
+        if o.type == "limit" and q["bid"] < o.limit_price < q["ask"]:
+            rate = float(self._mid_fill_rate(o, c, np.array([q["bid"]]), np.array([q["ask"]]), market_day(self.engine.time))[0])
+            warnings.append(
+                f"Your limit is between the bid ({q['bid']:.2f}) and the ask ({q['ask']:.2f}): it fills if someone trades "
+                f"with it before the quote reaches it, {_wait(rate)} at today's activity "
+                f"(sooner the nearer it is to the {'ask' if o.side == 'buy' else 'bid'}, and for busier contracts)."
             )
         days = (c.expiry - market_day(self.engine.time)).days
         if days <= 1 and o.effect == "open":
@@ -841,18 +856,56 @@ class Broker:
 
         return self.engine.first_hit(day, col, lo, hi, candidates, test)
 
+    def _mid_fill_rate(self, o: Order, c: Contract, bid, ask, day: date):
+        """Chance a minute's trading fills a limit between the bid and ask (rate
+        per minute, an array like `bid`); 0 outside the spread."""
+        width = np.maximum(ask - bid, 1e-9)
+        x = (o.limit_price - bid) / width if o.side == "buy" else (ask - o.limit_price) / width
+        inside = (bid < o.limit_price) & (o.limit_price < ask)
+        key = (c.symbol, day)
+        if key not in self._volumes:
+            if len(self._volumes) > 256:
+                self._volumes.clear()
+            self._volumes[key] = options.expected_volume(self.engine, c, day, self.calibration(c.underlying))
+        # Trades on the order's other side; market makers trade even quiet contracts now and then.
+        per_minute = max(self._volumes[key], MIN_DAY_VOLUME) / MINUTES_PER_SESSION / 2
+        return np.where(inside, per_minute * np.clip(x, 0, 1) ** 2, 0.0)
+
+    def _next_mid_fill(self, o: Order, c: Contract, day: date, lo: int, hi: int, inputs, cal) -> int | None:
+        """First second in [lo, hi] at which a limit inside the spread is traded
+        with: each minute (priced at its first second) is a draw keyed to the
+        market's path and the order, so a replay repeats it."""
+        minutes = np.arange(lo // 60, hi // 60 + 1)
+        start = np.maximum(60 * minutes, lo)
+        covered = np.minimum(60 * minutes + 59, hi) - start + 1
+        p = options.price(self.engine, c.underlying, c.expiry, c.strike, day, start, inputs.opens[minutes], cal, inputs)
+        side = getattr(p, c.right)
+        rate = self._mid_fill_rate(o, c, side["bid"][:, 0], side["ask"][:, 0], day)
+        chance = -np.expm1(-rate * covered / 60)
+        seeds = (inputs.minute_seeds[minutes].astype(np.uint64) ^ np.uint64(_key(f"mid:{o.id}"))) % np.uint64(2**64 - 1)
+        u = _unit_hash(seeds)
+        hits = np.flatnonzero(u < chance)
+        if not hits.size:
+            return None
+        i = int(hits[0])
+        return int(start[i] + min(covered[i] - 1, int(u[i] / chance[i] * covered[i])))
+
     def _next_option_event(self, o: Order, c: Contract, day: date, lo: int, hi: int) -> int | None:
-        """First second in [lo, hi] at which an option limit is reached (the
-        model's ask for a buy, bid for a sell). At a fixed moment an option's
-        price moves one way with the stock, so each minute is first priced at its
-        stock extreme favoring the order, at both ends of the minute (time moves
-        the price too), with a small margin; only minutes that come close are
-        priced second by second."""
+        """First second in [lo, hi] at which an option limit fills: the model's
+        ask for a buy (bid for a sell) reaches it, or, inside the spread, someone
+        trades with it (`_next_mid_fill`). At a fixed moment an option's price
+        moves one way with the stock, so each minute is first priced at its stock
+        extreme favoring the order, at both ends of the minute (time moves the
+        price too), with a small margin; only minutes that come close are priced
+        second by second."""
         if lo > hi or day > c.expiry:
             return None
         col = self.engine.symbol_index(c.underlying)
         cal = self.calibration(c.underlying)
         inputs = self.engine.option_inputs(day, col)
+        mid = self._next_mid_fill(o, c, day, lo, hi, inputs, cal)
+        if mid is not None:
+            hi = mid  # a touch before it comes first
         high, low = self.engine.minute_range(day, col)
         buy, limit = o.side == "buy", o.limit_price
         best = low if buy == (c.right == "call") else high  # cheaper to buy / dearer to sell
@@ -873,7 +926,7 @@ class Broker:
             hits = np.flatnonzero(q <= limit + 1e-9 if buy else q >= limit - 1e-9)
             if hits.size:
                 return int(a + hits[0])
-        return None
+        return mid
 
     def _activate_now(self, o: Order) -> None:
         """An order placed now goes live at the current quote."""
@@ -1013,7 +1066,7 @@ class Broker:
         intrinsic = float(c.intrinsic(spot))
         if intrinsic < IN_THE_MONEY:
             return
-        time_value = self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mark"] - intrinsic
+        time_value = self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"] - intrinsic
         # A mid below intrinsic value (European pricing, wide spreads) counts as no time value.
         chance = EARLY_ASSIGNMENT * max(0.0, 1 - max(time_value, 0.0) / EARLY_TIME_VALUE)
         if chance <= 0:
@@ -1043,9 +1096,9 @@ class Broker:
             if c := Contract.parse(p.symbol):
                 if c.expiry < day or session_close(c.expiry) <= t:
                     continue
-                mark_then = self._quote_at(c, day, sec, prices_then[c.underlying])["mark"]
-                now = self.option_quote(c)["mark"] if session_close(c.expiry) > self.engine.time else float(c.intrinsic(quotes_now[c.underlying].last))
-                positions.append({"symbol": p.symbol, "qty": p.qty, "option": _contract_dict(c), "price_now": round(now, 2), "price_then": round(mark_then, 2)})
+                mid_then = self._quote_at(c, day, sec, prices_then[c.underlying])["mid"]
+                now = self.option_quote(c)["mid"] if session_close(c.expiry) > self.engine.time else float(c.intrinsic(quotes_now[c.underlying].last))
+                positions.append({"symbol": p.symbol, "qty": p.qty, "option": _contract_dict(c), "price_now": round(now, 2), "price_then": round(mid_then, 2)})
                 continue
             positions.append(
                 {
@@ -1101,6 +1154,21 @@ class Broker:
         self.store.save_order(o)
         if o.id > self.store.get("last_order_id", 0):
             self.store.set("last_order_id", o.id)
+
+
+def _wait(rate: float) -> str:
+    """A typical wait, given a chance per minute."""
+    if rate <= 0:
+        return "which may not happen"
+    minutes = 1 / rate
+    if minutes < 2:
+        return "likely within a minute or two"
+    if minutes < 90:
+        return f"typically in about {minutes:.0f} minutes"
+    hours = minutes / 60
+    if hours < 6.5 * 3:
+        return f"typically in about {hours:.0f} hours of trading"
+    return f"typically in about {hours / 6.5:.0f} trading days"
 
 
 def _option_fill(o: Order, q: dict) -> float | None:

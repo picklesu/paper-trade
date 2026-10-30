@@ -168,7 +168,12 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     const el = box.current!
     const c = createChart(el, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: css('--panel') || '#161b22' }, textColor: css('--muted') || '#7d8590' },
+      layout: {
+        background: { type: ColorType.Solid, color: css('--panel') || '#161b22' },
+        textColor: css('--muted') || '#7d8590',
+        // The library's required link to TradingView is in the Panels menu instead (see NOTICE).
+        attributionLogo: false,
+      },
       grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: css('--border') || '#2a313c' },

@@ -83,6 +83,19 @@ export function PanelsMenu() {
           <p className="menu-hint">
             Put each panel on any edge. Its tab on that edge opens or collapses it. Drag the dividers to resize.
           </p>
+          <div className="menu-sep" />
+          {/* The chart library's license asks for its notice and a link to TradingView where
+              users can see them (instead of its logo on the chart; see NOTICE). */}
+          <a
+            role="menuitem"
+            className="menu-item menu-credit"
+            href="https://www.tradingview.com/"
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => setOpen(false)}
+          >
+            Charts: TradingView Lightweight Charts™, © 2025 TradingView, Inc.
+          </a>
         </div>
       )}
     </div>

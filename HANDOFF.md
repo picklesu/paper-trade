@@ -24,6 +24,7 @@ _Last updated: 2026-10-30, after Phase 6 (watchlists and quotes)._
 | 5.9. Real prices from Alpaca instead of Alpha Vantage (the user chose it over ThetaData and Yahoo) | Merged | #27 |
 | Fix: Alpaca certificate checks on macOS (truststore) | Merged | #28 |
 | 6. Watchlists and quotes (the user approved the proposal as is) | Merged | #29 |
+| Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
 | 7. Options chain with Greeks | **Next, when the user says so.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
@@ -345,7 +346,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 216 (pytest), frontend 134 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 216 (pytest), frontend 136 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

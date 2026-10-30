@@ -40,8 +40,8 @@ recommended splitting it: **8a** trading, expiration, exercise and assignment; *
 (with early exercise before ex-dividend dates), American-style pricing, the real interest rate
 and a VIX-like index. 8a:
 1. **Orders:** buy to open/sell to close calls and puts; sell to open covered calls (100 shares
-   per contract, locked against selling) and cash-secured puts (strike × 100 cash set aside,
-   less nothing: the premium received is just cash). Market and limit, day or GTC; no stops on
+   per contract, locked against selling) and cash-secured puts (strike × 100 cash set aside;
+   the premium received is added to cash). Market and limit, day or GTC; no stops on
    options (most brokers don't allow them). Fills: market at the ask/bid; a limit fills when the
    model's ask/bid reaches it. Matching uses the stock's per-second path (an option's price moves
    one way with the stock at a fixed moment, so minutes whose stock high/low can't reach the

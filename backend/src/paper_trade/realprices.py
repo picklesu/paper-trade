@@ -16,6 +16,7 @@ it: the repository is public).
 import http.client
 import json
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +24,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+
+import truststore
 
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.store import Store
@@ -34,6 +37,9 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 REFRESH_EVERY = timedelta(minutes=15)  # the background refresher's interval
 RETRY_AFTER = timedelta(minutes=1)  # after a failed fetch (offline at startup, a refusal)
 STATUS_REFRESH_AFTER = timedelta(minutes=1)  # opening the Sync dialog fetches if older
+# Certificates are checked against the operating system's trust store (the macOS
+# Keychain): Python builds such as uv's may have no certificates of their own.
+TLS = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 @dataclass(frozen=True)
@@ -108,7 +114,7 @@ def fetch_snapshots(symbols: list[str], creds: Credentials, timeout: float = 10)
         headers={"APCA-API-KEY-ID": creds.key_id, "APCA-API-SECRET-KEY": creds.secret, "Accept": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=TLS) as response:
             body = json.load(response)
     except urllib.error.HTTPError as e:
         raise _refusal(e.code, e.read()) from None

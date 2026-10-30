@@ -117,6 +117,7 @@ cd frontend && npm test
 | 5.9 | Real prices from Alpaca: all symbols in one request, refreshed every 15 minutes (replaces Alpha Vantage's 25 requests a day) | Done |
 | 6 | Watchlists and quotes: named lists, columns, sorting, sparklines, symbol lookup, fuller quote | Done |
 | 7 | Options chain with Greeks, exchange holidays | Done |
+| 7.5 | Option prices calibrated to real markets (Alpaca's option data) | Proposed |
 | 8 | Option trading, expiration, exercise, assignment | |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |

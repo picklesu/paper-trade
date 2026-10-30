@@ -87,8 +87,29 @@ _Last updated: 2026-10-30, after Phase 7 (options chain with Greeks); Phase 7.5 
   UI: the Options header says whether the chain is calibrated and from which day; the Sync
   dialog shows the option sync's status. Not included: American exercise, dividends, the real
   rate (Phase 8).
-- **Alpaca option data, checked 2026-10-30 with the user's keys** (probe script was in the
-  session scratchpad): `GET https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}
+- **Design notes for 7.5 (from the review of the HANDOFF PR, #32; settle them when building):**
+  - *Who sets the IV level, in order:* level = the sim's own vol (Phase 7) × the volatility
+    risk premium for the tenor (item 3); the real fit supplies only shape *relative to its own
+    ATM* (skew, curvature, the term structure's slope), never the real level, or the premium
+    would count twice; the intraday reaction (item 4) applies last.
+  - *Volatility risk premium* is a ratio, real ATM IV ÷ real realized vol, typically about
+    1.10-1.15 (not 0.10-0.15). Match the realized window to the tenor (e.g. 30 days for short
+    tenors, a year for LEAPS) rather than one 30-day figure for all.
+  - *Earnings:* Alpaca's snapshots have no report dates, and the sim's earnings schedule is its
+    own (symbols.py), not the real one. Get real dates (Alpha Vantage's EARNINGS_CALENDAR, one
+    request for all symbols, or a provider with them), fit the shape only on expirations that
+    don't span a real report (so a coming report's premium isn't baked into the shape), and read
+    the implied move from the IV jump across that date.
+  - *Rate limit:* the option sync shares Alpaca's 200/min with the stock sync (startup and every
+    15 minutes). Pace by the `X-Ratelimit-Remaining`/`Reset` headers, run it after the stock
+    fetch, and save per symbol so an interrupted sync resumes rather than leaving a half-done
+    calibration.
+  - *Spreads from indicative quotes (item 5):* the free feed is approximate, not OPRA NBBO, so
+    its spreads and sizes may not be the real market's. Compare a sample against a public quote
+    source before using them; if they're unreliable, keep the model's spreads and say so to the
+    user (it changes item 5 of the proposal).
+- **Alpaca option data, checked 2026-10-30 with the user's keys** (`backend/scripts/
+  probe_alpaca_options.py SYMBOL` reproduces it): `GET https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}
   ?feed=indicative&limit=1000`, paged with `next_page_token`; response `{"snapshots": {OCC
   symbol: {latestQuote {bp, bs, ap, as, t}, latestTrade, greeks {delta, gamma, theta, vega,
   rho}, impliedVolatility, dailyBar, minuteBar, prevDailyBar}}}`. SPY: 12,170 contracts, 13

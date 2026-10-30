@@ -3,8 +3,9 @@ import {
   calibrationNote,
   CHAIN_COLUMN_BY_ID,
   CHAIN_COLUMNS,
+  CHAIN_COLUMNS_KEY,
   type ChainColumnId,
-  DEFAULT_CHAIN_COLUMNS,
+  savedChainColumns,
   expirationLabel,
   occSymbol,
   priceRow,
@@ -24,14 +25,14 @@ interface Props {
   onExpiration: (date: string) => void
   /** The chain for `symbol` and `expiration` (null while it loads). */
   chain: Chain | null
-  /** A bid (sell) or ask (buy) was clicked: trade that contract at that price. */
-  onTrade?: (symbol: string, side: Side, price: number) => void
+  /** A bid (sell), ask (buy) or mid (either: no side) was clicked: trade that contract at that price. */
+  onTrade?: (symbol: string, side: Side | null, price: number) => void
 }
 
 /** Calls on the left, puts on the right, strikes in the middle; in-the-money options
  *  shaded and a line where the price is. */
 export function OptionChain({ symbol, expirations, expiration, onExpiration, chain, onTrade }: Props) {
-  const [columns, setColumns] = useStoredState<ChainColumnId[]>('paper-trade.options.columns', DEFAULT_CHAIN_COLUMNS, sanitizeChainColumns)
+  const [columns, setColumns] = useStoredState<ChainColumnId[]>(CHAIN_COLUMNS_KEY, savedChainColumns(), sanitizeChainColumns)
   const [count, setCount] = useStoredState<number>('paper-trade.options.strikes', 12, (v) => (STRIKE_COUNTS.includes(v as number) ? (v as number) : null))
 
   return (
@@ -143,16 +144,19 @@ function ChainTable({ chain, columns, count, onTrade }: { chain: Chain; columns:
   )
 }
 
-/** A chain value; a bid or ask is a button that trades at it (sell at the bid, buy at the ask). */
+/** A chain value; a bid, ask or mid is a button that trades at it (sell at the bid, buy at
+ *  the ask, either at the mid, rounded to the cent). */
 function Cell({ chain, right, id, i, onTrade }: { chain: Chain; right: 'call' | 'put'; id: ChainColumnId; i: number; onTrade?: Props['onTrade'] }) {
   const value = chain[right][id][i]
   const text = CHAIN_COLUMN_BY_ID[id].format(value)
-  if (!onTrade || (id !== 'bid' && id !== 'ask') || value <= 0) return <>{text}</>
-  const side: Side = id === 'ask' ? 'buy' : 'sell'
+  if (!onTrade || (id !== 'bid' && id !== 'ask' && id !== 'mid') || value <= 0) return <>{text}</>
+  const side: Side | null = id === 'ask' ? 'buy' : id === 'bid' ? 'sell' : null
+  const at = Math.round(value * 100) / 100
   const symbol = occSymbol(chain.symbol, chain.expiration, right, chain.strikes[i])
-  const what = `${side === 'buy' ? 'Buy' : 'Sell'} ${chain.symbol} ${price(chain.strikes[i])} ${right} at ${text}`
+  const contract = `${chain.symbol} ${price(chain.strikes[i])} ${right}`
+  const what = side ? `${side === 'buy' ? 'Buy' : 'Sell'} ${contract} at ${text}` : `Trade ${contract} at the mid, ${price(at)}`
   return (
-    <button type="button" className={`chain-trade ${side}`} title={what} aria-label={what} onClick={() => onTrade(symbol, side, value)}>
+    <button type="button" className={`chain-trade ${side ?? 'mid'}`} title={what} aria-label={what} onClick={() => onTrade(symbol, side, at)}>
       {text}
     </button>
   )

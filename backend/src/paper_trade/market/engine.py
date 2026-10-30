@@ -255,6 +255,8 @@ class OptionInputs:
     closes5: np.ndarray  # price at the end of each 5-minute stretch
     volume: np.ndarray  # (M+1,) shares traded before each minute
     minute_seed: int  # the session's last minute seed: a draw keyed to this market's path
+    minute_seeds: np.ndarray  # (M,) every minute's seed, likewise
+    opens: np.ndarray  # (M,) the price at each minute's first second
 
 
 class MarketEngine:
@@ -507,6 +509,8 @@ class MarketEngine:
             closes5=np.exp(sk.close[4::5, col]),
             volume=sk.cum_volume[:, col].copy(),
             minute_seed=int(sk.minute_seed[-1]),
+            minute_seeds=sk.minute_seed.copy(),
+            opens=np.exp(sk.open[:, col]),
         )
         if len(self._option_inputs) > 256:
             self._option_inputs.clear()

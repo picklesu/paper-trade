@@ -6,7 +6,8 @@ import type { QuoteStats, Side, SymbolInfo, Watchlist } from '../lib/types'
 export interface TicketRequest {
   /** An option's OCC symbol. */
   symbol: string
-  side: Side
+  /** null (a mid click): keep the ticket's side. */
+  side: Side | null
   limit: number
   id: number
 }

@@ -11,7 +11,7 @@ function side(base: number): ChainSide {
     ask: v((i) => base + i + 0.05),
     bid_size: v((i) => 10 + i),
     ask_size: v((i) => 20 + i),
-    mark: v((i) => base + i + 0.025),
+    mid: v((i) => base + i + 0.03),
     iv: v(() => 0.2512),
     delta: v((i) => 0.8 - i * 0.2),
     gamma: v(() => 0.0123),
@@ -57,13 +57,13 @@ describe('OptionChain', () => {
   it('shows calls and puts around the strikes, shading in-the-money options, with a price line', () => {
     render(<OptionChain symbol="AAPL" expirations={expirations} expiration="2026-11-20" onExpiration={() => {}} chain={chain} />)
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
-    expect(headers).toEqual(['Calls', '', 'Puts', 'Open Int', 'Delta', 'IV', 'Ask', 'Bid', 'Strike', 'Bid', 'Ask', 'IV', 'Delta', 'Open Int'])
+    expect(headers).toEqual(['Calls', '', 'Puts', 'Open Int', 'Delta', 'IV', 'Ask', 'Mid', 'Bid', 'Strike', 'Bid', 'Mid', 'Ask', 'IV', 'Delta', 'Open Int'])
     const cells = within(rowFor('100.00')).getAllByRole('cell')
-    expect(cells.map((c) => c.textContent)).toEqual(['3,001', '0.60', '25.1%', '11.05', '11.00', '100.00', '2.00', '2.05', '25.1%', '0.60', '3,001'])
+    expect(cells.map((c) => c.textContent)).toEqual(['3,001', '0.60', '25.1%', '11.05', '11.03', '11.00', '100.00', '2.00', '2.03', '2.05', '25.1%', '0.60', '3,001'])
     expect(cells[0]).toHaveClass('itm') // the 100 call is in the money at 102.50
-    expect(cells[6]).not.toHaveClass('itm')
+    expect(cells[7]).not.toHaveClass('itm')
     expect(within(rowFor('105.00')).getAllByRole('cell')[10]).toHaveClass('itm') // the 105 put
-    const rows = screen.getAllByRole('row').map((r) => r.getAttribute('aria-label') ?? within(r).queryAllByRole('cell')[5]?.textContent)
+    const rows = screen.getAllByRole('row').map((r) => r.getAttribute('aria-label') ?? within(r).queryAllByRole('cell')[6]?.textContent)
     expect(rows.slice(2)).toEqual(['95.00', '100.00', 'Price 102.50', '105.00', '110.00'])
     expect(screen.getByText('Expected move ±5.74 (5.6%)')).toBeInTheDocument()
     expect(screen.getByText('Earnings before expiration')).toBeInTheDocument()
@@ -82,9 +82,15 @@ describe('OptionChain', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Chain columns' }))
     fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Open interest/ }))
     fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Theta/ }))
-    expect(screen.getAllByRole('columnheader').slice(3).map((h) => h.textContent)).toEqual(['Theta', 'Delta', 'IV', 'Ask', 'Bid', 'Strike', 'Bid', 'Ask', 'IV', 'Delta', 'Theta'])
+    expect(screen.getAllByRole('columnheader').slice(3).map((h) => h.textContent)).toEqual(['Theta', 'Delta', 'IV', 'Ask', 'Mid', 'Bid', 'Strike', 'Bid', 'Mid', 'Ask', 'IV', 'Delta', 'Theta'])
     expect(screen.getAllByText('-0.046')).toHaveLength(8)
-    expect(JSON.parse(localStorage.getItem('paper-trade.options.columns')!)).toEqual(['bid', 'ask', 'iv', 'delta', 'theta'])
+    expect(JSON.parse(localStorage.getItem('paper-trade.options.columns.v2')!)).toEqual(['bid', 'mid', 'ask', 'iv', 'delta', 'theta'])
+  })
+
+  it('columns saved before Mid existed keep their choice, with Mid added beside Bid and Ask', () => {
+    localStorage.setItem('paper-trade.options.columns', JSON.stringify(['bid', 'ask', 'mark', 'theta']))
+    render(<OptionChain symbol="AAPL" expirations={expirations} expiration="2026-11-20" onExpiration={() => {}} chain={chain} />)
+    expect(screen.getAllByRole('columnheader').slice(3).map((h) => h.textContent)).toEqual(['Theta', 'Ask', 'Mid', 'Bid', 'Strike', 'Bid', 'Mid', 'Ask', 'Theta'])
   })
 
   it('says where the smile comes from, with details on hover', () => {

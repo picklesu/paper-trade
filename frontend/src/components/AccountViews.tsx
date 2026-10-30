@@ -42,7 +42,7 @@ function PositionsTable({ account, onSelect }: { account: Account | null; onSele
             <th>Symbol</th>
             <th className="num">Qty</th>
             <th className="num">Avg cost</th>
-            <th className="num" title="Options: the mark, between bid and ask">
+            <th className="num" title="Options: the mid, halfway between bid and ask">
               Last
             </th>
             <th className="num">Market value</th>

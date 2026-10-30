@@ -432,8 +432,7 @@ def activity(engine: MarketEngine, spec: SymbolSpec, expiry: date, kind: str, st
     progress = min(1.0, max(0.02, session_seconds(engine.time) / SESSION_SECONDS))
 
     def made_up(u: np.ndarray) -> np.ndarray:  # open interest without real data
-        base = spec.daily_volume / 3000 * {"daily": 0.6, "weekly": 0.8, "quarterly": 0.8, "monthly": 1.5, "leaps": 0.5}[kind]
-        return np.floor(base * np.exp(-0.5 * (np.log(strikes_ / anchor) / max(sd, 0.02) / 1.2) ** 2) * (0.3 + 1.4 * u))
+        return np.floor(_made_up_interest(spec, kind, strikes_, anchor, sd) * (0.3 + 1.4 * u))
 
     out = {}
     for side in ("call", "put"):
@@ -451,9 +450,39 @@ def activity(engine: MarketEngine, spec: SymbolSpec, expiry: date, kind: str, st
         if (shape := cal.volume) and side in shape["strikes"]:
             out[f"{side}_volume"] = np.floor(_real_share(shape, side, z, bucket) * quote.volume * (0.5 + v)).astype(int)
         else:
-            daily = 2.5 if kind == "daily" else 1
-            out[f"{side}_volume"] = np.floor(made_up(u) * (0.05 + 0.4 * v) * progress * daily).astype(int)
+            out[f"{side}_volume"] = np.floor(made_up(u) * (0.05 + 0.4 * v) * progress * _daily_turnover(kind)).astype(int)
     return out
+
+
+def _made_up_interest(spec: SymbolSpec, kind: str, strikes_, anchor: float, sd: float):
+    """Made-up open interest at its average (each contract's own draw times
+    0.3 to 1.7): most near the money and at monthly expirations."""
+    base = spec.daily_volume / 3000 * {"daily": 0.6, "weekly": 0.8, "quarterly": 0.8, "monthly": 1.5, "leaps": 0.5}[kind]
+    return base * np.exp(-0.5 * (np.log(np.asarray(strikes_) / anchor) / max(sd, 0.02) / 1.2) ** 2)
+
+
+def _daily_turnover(kind: str) -> float:
+    """Made-up volume as a multiple of its open interest's draw: 0.05 to 0.45 a day, more for dailies."""
+    return 2.5 if kind == "daily" else 1.0
+
+
+def expected_volume(engine: MarketEngine, c: "Contract", day: date, cal: Calibration = DEFAULT) -> float:
+    """Contracts of `c` expected to trade in a whole session on `day`, as the
+    chain's volume works it out (its share of the symbol's option volume, over
+    the strikes the chain lists)."""
+    col = engine.symbol_index(c.underlying)
+    spec = engine.specs[col]
+    anchor = engine.option_inputs(day, col).prev_close
+    days = max((c.expiry - day).days, 1)
+    sd = spec.vol * math.sqrt(days / 365)
+    if (shape := cal.volume) and c.right in shape["strikes"]:
+        grid = np.union1d(strikes(c.underlying, anchor, spec.vol, days / 365, days), [c.strike])
+        k = int(np.flatnonzero(grid == c.strike)[0])
+        z = np.log(grid / anchor) / max(sd, 0.005)
+        return float(_real_share(shape, c.right, z, volume_bucket((c.expiry - day).days))[k] * spec.daily_volume)
+    kind = {e.day: e.kind for e in expirations(c.underlying, session_open(day), cal.pattern)}.get(c.expiry, "weekly")
+    # The average draw of open interest (1.0) times the average share of it traded (0.25).
+    return float(_made_up_interest(spec, kind, c.strike, anchor, sd)) * 0.25 * _daily_turnover(kind)
 
 
 def volume_bucket(days: int) -> int:
@@ -580,11 +609,11 @@ def _now(engine: MarketEngine) -> tuple[date, int]:
 
 
 def contract_quote(engine: MarketEngine, contract: Contract, cal: Calibration = DEFAULT) -> dict:
-    """One contract's quote now: bid, ask, mark and Greeks (per share)."""
+    """One contract's quote now: bid, ask, mid and Greeks (per share)."""
     day, sec = _now(engine)
     p = price(engine, contract.underlying, contract.expiry, contract.strike, day, sec, engine.quotes[contract.underlying].last, cal)
     side = getattr(p, contract.right)
-    return {k: float(v[0, 0]) for k, v in side.items()} | {"mark": float((side["bid"][0, 0] + side["ask"][0, 0]) / 2)}
+    return {k: float(v[0, 0]) for k, v in side.items()} | {"mid": float((side["bid"][0, 0] + side["ask"][0, 0]) / 2)}
 
 
 def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DEFAULT, held: set[float] | None = None) -> dict:
@@ -632,7 +661,7 @@ def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DE
             "ask": ask.tolist(),
             "bid_size": np.where(bid > 0, bid_size, 0).tolist(),
             "ask_size": ask_size.tolist(),
-            "mark": np.round((bid + ask) / 2, 3).tolist(),
+            "mid": np.round((bid + ask) / 2, 3).tolist(),
             "iv": np.round(p.iv[0], 4).tolist(),
             "delta": np.round(m["delta"], 4).tolist(),
             "gamma": np.round(m["gamma"], 5).tolist(),

@@ -10,7 +10,7 @@ const quote = { symbol: 'AAPL', name: 'Apple', last: 101, bid: 100.99, ask: 101.
 const strikes = [95, 100, 105]
 const side = (base: number): ChainSide => {
   const v = (f: (i: number) => number) => strikes.map((_, i) => f(i))
-  return { bid: v((i) => base + i), ask: v((i) => base + i + 0.1), bid_size: v(() => 5), ask_size: v(() => 7), mark: v((i) => base + i + 0.05), iv: v(() => 0.3), delta: v(() => 0.5), gamma: v(() => 0.01), theta: v(() => -0.05), vega: v(() => 0.1), rho: v(() => 0.02), volume: v(() => 10), oi: v(() => 100) }
+  return { bid: v((i) => base + i), ask: v((i) => base + i + 0.1), bid_size: v(() => 5), ask_size: v(() => 7), mid: v((i) => base + i + 0.05), iv: v(() => 0.3), delta: v(() => 0.5), gamma: v(() => 0.01), theta: v(() => -0.05), vega: v(() => 0.1), rho: v(() => 0.02), volume: v(() => 10), oi: v(() => 100) }
 }
 const chain: OptionChain = {
   symbol: 'AAPL', expiration: '2026-11-20', kind: 'monthly', days: 21, years: 0.06, spot: 101, rate: 0.04, atm_iv: 0.3, expected_move: 7,
@@ -54,6 +54,8 @@ describe('option trading', () => {
     expect(onTrade).toHaveBeenCalledWith(symbol, 'buy', 5.1)
     fireEvent.click(screen.getByRole('button', { name: 'Sell AAPL 105.00 put at 4.00' }))
     expect(onTrade).toHaveBeenLastCalledWith('AAPL261120P00105000', 'sell', 4)
+    fireEvent.click(screen.getByRole('button', { name: 'Trade AAPL 95.00 call at the mid, 4.05' }))
+    expect(onTrade).toHaveBeenLastCalledWith('AAPL261120C00095000', null, 4.05)
   })
 
   it('the ticket takes a chain click and reviews the option order', async () => {
@@ -118,5 +120,18 @@ describe('the ticket keeps state honest', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stock' }))
     fireEvent.click(screen.getByRole('button', { name: 'Options' }))
     expect(screen.getByLabelText('Limit price (per share)')).toHaveValue(4.5)
+  })
+})
+
+describe('a mid click', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+
+  it('sets the price and keeps the side chosen', async () => {
+    server()
+    const { rerender } = render(<OrderTicket quote={quote} account={account} orders={[]} chain={chain} fill={{ symbol, side: 'sell', limit: 5, id: 1 }} />)
+    expect(await screen.findByText('Sell to open (covered call)')).toBeInTheDocument()
+    rerender(<OrderTicket quote={quote} account={account} orders={[]} chain={chain} fill={{ symbol: 'AAPL261120P00105000', side: null, limit: 4.05, id: 2 }} />)
+    expect(await screen.findByText('Sell to open (cash-secured put)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Limit price (per share)')).toHaveValue(4.05)
   })
 })

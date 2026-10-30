@@ -232,7 +232,7 @@ def test_sticky_strike_and_skew_steepen_when_the_stock_falls(monkeypatch) -> Non
 
 def test_today_ratio_follows_the_move_so_far() -> None:
     def inputs(closes5: list[float]) -> o.OptionInputs:
-        return o.OptionInputs(100.0, 100.0, np.ones(391), np.ones(390), np.array(closes5), np.zeros(391), 0)
+        return o.OptionInputs(100.0, 100.0, np.ones(391), np.ones(390), np.array(closes5), np.zeros(391), 0, np.zeros(390, dtype=np.uint64), np.full(390, 100.0))
 
     noon = 150 * 60
     still = inputs([100.0] * 78)

@@ -10,7 +10,8 @@ import { TifSelect } from './TifSelect'
 /** A request to fill the ticket with an option order (from the chain). */
 export interface TicketFill {
   symbol: string
-  side: Side
+  /** null (a mid click): keep the side chosen. */
+  side: Side | null
   limit: number
   id: number
 }
@@ -293,7 +294,7 @@ function OptionForm({ quote, account, flow, chain, fill }: OptionFormProps) {
       setRight(c.right)
       setStrike(c.strike)
     }
-    setSide(fill.side)
+    if (fill.side) setSide(fill.side)
     setType('limit')
     setLimit(fill.limit.toFixed(2))
   }

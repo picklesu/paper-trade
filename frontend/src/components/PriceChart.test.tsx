@@ -106,6 +106,13 @@ describe('PriceChart', () => {
     expect(options.timeScale.visible).toBe(false)
   })
 
+  it('leaves the TradingView logo off the chart (the credit is in the Panels menu)', () => {
+    serve()
+    render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    const options = (createChart.mock.calls.at(-1) as unknown as [unknown, { layout: { attributionLogo: boolean } }])[1]
+    expect(options.layout.attributionLogo).toBe(false)
+  })
+
   it('reloads when the timeline changes (a jump or rewind)', async () => {
     const fn = serve()
     const loads = () => fn.mock.calls.filter(([u]) => !String(u).includes('end=')).length

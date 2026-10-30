@@ -379,6 +379,12 @@ body {
   font-size: 11px;
   line-height: 1.45;
 }
+.menu-credit a {
+  color: var(--muted);
+}
+.menu-credit a:hover {
+  color: var(--text);
+}
 
 .panel {
   display: flex;

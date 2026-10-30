@@ -350,6 +350,12 @@ describe('workspace', () => {
     expect(saved).not.toContain('"orders"')
   })
 
+  it('credits TradingView in the Panels menu', () => {
+    render(<App />)
+    openMenu()
+    expect(screen.getByRole('link', { name: 'TradingView' })).toHaveAttribute('href', 'https://www.tradingview.com/')
+  })
+
   it('remembers the layout across reloads, and Reset layout restores the default', async () => {
     const { unmount } = render(<App />)
     setEdge('Watchlist', 'Right')

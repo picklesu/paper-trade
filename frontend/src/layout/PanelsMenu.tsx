@@ -83,6 +83,12 @@ export function PanelsMenu() {
           <p className="menu-hint">
             Put each panel on any edge. Its tab on that edge opens or collapses it. Drag the dividers to resize.
           </p>
+          <p className="menu-hint menu-credit">
+            Charts by{' '}
+            <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">
+              TradingView
+            </a>
+          </p>
         </div>
       )}
     </div>

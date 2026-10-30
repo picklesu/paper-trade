@@ -29,7 +29,7 @@ import {
   rangeStart,
 } from '../lib/bars'
 import { direction, percent, price, volume } from '../lib/format'
-import { compute, DEFAULT_SETTINGS, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
+import { compute, DEFAULT_SETTINGS, type IndicatorId, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
 import type { ClockState, Order, Quote } from '../lib/types'
 import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
 import { IndicatorMenu } from './IndicatorMenu'
@@ -222,34 +222,48 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   }, [settings, interval]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Where each pane starts within the chart area, so RSI and MACD values sit at the top of
-  // their own panes. Measured again whenever a pane resizes (the window, or a divider drag).
+  // their own panes. The chart builds pane elements on its next frame, so they're measured
+  // then, after every indicator change, and again whenever any of them resizes (the
+  // window, or a divider drag); panes not laid out yet show no legend.
   const area = useRef<HTMLDivElement>(null)
-  const [paneTops, setPaneTops] = useState<number[]>([])
-  const ownPanes = INDICATORS.filter((i) => i.pane === 'own' && settings[i.id].on && applicable(i.id, interval))
-    .map((i) => i.id)
-    .join(',')
+  // Measured for these settings: an older layout says nothing about the panes now.
+  const layoutKey = `${interval}|${JSON.stringify(settings)}`
+  const [measured, setLayout] = useState<{ key: string; tops: (number | null)[]; paneOf: Partial<Record<IndicatorId, number>> } | null>(null)
+  const layout = measured?.key === layoutKey ? measured : { tops: [], paneOf: {} as Partial<Record<IndicatorId, number>> }
   useEffect(() => {
     const c = chart.current
     const host = area.current
     if (!c || !host) return
+    const watched = new Set<HTMLElement>()
     const measure = () => {
       const base = host.getBoundingClientRect().top
-      const tops = c.panes().map((p) => (p.getHTMLElement()?.getBoundingClientRect().top ?? base) - base)
-      setPaneTops((old) => (old.length === tops.length && old.every((t, i) => t === tops[i]) ? old : tops))
+      const tops = c.panes().map((p) => {
+        const el = p.getHTMLElement()
+        if (!el) return null
+        if (!watched.has(el)) {
+          watched.add(el)
+          observer.observe(el)
+        }
+        return el.getBoundingClientRect().top - base
+      })
+      const paneOf = indicators.current?.ownPanes() ?? {}
+      setLayout((old) =>
+        old?.key === layoutKey &&
+        old.tops.length === tops.length &&
+        old.tops.every((t, i) => t === tops[i]) &&
+        JSON.stringify(old.paneOf) === JSON.stringify(paneOf)
+          ? old
+          : { key: layoutKey, tops, paneOf },
+      )
     }
-    // The chart lays new panes out on its next frame.
-    const frame = requestAnimationFrame(measure)
     const observer = new ResizeObserver(measure)
     observer.observe(host)
-    for (const p of c.panes()) {
-      const el = p.getHTMLElement()
-      if (el) observer.observe(el)
-    }
+    let frame = requestAnimationFrame(() => (frame = requestAnimationFrame(measure)))
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [ownPanes])
+  }, [layoutKey])
 
   const changeSettings = (next: IndicatorSettings) => {
     setSettings(next)
@@ -411,6 +425,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       INDICATORS.filter((i) => settings[i.id].on && applicable(i.id, interval)).map((info) => ({
         id: info.id,
         label: indicatorLabel(info.id, settings[info.id]),
+        ownPane: info.pane === 'own',
         lines: compute(info.id, settings[info.id].params, bars).lines,
       })),
     [bars, settings, interval],
@@ -422,7 +437,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       : indicatorSeries.map((s) => ({
           id: s.id,
           label: s.label,
-          ownPane: INDICATORS.find((i) => i.id === s.id)!.pane === 'own',
+          ownPane: s.ownPane,
           values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
         }))
 
@@ -501,7 +516,8 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       <div className="chart-area" ref={area}>
         <div ref={box} className="chart-canvas" data-testid="chart" />
         {legend && (
-          <div className="chart-legend" aria-label="Bar details">
+          // Kept within the price pane (it wraps with many overlays).
+          <div className="chart-legend" aria-label="Bar details" style={layout.tops[1] ? { maxHeight: layout.tops[1] - 8 } : undefined}>
             <span className="muted">{formatBarTime(legend[0], interval)}</span>
             <span>O {price(legend[1])}</span>
             <span>H {price(legend[2])}</span>
@@ -520,16 +536,18 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             )}
           </div>
         )}
-        {/* RSI and MACD: at the top of their own panes, in the order the panes are made. */}
+        {/* RSI and MACD: at the top of the pane each is drawn in. */}
         {indicatorValues
           .filter((iv) => iv.ownPane)
-          .map((iv, k) =>
-            paneTops[k + 1] === undefined ? null : (
-              <div key={iv.id} className="chart-legend pane-legend" style={{ top: paneTops[k + 1] + 4 }} aria-label={`${iv.label} values`}>
+          .map((iv) => {
+            const pane = layout.paneOf[iv.id]
+            const top = pane === undefined ? null : layout.tops[pane]
+            return top == null ? null : (
+              <div key={iv.id} className="chart-legend pane-legend" style={{ top: top + 4 }} aria-label={`${iv.label} values`}>
                 <IndicatorValues {...iv} />
               </div>
-            ),
-          )}
+            )
+          })}
         {(loading || error || clock.building_history) && (
           <div className="chart-status">
             {error

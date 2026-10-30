@@ -37,6 +37,7 @@ interface Drawn {
   lines: Map<string, ISeriesApi<'Line'>>
   histogram?: ISeriesApi<'Histogram'>
   params: number[]
+  pane: number
 }
 
 function points(bars: Bar[], values: Values) {
@@ -89,11 +90,16 @@ export class IndicatorLayer {
           rsiLine.createPriceLine({ price: level, color: '#7d8590', lineStyle: LineStyle.Dotted, lineWidth: 1, axisLabelVisible: true, title: '' })
         }
       }
-      this.drawn.set(info.id, { lines, histogram, params: s.params })
+      this.drawn.set(info.id, { lines, histogram, params: s.params, pane: paneIndex })
     }
     // The price pane gets most of the height; indicator panes share the rest.
     const panes = this.chart.panes()
     panes.forEach((p, i) => p.setStretchFactor(i === 0 ? 4 : 1))
+  }
+
+  /** The pane each indicator drawn in its own pane is in (the price pane is 0). */
+  ownPanes(): Partial<Record<IndicatorId, number>> {
+    return Object.fromEntries([...this.drawn].filter(([, d]) => d.pane > 0).map(([id, d]) => [id, d.pane]))
   }
 
   /** Recompute everything from the bars (after a load). */

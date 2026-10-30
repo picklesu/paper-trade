@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-30, after Phase 7 (options chain with Greeks)._
+_Last updated: 2026-10-30, after Phase 7 (options chain with Greeks); Phase 7.5 proposed._
 
 ## Where things stand
 
@@ -26,13 +26,14 @@ _Last updated: 2026-10-30, after Phase 7 (options chain with Greeks)._
 | 6. Watchlists and quotes (the user approved the proposal as is) | Merged | #29 |
 | Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
 | 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
-| 8. Option trading, expiration, exercise, assignment | **Next, when the user says so.** | — |
+| 7.5. Option prices calibrated to real markets | **Proposed, waiting for the user's approval.** See below. | — |
+| 8. Option trading, expiration, exercise, assignment | After 7.5 | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Waiting on the user** to say when to start Phase 8. Decisions so far (2026-10-30):
+**Waiting on the user** to approve (or change) the Phase 7.5 proposal below. Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
   (they were the 5.5c steps). Don't propose them again.
 - **Done in 5.7:** 40 symbols, sector factors, volume following moves, spreads widening with
@@ -58,6 +59,47 @@ _Last updated: 2026-10-30, after Phase 7 (options chain with Greeks)._
   sessions. Those days are full sessions. Revisit only if the user asks.
 - **Later realism:** a VIX-like index and dividends with Phase 8 (dividends change option prices
   and early exercise).
+- **Phase 7.5 proposal (option prices calibrated to real markets), given to the user, not yet
+  approved.** It came from the user asking how to make option prices more realistic than the
+  Phase 7 model (whose smile/skew/term-structure settings are Claude's estimates). Claude
+  recommended doing items 1-3 before trading (they decide whether trading teaches the right
+  lessons), American exercise/dividends/real rate with Phase 8, quote polish later; the user
+  asked for this proposal. Items:
+  1. **Daily real-option sync** in the background: each symbol's chain from Alpaca's free
+     option feed once a day (at startup if older than a day), saved as a compact per-symbol
+     summary (not every contract). Same keys as the stock sync; without keys or data the
+     Phase 7 defaults apply.
+  2. **Per-symbol calibration of shape:** fit SSVI to real IVs per symbol and tenor (skew,
+     curvature, term structure); the real implied earnings move from the IV jump across the
+     report date (for option pricing; the engine's own earnings moves are unchanged). The
+     simulation still sets the level from its own volatility; real data sets the shape.
+  3. **Volatility risk premium:** real ATM IV ÷ real 30-day realized vol (from Alpaca daily
+     bars), by tenor, applied on top of the simulated vol (default ~10-15% when no data), so
+     selling options has its realistic edge.
+  4. **Intraday IV reaction:** sticky strike within the day (a drop moves ATM onto the pricier
+     skew), the day's realized vol so far nudging the level, skew steepening in selloffs.
+  5. **Spreads and sizes from real quotes:** per-symbol bid/ask width by moneyness, tenor and
+     price, typical sizes; wider at the open and before earnings; size columns in the chain.
+  6. **Volume (and open interest if available)** shaped like each symbol's real activity
+     across strikes, expirations and call/put mix, scaled to the simulated day.
+  7. **Each symbol's real expiration pattern** (e.g. TSLA Mon/Wed/Fri, SPY dailies for weeks):
+     the pattern only, as the sim can be at any date.
+  UI: the Options header says whether the chain is calibrated and from which day; the Sync
+  dialog shows the option sync's status. Not included: American exercise, dividends, the real
+  rate (Phase 8).
+- **Alpaca option data, checked 2026-10-30 with the user's keys** (probe script was in the
+  session scratchpad): `GET https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}
+  ?feed=indicative&limit=1000`, paged with `next_page_token`; response `{"snapshots": {OCC
+  symbol: {latestQuote {bp, bs, ap, as, t}, latestTrade, greeks {delta, gamma, theta, vega,
+  rho}, impliedVolatility, dailyBar, minuteBar, prevDailyBar}}}`. SPY: 12,170 contracts, 13
+  pages, 6s, 35 expirations (dailies, to Jan 2029); TSLA: 5,154 contracts, 6 pages
+  (Mon/Wed/Fri weeklies). Quotes with sizes on every contract; IV and Greeks on ~75% (missing on
+  far, thin ones); `dailyBar` is the contract's last traded day (check its date before using
+  its volume). **No open interest** in snapshots: it would come from the trading API's
+  contracts list (`paper-api.alpaca.markets/v2/options/contracts`, not yet tried; needs a
+  sandbox approval). Rate limit 200/min (`X-Ratelimit-*` headers): all 40 symbols are ~250
+  requests, ~2 minutes. The free feed is "indicative" (approximate, not OPRA): use it for
+  shapes, not exact prices.
 - **Phase 6 decisions (Claude's, within the approved proposal):** the lookup opens on any letter
   except F (full screen's shortcut) or "/"; default lists "Main" (the original 10) and "All
   symbols"; columns and sort are per browser (localStorage), lists are on the server; default

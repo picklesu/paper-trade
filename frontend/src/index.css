@@ -506,20 +506,28 @@ body {
     display: none;
   }
 }
-/* One line: what doesn't fit at the right is cut off rather than taking another row. */
+/* One line. A long company name shrinks (with an ellipsis) before the price or change would be cut. */
 .quote-detail {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
+}
+.quote-detail > :not(.quote-name) {
+  flex-shrink: 0;
 }
 .quote-symbol {
   font-size: 14px;
   font-weight: 700;
 }
 .quote-name {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--muted);
   font-size: 12px;
 }

@@ -13,9 +13,12 @@ variables (Alpaca's own names) or from `backend/.env` (git-ignored; never commit
 it: the repository is public).
 """
 
+import functools
 import http.client
 import json
+import logging
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+
+import truststore
 
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.store import Store
@@ -34,6 +39,20 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 REFRESH_EVERY = timedelta(minutes=15)  # the background refresher's interval
 RETRY_AFTER = timedelta(minutes=1)  # after a failed fetch (offline at startup, a refusal)
 STATUS_REFRESH_AFTER = timedelta(minutes=1)  # opening the Sync dialog fetches if older
+
+log = logging.getLogger(__name__)
+
+
+@functools.cache
+def tls_context() -> ssl.SSLContext:
+    """HTTPS that checks certificates against the operating system's trust store
+    (the macOS Keychain): Python builds such as uv's may have no certificates of
+    their own. Made on first use, so a problem here can't stop the server."""
+    try:
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        log.warning("truststore unavailable; using Python's own certificates", exc_info=True)
+        return ssl.create_default_context()
 
 
 @dataclass(frozen=True)
@@ -108,12 +127,18 @@ def fetch_snapshots(symbols: list[str], creds: Credentials, timeout: float = 10)
         headers={"APCA-API-KEY-ID": creds.key_id, "APCA-API-SECRET-KEY": creds.secret, "Accept": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
             body = json.load(response)
     except urllib.error.HTTPError as e:
         raise _refusal(e.code, e.read()) from None
     except (OSError, http.client.HTTPException) as e:  # URLError, timeouts, dropped connections
-        raise FetchError(f"couldn't reach Alpaca ({getattr(e, 'reason', None) or e})") from None
+        reason = getattr(e, "reason", None) or e
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            raise FetchError(
+                f"this computer doesn't trust the certificate Alpaca's connection presented ({reason.verify_message}); "
+                "a proxy or missing certificates?"
+            ) from None
+        raise FetchError(f"couldn't reach Alpaca ({reason})") from None
     except ValueError:  # not JSON: e.g. a proxy's or captive portal's page
         raise FetchError("Alpaca's answer wasn't readable (not JSON); is something on the network in the way?") from None
     if not isinstance(body, dict):

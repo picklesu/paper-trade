@@ -1,4 +1,7 @@
 import asyncio
+import json
+import ssl
+import urllib.error
 from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
@@ -14,6 +17,7 @@ from paper_trade.realprices import (
     _refusal,
     credentials,
     fetch_snapshots,
+    tls_context,
     parse_snapshots,
 )
 from paper_trade.store import Store
@@ -64,6 +68,32 @@ def test_fetch_errors_read_as_messages(monkeypatch) -> None:
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: io.BytesIO(b"<html>Sign in to Wi-Fi</html>"))
     with pytest.raises(FetchError, match="wasn't readable"):
         fetch_snapshots(["SPY"], KEYS)
+
+    def untrusted(*args, **kwargs):
+        error = ssl.SSLCertVerificationError(1, "certificate verify failed")
+        error.verify_message = "unable to get local issuer certificate"
+        raise urllib.error.URLError(error)
+
+    monkeypatch.setattr(urllib.request, "urlopen", untrusted)
+    with pytest.raises(FetchError, match="doesn't trust the certificate.*unable to get local issuer"):
+        fetch_snapshots(["SPY"], KEYS)
+
+
+def test_requests_check_certificates_with_the_os_trust_store(monkeypatch) -> None:
+    import io
+    import urllib.request
+
+    import truststore
+
+    seen = {}
+
+    def urlopen(request, timeout, context):
+        seen["context"] = context
+        return io.BytesIO(json.dumps(SNAPSHOTS).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    assert fetch_snapshots(["SPY"], KEYS)["SPY"][0] == 772.31
+    assert seen["context"] is tls_context() and isinstance(seen["context"], truststore.SSLContext)
 
 
 def test_schedule_and_old_alpha_vantage_keys() -> None:

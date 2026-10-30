@@ -84,7 +84,7 @@ export function OptionsView({ api }: IDockviewPanelProps) {
   const { tick, selected, chain, setChainRequest } = useAppData()
   const shown = usePanelShown(api)
   const [wanted, setWanted] = useState<string | null>(null)
-  const expirations = useExpirations(selected, tick?.clock.session_open, tick?.clock.timeline)
+  const expirations = useExpirations(selected, tick?.clock.session_open, tick?.clock.timeline, tick?.clock.calibration)
   const expiration = pickExpiration(expirations, wanted)
 
   // Stream the chain only while the panel is showing (not collapsed to its edge).
@@ -129,8 +129,9 @@ function usePanelShown(api: IDockviewPanelProps['api']): boolean {
   return useSyncExternalStore(subscribe, () => api.isVisible && (api.group?.api.isVisible ?? true))
 }
 
-/** A symbol's open expirations, again whenever the trading day or the timeline changes. */
-function useExpirations(symbol: string, sessionOpen: string | undefined, timeline: number | undefined): Expiration[] {
+/** A symbol's open expirations, again whenever the trading day, the timeline or an
+ *  option calibration (which can change the listing pattern) changes. */
+function useExpirations(symbol: string, sessionOpen: string | undefined, timeline: number | undefined, calibration: number | undefined): Expiration[] {
   const [loaded, setLoaded] = useState<{ symbol: string; list: Expiration[] }>({ symbol: '', list: [] })
   useEffect(() => {
     if (sessionOpen === undefined) return
@@ -141,7 +142,7 @@ function useExpirations(symbol: string, sessionOpen: string | undefined, timelin
     return () => {
       live = false
     }
-  }, [symbol, sessionOpen, timeline])
+  }, [symbol, sessionOpen, timeline, calibration])
   return loaded.symbol === symbol ? loaded.list : []
 }
 

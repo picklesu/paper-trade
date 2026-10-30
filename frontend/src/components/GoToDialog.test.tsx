@@ -197,6 +197,25 @@ describe('GoToDialog: sync to real prices', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/real-prices/sync' && init?.method === 'POST')).toBe(true)
   })
 
+  it('says how far option prices are fitted to real options', async () => {
+    const options = { configured: true, earnings: false, calibrated: 38, total: 40, oldest: '2026-10-29', newest: '2026-10-30', last_error: "XLF's options: Alpaca says too many requests" }
+    mockReal({ configured: true, available: 40, total: 40, newest: '2026-10-30', options })
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    expect(await screen.findByText(/fitted to real options for 38 of 40 symbols \(Oct 29–Oct 30\), again daily/)).toBeInTheDocument()
+    expect(screen.getByText(/Real earnings dates need an Alpha Vantage key/)).toBeInTheDocument()
+    expect(screen.getByText("Option data: XLF's options: Alpaca says too many requests")).toBeInTheDocument()
+  })
+
+  it('shows option fitting in progress', async () => {
+    const options = { configured: true, earnings: true, calibrated: 3, total: 40, running: { done: 12, total: 40 } }
+    mockReal({ configured: true, available: 0, total: 40, options })
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    expect(await screen.findByText(/fitting to real options, 12 of 40 symbols done/)).toBeInTheDocument()
+    expect(screen.queryByText(/Alpha Vantage/)).not.toBeInTheDocument()
+  })
+
   it('shows the last fetch problem', async () => {
     mockReal({ configured: true, available: 0, total: 40, last_error: 'Alpaca rejected the API keys (401).' })
     render(<GoToDialog clock={clock} onClose={() => {}} />)

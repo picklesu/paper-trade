@@ -9,6 +9,8 @@ function side(base: number): ChainSide {
   return {
     bid: v((i) => base + i),
     ask: v((i) => base + i + 0.05),
+    bid_size: v((i) => 10 + i),
+    ask_size: v((i) => 20 + i),
     mark: v((i) => base + i + 0.025),
     iv: v(() => 0.2512),
     delta: v((i) => 0.8 - i * 0.2),
@@ -31,6 +33,13 @@ const chain: Chain = {
   atm_iv: 0.2512,
   expected_move: 5.74,
   earnings: true,
+  calibration: {
+    as_of: '2026-10-30',
+    skew: -0.41,
+    premium: 1.07,
+    earnings: { day: '2026-11-02', timing: 'post-market', move: 0.045 },
+    fit_error: 0.36,
+  },
   strikes,
   call: side(10),
   put: side(1),
@@ -76,6 +85,26 @@ describe('OptionChain', () => {
     expect(screen.getAllByRole('columnheader').slice(3).map((h) => h.textContent)).toEqual(['Theta', 'Delta', 'IV', 'Ask', 'Bid', 'Strike', 'Bid', 'Ask', 'IV', 'Delta', 'Theta'])
     expect(screen.getAllByText('-0.046')).toHaveLength(8)
     expect(JSON.parse(localStorage.getItem('paper-trade.options.columns')!)).toEqual(['bid', 'ask', 'iv', 'delta', 'theta'])
+  })
+
+  it('says where the smile comes from, with details on hover', () => {
+    const { rerender } = render(<OptionChain symbol="AAPL" expirations={expirations} expiration="2026-11-20" onExpiration={() => {}} chain={chain} />)
+    const note = screen.getByText('Calibrated Oct 30')
+    expect(note.title).toContain("fitted to AAPL's real options on Oct 30, 2026 (within 0.4 volatility points)")
+    expect(note.title).toContain('priced 1.07× the simulated volatility')
+    expect(note.title).toContain("a 4.5% move on AAPL's report (Nov 2, after the close)")
+    const plain = { ...chain, calibration: { as_of: null, skew: null, premium: 1.12, earnings: null, fit_error: null } }
+    rerender(<OptionChain symbol="AAPL" expirations={expirations} expiration="2026-11-20" onExpiration={() => {}} chain={plain} />)
+    expect(screen.getByText('Estimated').title).toContain('No real option data for AAPL yet')
+  })
+
+  it('shows bid and ask sizes when asked', () => {
+    render(<OptionChain symbol="AAPL" expirations={expirations} expiration="2026-11-20" onExpiration={() => {}} chain={chain} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Chain columns' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Bid size/ }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Ask size/ }))
+    expect(screen.getAllByRole('columnheader').slice(3, 9).map((h) => h.textContent)).toEqual(['Open Int', 'Delta', 'IV', 'Ask Sz', 'Bid Sz', 'Ask'])
+    expect(within(rowFor('100.00')).getAllByRole('cell').map((c) => c.textContent)).toContain('21')
   })
 
   it('says when the chain is loading', () => {

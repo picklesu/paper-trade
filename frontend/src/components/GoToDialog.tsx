@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Modal } from './Modal'
-import { fetchRealPrices, goto, previewGoto, syncRealPrices, type GotoResult, type RealPricesStatus } from '../lib/api'
+import { fetchRealPrices, goto, previewGoto, syncRealPrices, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
 import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
@@ -203,6 +203,30 @@ function fetchedAt(iso: string | null | undefined): string {
   return Number.isNaN(t.getTime()) ? '' : `, fetched at ${t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
 }
 
+/** How option prices' calibration to real options stands (it runs by itself once a day). */
+function OptionSync({ status }: { status: OptionDataStatus | undefined }) {
+  if (!status?.configured) return null
+  const days =
+    status.oldest && status.newest && status.oldest !== status.newest
+      ? `${calendarDate(status.oldest)}–${calendarDate(status.newest)}`
+      : status.newest
+        ? calendarDate(status.newest)
+        : ''
+  return (
+    <div className="option-sync">
+      <p className="muted">
+        {status.running
+          ? `Option prices: fitting to real options, ${status.running.done} of ${status.running.total} symbols done…`
+          : status.calibrated
+            ? `Option prices: fitted to real options for ${status.calibrated} of ${status.total} symbols${days && ` (${days})`}, again daily. Syncing prices doesn't change them.`
+            : 'Option prices: not fitted to real options yet; the server fetches them once a day.'}
+        {!status.earnings && ' Real earnings dates need an Alpha Vantage key (ALPHAVANTAGE_API_KEY in backend/.env).'}
+      </p>
+      {status.last_error && <p className="warn-text">Option data: {status.last_error}</p>}
+    </div>
+  )
+}
+
 /** Offer to continue the market from now at the saved real prices. */
 function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
   const back = (
@@ -246,6 +270,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
           {status.refresh_minutes ?? 15} minutes.
         </p>
         {problem}
+        <OptionSync status={status.options} />
         <div className="dialog-actions">{back}</div>
       </>
     )
@@ -270,6 +295,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
         prices, and working orders whose stop or limit the move crosses will trigger or fill at them.
       </p>
       {problem}
+      <OptionSync status={status.options} />
       <div className="dialog-actions">
         <button className="btn primary" disabled={busy} onClick={onSync}>
           Sync prices

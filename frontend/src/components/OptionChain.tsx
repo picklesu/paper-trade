@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  calibrationNote,
   CHAIN_COLUMN_BY_ID,
   CHAIN_COLUMNS,
   type ChainColumnId,
@@ -59,12 +60,22 @@ export function OptionChain({ symbol, expirations, expiration, onExpiration, cha
                 Earnings before expiration
               </span>
             )}
+            <CalibrationNote chain={chain} />
           </span>
         )}
         <ColumnsMenu columns={columns} onColumns={setColumns} />
       </div>
       {chain ? <ChainTable chain={chain} columns={columns} count={count} /> : <p className="muted chain-empty">Loading the chain…</p>}
     </div>
+  )
+}
+
+function CalibrationNote({ chain }: { chain: Chain }) {
+  const note = calibrationNote(chain.calibration, chain.symbol)
+  return (
+    <span className="chain-calibration" title={note.title}>
+      {note.label}
+    </span>
   )
 }
 

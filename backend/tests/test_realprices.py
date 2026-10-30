@@ -87,9 +87,12 @@ def test_requests_check_certificates_with_the_os_trust_store(monkeypatch) -> Non
 
     seen = {}
 
+    class Response(io.BytesIO):
+        headers: dict[str, str] = {}
+
     def urlopen(request, timeout, context):
         seen["context"] = context
-        return io.BytesIO(json.dumps(SNAPSHOTS).encode())
+        return Response(json.dumps(SNAPSHOTS).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     assert fetch_snapshots(["SPY"], KEYS)["SPY"][0] == 772.31

@@ -61,6 +61,23 @@ export interface RealPricesStatus {
   refresh_minutes?: number
   /** The last problem fetching (e.g. an invalid key or a refusal), if any since the last success. */
   last_error?: string | null
+  /** Option prices calibrated to real options (fetched once a day with the same keys). */
+  options?: OptionDataStatus
+}
+
+export interface OptionDataStatus {
+  configured: boolean
+  /** Whether real earnings dates are fetched (an Alpha Vantage key). */
+  earnings?: boolean
+  /** Symbols whose smile is fitted to real options, of `total`. */
+  calibrated: number
+  total: number
+  /** Trading days of the oldest and newest fits ("YYYY-MM-DD"). */
+  oldest?: string | null
+  newest?: string | null
+  /** A sync in progress. */
+  running?: { done: number; total: number } | null
+  last_error?: string | null
 }
 
 export function fetchRealPrices(): Promise<RealPricesStatus> {

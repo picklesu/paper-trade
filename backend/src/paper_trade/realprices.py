@@ -106,7 +106,7 @@ def parse_snapshots(body: dict, symbols: list[str]) -> dict[str, tuple[float, da
     return prices
 
 
-def _refusal(code: int, body: bytes) -> FetchError:
+def _refusal(code: int, body: bytes, service: str = "Alpaca") -> FetchError:
     # Errors usually carry JSON {"message": ...}; some are an HTML page, which isn't shown.
     try:
         message = str(json.loads(body).get("message") or "")
@@ -114,33 +114,41 @@ def _refusal(code: int, body: bytes) -> FetchError:
         message = ""
     detail = f"{code} {message}".strip()
     if code in (401, 403):
-        return FetchError(f"Alpaca rejected the API keys ({detail}). Check {KEY_ID_NAME} and {SECRET_NAME}.")
+        names = f"{KEY_ID_NAME} and {SECRET_NAME}" if service == "Alpaca" else "the key"
+        return FetchError(f"{service} rejected the API keys ({detail}). Check {names}.")
     if code == 429:
-        return FetchError("Alpaca says too many requests; the next refresh will try again.")
-    return FetchError(f"Alpaca answered {detail}")
+        return FetchError(f"{service} says too many requests; the next refresh will try again.")
+    return FetchError(f"{service} answered {detail}")
 
 
-def fetch_snapshots(symbols: list[str], creds: Credentials, timeout: float = 10) -> dict[str, tuple[float, date]]:
-    query = urllib.parse.urlencode({"symbols": ",".join(symbols), "feed": "iex"})
-    request = urllib.request.Request(
-        f"{URL}?{query}",
-        headers={"APCA-API-KEY-ID": creds.key_id, "APCA-API-SECRET-KEY": creds.secret, "Accept": "application/json"},
-    )
+def request_json(url: str, headers: dict[str, str], timeout: float = 10, service: str = "Alpaca") -> tuple[object, dict[str, str]]:
+    """GET `url` and parse JSON; returns the body and the response headers.
+    Problems become FetchErrors the user can read."""
+    request = urllib.request.Request(url, headers=headers | {"Accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
-            body = json.load(response)
+            return json.load(response), dict(response.headers)
     except urllib.error.HTTPError as e:
-        raise _refusal(e.code, e.read()) from None
+        raise _refusal(e.code, e.read(), service) from None
     except (OSError, http.client.HTTPException) as e:  # URLError, timeouts, dropped connections
         reason = getattr(e, "reason", None) or e
         if isinstance(reason, ssl.SSLCertVerificationError):
             raise FetchError(
-                f"this computer doesn't trust the certificate Alpaca's connection presented ({reason.verify_message}); "
+                f"this computer doesn't trust the certificate {service}'s connection presented ({reason.verify_message}); "
                 "a proxy or missing certificates?"
             ) from None
-        raise FetchError(f"couldn't reach Alpaca ({reason})") from None
+        raise FetchError(f"couldn't reach {service} ({reason})") from None
     except ValueError:  # not JSON: e.g. a proxy's or captive portal's page
-        raise FetchError("Alpaca's answer wasn't readable (not JSON); is something on the network in the way?") from None
+        raise FetchError(f"{service}'s answer wasn't readable (not JSON); is something on the network in the way?") from None
+
+
+def auth_headers(creds: Credentials) -> dict[str, str]:
+    return {"APCA-API-KEY-ID": creds.key_id, "APCA-API-SECRET-KEY": creds.secret}
+
+
+def fetch_snapshots(symbols: list[str], creds: Credentials, timeout: float = 10) -> dict[str, tuple[float, date]]:
+    query = urllib.parse.urlencode({"symbols": ",".join(symbols), "feed": "iex"})
+    body, _ = request_json(f"{URL}?{query}", auth_headers(creds), timeout)
     if not isinstance(body, dict):
         raise FetchError(f"unexpected response: {json.dumps(body)[:200]}")
     return parse_snapshots(body, symbols)

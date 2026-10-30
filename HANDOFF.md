@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-30, after Phase 7 (options chain with Greeks); Phase 7.5 proposed._
+_Last updated: 2026-10-30, after Phase 7.5 (option prices calibrated to real markets)._
 
 ## Where things stand
 
@@ -26,14 +26,15 @@ _Last updated: 2026-10-30, after Phase 7 (options chain with Greeks); Phase 7.5 
 | 6. Watchlists and quotes (the user approved the proposal as is) | Merged | #29 |
 | Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
 | 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
-| 7.5. Option prices calibrated to real markets | **Proposed, waiting for the user's approval.** See below. | — |
+| 7.5. Option prices calibrated to real markets (the user approved the proposal as is) | Merged | #33 |
 | 8. Option trading, expiration, exercise, assignment | After 7.5 | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Waiting on the user** to approve (or change) the Phase 7.5 proposal below. Decisions so far (2026-10-30):
+**Phase 7.5 is done; the user tests it.** Next: Phase 8 (option trading): propose the details
+before building (see the Phase 7 bullet below). Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
   (they were the 5.5c steps). Don't propose them again.
 - **Done in 5.7:** 40 symbols, sector factors, volume following moves, spreads widening with
@@ -59,68 +60,43 @@ _Last updated: 2026-10-30, after Phase 7 (options chain with Greeks); Phase 7.5 
   sessions. Those days are full sessions. Revisit only if the user asks.
 - **Later realism:** a VIX-like index and dividends with Phase 8 (dividends change option prices
   and early exercise).
-- **Phase 7.5 proposal (option prices calibrated to real markets), given to the user, not yet
-  approved.** It came from the user asking how to make option prices more realistic than the
-  Phase 7 model (whose smile/skew/term-structure settings are Claude's estimates). Claude
-  recommended doing items 1-3 before trading (they decide whether trading teaches the right
-  lessons), American exercise/dividends/real rate with Phase 8, quote polish later; the user
-  asked for this proposal. Items:
-  1. **Daily real-option sync** in the background: each symbol's chain from Alpaca's free
-     option feed once a day (at startup if older than a day), saved as a compact per-symbol
-     summary (not every contract). Same keys as the stock sync; without keys or data the
-     Phase 7 defaults apply.
-  2. **Per-symbol calibration of shape:** fit SSVI to real IVs per symbol and tenor (skew,
-     curvature, term structure); the real implied earnings move from the IV jump across the
-     report date (for option pricing; the engine's own earnings moves are unchanged). The
-     simulation still sets the level from its own volatility; real data sets the shape.
-  3. **Volatility risk premium:** real ATM IV ÷ real 30-day realized vol (from Alpaca daily
-     bars), by tenor, applied on top of the simulated vol (default ~10-15% when no data), so
-     selling options has its realistic edge.
-  4. **Intraday IV reaction:** sticky strike within the day (a drop moves ATM onto the pricier
-     skew), the day's realized vol so far nudging the level, skew steepening in selloffs.
-  5. **Spreads and sizes from real quotes:** per-symbol bid/ask width by moneyness, tenor and
-     price, typical sizes; wider at the open and before earnings; size columns in the chain.
-  6. **Volume (and open interest if available)** shaped like each symbol's real activity
-     across strikes, expirations and call/put mix, scaled to the simulated day.
-  7. **Each symbol's real expiration pattern** (e.g. TSLA Mon/Wed/Fri, SPY dailies for weeks):
-     the pattern only, as the sim can be at any date.
-  UI: the Options header says whether the chain is calibrated and from which day; the Sync
-  dialog shows the option sync's status. Not included: American exercise, dividends, the real
-  rate (Phase 8).
-- **Design notes for 7.5 (from the review of the HANDOFF PR, #32; settle them when building):**
-  - *Who sets the IV level, in order:* level = the sim's own vol (Phase 7) × the volatility
-    risk premium for the tenor (item 3); the real fit supplies only shape *relative to its own
-    ATM* (skew, curvature, the term structure's slope), never the real level, or the premium
-    would count twice; the intraday reaction (item 4) applies last.
-  - *Volatility risk premium* is a ratio, real ATM IV ÷ real realized vol, typically about
-    1.10-1.15 (not 0.10-0.15). Match the realized window to the tenor (e.g. 30 days for short
-    tenors, a year for LEAPS) rather than one 30-day figure for all.
-  - *Earnings:* Alpaca's snapshots have no report dates, and the sim's earnings schedule is its
-    own (symbols.py), not the real one. Get real dates (Alpha Vantage's EARNINGS_CALENDAR, one
-    request for all symbols, or a provider with them), fit the shape only on expirations that
-    don't span a real report (so a coming report's premium isn't baked into the shape), and read
-    the implied move from the IV jump across that date.
-  - *Rate limit:* the option sync shares Alpaca's 200/min with the stock sync (startup and every
-    15 minutes). Pace by the `X-Ratelimit-Remaining`/`Reset` headers, run it after the stock
-    fetch, and save per symbol so an interrupted sync resumes rather than leaving a half-done
-    calibration.
-  - *Spreads from indicative quotes (item 5):* the free feed is approximate, not OPRA NBBO, so
-    its spreads and sizes may not be the real market's. Compare a sample against a public quote
-    source before using them; if they're unreliable, keep the model's spreads and say so to the
-    user (it changes item 5 of the proposal).
-- **Alpaca option data, checked 2026-10-30 with the user's keys** (`backend/scripts/
-  probe_alpaca_options.py SYMBOL` reproduces it): `GET https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}
-  ?feed=indicative&limit=1000`, paged with `next_page_token`; response `{"snapshots": {OCC
-  symbol: {latestQuote {bp, bs, ap, as, t}, latestTrade, greeks {delta, gamma, theta, vega,
-  rho}, impliedVolatility, dailyBar, minuteBar, prevDailyBar}}}`. SPY: 12,170 contracts, 13
-  pages, 6s, 35 expirations (dailies, to Jan 2029); TSLA: 5,154 contracts, 6 pages
-  (Mon/Wed/Fri weeklies). Quotes with sizes on every contract; IV and Greeks on ~75% (missing on
-  far, thin ones); `dailyBar` is the contract's last traded day (check its date before using
-  its volume). **No open interest** in snapshots: it would come from the trading API's
-  contracts list (`paper-api.alpaca.markets/v2/options/contracts`, not yet tried; needs a
-  sandbox approval). Rate limit 200/min (`X-Ratelimit-*` headers): all 40 symbols are ~250
-  requests, ~2 minutes. The free feed is "indicative" (approximate, not OPRA): use it for
-  shapes, not exact prices.
+- **Phase 7.5 (built as proposed; decisions made while building):**
+  - *Order:* IV level = the sim's vol (Phase 7, with today's realized-move nudge) × the
+    volatility risk premium for the tenor; the real fit gives only shape (SSVI rho by tenor,
+    eta, gamma; phi(theta) so the smile scales with the sim's level); sticky strike (smile
+    anchored at the day's open) and selloff skew last.
+  - *Premium:* real ATM IV (earnings variance removed) ÷ realized vol over max(tenor, 126)
+    trading days (the largest moves dropped for stocks with earnings). A one-month window made
+    SPY's ratio swing to 1.6, so the window is at least half a year. Each symbol's value is
+    pulled halfway to the median of all symbols' and held to 1.0–1.4; default 1.12. On
+    2026-10-30 the results were 1.0–1.23.
+  - *Earnings:* the real implied move is measured (Alpha Vantage calendar; the jump at the
+    first expiration after the report, less the diffusive rate from the last expiration before
+    it) and **shown only**. Pricing uses the sim's own earnings move × the premium: the sim's
+    gaps come from its specs, so pricing with the real move would misprice them (a free edge to
+    sellers or buyers). Expirations within 30 days after a real report are left out of shape fits.
+  - *Spreads and sizes (item 5): the model's are kept.* Alpaca's indicative quotes matched Cboe's
+    public delayed quotes in the median (AAPL 0.96×, KO 1.00×, TSLA 1.00×, SPY 1.57×; mids
+    within 0.8%; `scripts/compare_option_spreads.py`), but both were far wider than the real
+    best quotes (SPY ATM about $0.07, KO $0.11 on a $1.60 option), so neither is real NBBO.
+    Spreads are now wider in the first minutes (×2 fading over ~10 min) and in the 3 sessions
+    before the sim's earnings (×1.25). The model's SPY spreads (1% of price at the money) are
+    too wide for real SPY options (a penny or two); tighten them if the user notices.
+  - *Volume:* contracts per share from the last complete session (its same-day expirations are
+    gone from the chain, so the total is scaled up by today's share of same-day volume, at
+    most ×2), the mix (tenor buckets, put share, strike spread in sd) from today's volume
+    once the session is an hour old. *Open interest* is real (Alpaca's trading API contract
+    list, `paper-api.alpaca.markets`, needs `expiration_date_lte` or it lists only this week's).
+  - *Expirations:* the real list becomes a pattern (`calibration.expiration_pattern`: short
+    weekdays, weekly run, consecutive monthlies, quarterly months, LEAPS months, month/quarter
+    ends) that `options.expirations` lays over any date; on the fetch date it reproduced the real
+    lists of 8 symbols with nothing missing and at most 2 extras. New kind "quarterly" (Q).
+    **Phase 8 must keep a held contract's expiration listed** even if a new calibration's
+    pattern drops it.
+- **Alpaca option data** (`backend/scripts/probe_alpaca_options.py SYMBOL`): snapshots
+  `GET https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}?feed=indicative&limit=1000`,
+  paged with `next_page_token` (quotes with sizes on every contract, IV/Greeks on ~75%,
+  `dailyBar`/`prevDailyBar` volumes); 200 requests/min. A full sync of 40 symbols took 87s.
 - **Phase 6 decisions (Claude's, within the approved proposal):** the lookup opens on any letter
   except F (full screen's shortcut) or "/"; default lists "Main" (the original 10) and "All
   symbols"; columns and sort are per browser (localStorage), lists are on the server; default
@@ -271,6 +247,26 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     or mid-jump ones; the browser keeps the last); `GET /api/options/expirations?symbol=`,
     `GET /api/options/chain?symbol=&expiration=`; a stream subscription may add
     `"chain": {symbol, expiration}` and its ticks then carry `chain` (null if no such expiration).
+  - **Option calibration (7.5):** `market/calibration.py` (pure): `slices` (quotes checked:
+    two-sided, ≤50% wide, ≥$0.05, not older than a day vs the newest), `implied_forward`
+    (put-call parity), `implied_vols` (vectorized bisection on Black), `fit_slice` (SSVI rho,
+    phi by grid search with the ATM variance fixed), `surface` (rho nodes at `TENOR_NODES`,
+    eta/gamma by regression), `premium`, `earnings_move`, `expiration_pattern`,
+    `volume_shape`, `open_interest_shape`, `calibrate` → a JSON summary per symbol.
+    `optiondata.py`: fetching (`fetch_chain`, `fetch_open_interest`, `fetch_bars` SIP daily
+    adjusted, `fetch_earnings` Alpha Vantage CSV), `RateLimit` from `X-Ratelimit-*` headers,
+    `summarize` (one symbol, worker thread), `OptionData` (store keys `option_calibration`
+    and `option_sync`; due after 20h, retry 30 min after a failure). `MarketService.
+    refresh_option_data` runs after the first price fetch and then on the schedule, saving
+    each symbol as it's done (an interrupted sync resumes); a FetchError stops the sync, other
+    errors save a summary without shape so the symbol isn't retried at once.
+    `options.Calibration` (from `options.calibrations(saved)`) carries rho/eta/gamma,
+    premium, pattern, volume, open interest; `chain(engine, symbol, expiry, cal)`; chains
+    include `calibration` (as_of, skew, premium, earnings, fit_error) and bid/ask sizes. The
+    chain cache key includes `_calibration_version`, which is also `clock.calibration` (the
+    frontend refetches expirations on it). `/api/real-prices` includes `options` status.
+    `realprices.request_json` is shared by all requests. Tests: `conftest.py` blocks
+    `optiondata.request_json`/`fetch_earnings` and the Alpha Vantage key.
   - `watchlists.py` (6): `Watchlists`, named lists in the store's `watchlists` key (`next_id`,
     `lists` of {id, name, symbols in order}); ids never reused; names tidied, unique ignoring
     case, ≤40 chars; symbols must be known, duplicates dropped; the last list can't be deleted.
@@ -447,7 +443,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 231 (pytest), frontend 145 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 264 (pytest), frontend 149 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -475,7 +471,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - The ledger is rebuilt from all fills when it changes. That's fine for thousands of trades;
   revisit if history grows very large.
 - No early closes (half days); one-off closures (e.g. national days of mourning) aren't modeled.
-- Options: no dividends, a fixed 4% rate, made-up volume/OI; the chain streams to the browser in
+- Options: no dividends, a fixed 4% rate (Phase 8), model spreads and sizes; the chain streams to the browser in
   full each tick for one expiration (fine at ~150 strikes).
 - Reset (going before the history) starts at the spec prices. A new market always begins at
   the same prices whatever the date.

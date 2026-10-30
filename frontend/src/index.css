@@ -1260,6 +1260,11 @@ body {
 .chain-earnings {
   color: var(--warn);
 }
+.chain-calibration {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
 .chain-menu {
   margin-left: auto;
 }

@@ -139,7 +139,7 @@ def make_service(monkeypatch, fail_on: str | None = None, broken: str | None = N
     svc = MarketService(SimClock(start=START, real_time=lambda: 0.0), engine, store, history_days=5, option_data=data)
     calls = []
 
-    def summarize(symbol, creds, ctx, has_reports, now):
+    def summarize(symbol, creds, ctx, now):
         calls.append(symbol)
         assert svc.option_data.progress is not None and ctx.earnings == {}
         if symbol == fail_on:
@@ -207,3 +207,32 @@ def test_saved_calibrations_are_used_after_a_restart(monkeypatch) -> None:
     expiry = date.fromisoformat(svc.option_expirations("AAPL")[0]["date"])
     assert svc.option_chain("AAPL", expiry)["calibration"]["skew"] == 0.3
     assert np.isfinite(svc.option_chain("AAPL", expiry)["atm_iv"])
+
+
+def test_rate_limit_headers_ignore_case() -> None:
+    slept = []
+    limit = od.RateLimit(reserve=20, sleep=slept.append)
+    limit.update({"x-ratelimit-remaining": "3", "X-RateLimit-Reset": "9e9"})
+    limit.wait()
+    assert slept == [60]
+
+
+def test_an_unexpected_error_keeps_the_schedule(monkeypatch) -> None:
+    svc, _ = make_service(monkeypatch)
+
+    def boom(*args):
+        raise KeyError("t")
+
+    monkeypatch.setattr(service_module, "fetch_bars", boom)
+    monkeypatch.setattr(service_module, "OPTION_DATA_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(od, "RETRY_AFTER", od.timedelta(seconds=0))
+
+    async def run() -> None:
+        svc._prices_tried.set()
+        task = asyncio.create_task(svc._refresh_option_data())
+        await asyncio.sleep(0.05)
+        assert not task.done()  # still scheduled
+        task.cancel()
+
+    asyncio.run(run())
+    assert "the option sync failed" in svc.option_data_status()["last_error"]

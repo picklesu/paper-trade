@@ -15,6 +15,7 @@ around earnings, and no implied earnings move is measured.
 """
 
 import csv
+import http.client
 import io
 import logging
 import threading
@@ -86,9 +87,10 @@ class RateLimit:
 
     def update(self, headers: dict[str, str]) -> None:
         with self._lock:
+            lower = {k.lower(): v for k, v in headers.items()}  # header names ignore case
             try:
-                self._remaining = int(headers["X-Ratelimit-Remaining"])
-                self._reset = float(headers["X-Ratelimit-Reset"])
+                self._remaining = int(lower["x-ratelimit-remaining"])
+                self._reset = float(lower["x-ratelimit-reset"])
             except (KeyError, ValueError):
                 pass
 
@@ -170,11 +172,14 @@ def fetch_bars(symbols: list[str], creds: Credentials, now: datetime, limit: Rat
     out = {}
     for symbol, bars in rows.items():
         bars = sorted(bars, key=lambda b: b["t"])
-        out[symbol] = Bars(
-            [datetime.fromisoformat(b["t"]).astimezone(MARKET_TZ).date() for b in bars],
-            np.array([float(b["c"]) for b in bars]),
-            np.array([float(b["v"]) for b in bars]),
-        )
+        try:
+            out[symbol] = Bars(
+                [datetime.fromisoformat(b["t"]).astimezone(MARKET_TZ).date() for b in bars],
+                np.array([float(b["c"]) for b in bars]),
+                np.array([float(b.get("v") or 0) for b in bars]),
+            )
+        except (KeyError, TypeError, ValueError):
+            raise FetchError(f"unreadable daily bars for {symbol}") from None
     return out
 
 
@@ -198,8 +203,8 @@ def fetch_earnings(key: str, symbols: list[str], today: date) -> dict[str, Earni
     try:
         with urllib.request.urlopen(f"{EARNINGS_URL}?{query}", timeout=30, context=tls_context()) as response:
             text = response.read().decode()
-    except OSError as e:
-        raise FetchError(f"couldn't reach Alpha Vantage ({getattr(e, 'reason', e)})") from None
+    except (OSError, http.client.HTTPException, UnicodeDecodeError) as e:
+        raise FetchError(f"couldn't read Alpha Vantage's answer ({getattr(e, 'reason', e)})") from None
     if not text.startswith("symbol,"):  # a JSON note: a bad key or the daily limit
         raise FetchError(f"Alpha Vantage didn't send the earnings calendar: {text[:160]}")
     return parse_earnings(text, symbols, today)
@@ -231,7 +236,7 @@ def live_session(now: datetime) -> date | None:
     return None
 
 
-def summarize(symbol: str, creds: Credentials, ctx: Context, has_reports: bool, now: datetime) -> dict:
+def summarize(symbol: str, creds: Credentials, ctx: Context, now: datetime) -> dict:
     """Fetch one symbol's chain and calibrate (safe in a worker thread)."""
     snapshots = fetch_chain(symbol, creds)
     try:
@@ -258,7 +263,6 @@ def summarize(symbol: str, creds: Credentials, ctx: Context, has_reports: bool, 
         volume,
         live_session(now),
         earnings,
-        has_reports or earnings is not None,
         open_interest,
         average,
     )

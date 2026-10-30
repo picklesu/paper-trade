@@ -426,13 +426,16 @@ def activity(engine: MarketEngine, spec: SymbolSpec, expiry: date, kind: str, st
     z = np.log(strikes_ / anchor) / max(sd, 0.005)
     bucket = volume_bucket((expiry - today).days)
     progress = min(1.0, max(0.02, session_seconds(engine.time) / SESSION_SECONDS))
+
+    def made_up(u: np.ndarray) -> np.ndarray:  # open interest without real data
+        base = spec.daily_volume / 3000 * {"daily": 0.6, "weekly": 0.8, "quarterly": 0.8, "monthly": 1.5, "leaps": 0.5}[kind]
+        return np.floor(base * np.exp(-0.5 * (np.log(strikes_ / anchor) / max(sd, 0.02) / 1.2) ** 2) * (0.3 + 1.4 * u))
+
     out = {}
     for side in ("call", "put"):
         keys = np.uint64(_key(f"option:{spec.symbol}:{expiry.isoformat()}:{side}")) + np.round(strikes_ * 100).astype(np.uint64)
         u = _unit_hash(keys)
         v = _unit_hash(keys * np.uint64(31) + np.uint64(today.toordinal()))
-        base = spec.daily_volume / 3000 * {"daily": 0.6, "weekly": 0.8, "quarterly": 0.8, "monthly": 1.5, "leaps": 0.5}[kind]
-        made_up_oi = np.floor(base * np.exp(-0.5 * (np.log(strikes_ / anchor) / max(sd, 0.02) / 1.2) ** 2) * (0.3 + 1.4 * u))
         if (shape := cal.open_interest) and side in shape["strikes"]:
             out[f"{side}_oi"] = np.floor(_real_share(shape, side, z, bucket) * spec.daily_volume * (0.7 + 0.6 * u)).astype(int)
         elif (shape := cal.volume) and side in shape["strikes"]:
@@ -440,12 +443,12 @@ def activity(engine: MarketEngine, spec: SymbolSpec, expiry: date, kind: str, st
             full_day = _real_share(shape, side, z, bucket, 1.5) * spec.daily_volume
             out[f"{side}_oi"] = np.floor(full_day * OPEN_INTEREST_DAYS * (0.3 + 1.4 * u)).astype(int)
         else:
-            out[f"{side}_oi"] = made_up_oi.astype(int)
+            out[f"{side}_oi"] = made_up(u).astype(int)
         if (shape := cal.volume) and side in shape["strikes"]:
             out[f"{side}_volume"] = np.floor(_real_share(shape, side, z, bucket) * quote.volume * (0.5 + v)).astype(int)
         else:
             daily = 2.5 if kind == "daily" else 1
-            out[f"{side}_volume"] = np.floor(made_up_oi * (0.05 + 0.4 * v) * progress * daily).astype(int)
+            out[f"{side}_volume"] = np.floor(made_up(u) * (0.05 + 0.4 * v) * progress * daily).astype(int)
     return out
 
 

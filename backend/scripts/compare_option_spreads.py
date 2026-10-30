@@ -32,11 +32,14 @@ def main(symbols: list[str]) -> None:
         rows = []
         for occ, snap in fetch_chain(symbol, creds).items():
             q, c = snap.get("latestQuote") or {}, cboe.get(occ)
-            if not c or not q.get("bp") or not c["bid"] or q["ap"] <= q["bp"] or c["ask"] <= c["bid"]:
+            if not c or not q.get("bp") or not q.get("ap") or not c["bid"] or q["ap"] <= q["bp"] or c["ask"] <= c["bid"]:
                 continue
             if 0.15 <= abs(c["delta"]) <= 0.85:
                 rows.append((q["ap"] - q["bp"], c["ask"] - c["bid"], (q["ap"] + q["bp"]) / 2, (c["ask"] + c["bid"]) / 2,
                              q.get("bs", 0) + q.get("as", 0), c["bid_size"] + c["ask_size"]))
+        if not rows:
+            print(f"{symbol}: no contracts quoted by both")
+            continue
         a = np.array(rows)
         ratio = a[:, 0] / a[:, 1]
         print(

@@ -377,11 +377,11 @@ def surface(fits: list[tuple[Smile, float, float]]) -> dict | None:
     return {"rho": rho, "eta": round(eta, 4), "gamma": round(gamma, 4)}
 
 
-def premium(
-    smiles: list[Smile], closes: np.ndarray | None, earnings: Earnings | None, move: float | None, today: date, has_reports: bool
-) -> list[list[float]]:
-    """The volatility risk premium at each tenor node: ATM IV without the earnings
-    variance over realized volatility without the biggest moves."""
+def premium(smiles: list[Smile], closes: np.ndarray | None, earnings: Earnings | None, move: float | None, today: date) -> list[list[float]]:
+    """The volatility risk premium at each tenor node: ATM IV over realized
+    volatility. When the implied earnings move is known, its variance comes out
+    of the IV and the biggest moves (a report a quarter) out of the realized
+    volatility; otherwise both keep their earnings."""
     if closes is None or len(closes) < 22:
         return []
     xs, ys = [], []
@@ -389,8 +389,8 @@ def premium(
         if not SHAPE_MIN_DAYS / 365 <= sm.years <= SHAPE_MAX_YEARS:
             continue
         theta = sm.theta - _reports_before(earnings, today, sm.expiry) * (move or 0) ** 2
-        days = realized_window(sm.years)
-        rv = realized_vol(closes, days, math.ceil(days / 63) if has_reports else 0)
+        days = min(realized_window(sm.years), len(closes) - 1)
+        rv = realized_vol(closes, days, math.ceil(days / 63) if move is not None else 0)
         if theta <= 0 or not rv:
             continue
         xs.append(sm.years)
@@ -408,8 +408,8 @@ def expiration_pattern(expiries: list[date], today: date) -> dict:
     listed = set(expiries)
     # Weeklies: Fridays from this week's on, as long as each is listed.
     friday = today + timedelta(days=(4 - today.weekday()) % 7)
-    if trading_day_on_or_before(friday) not in listed and friday == today:
-        friday += timedelta(weeks=1)  # today's expired before the fetch
+    if (this_week := trading_day_on_or_before(friday)) not in listed and this_week <= today:
+        friday += timedelta(weeks=1)  # this week's expired before the fetch (today, or a holiday's Thursday)
     weekly_days, run_fridays = 0, set()
     while (d := trading_day_on_or_before(friday)) in listed:
         weekly_days, friday = (d - today).days, friday + timedelta(weeks=1)
@@ -534,7 +534,6 @@ def calibrate(
     stock_volume: float | None = None,
     live_day: date | None = None,
     earnings: Earnings | None = None,
-    has_reports: bool = False,
     open_interest: dict[str, int] | None = None,
     average_volume: float | None = None,
 ) -> dict:
@@ -570,7 +569,7 @@ def calibrate(
         "fitted": len(fits),
         "fit_error": round(float(np.median([f[3] for f in fits])), 2) if fits else None,
         "shape": shape,
-        "premium": premium(smiles, closes, earnings, move, today, has_reports),
+        "premium": premium(smiles, closes, earnings, move, today),
         "earnings": {"day": earnings.day.isoformat(), "timing": earnings.timing, "move": move} if earnings else None,
         "pattern": expiration_pattern([s.expiry for s in chain], today) if chain else None,
         "volume": volume_shape(chain, by_expiry, volume_day, live_day, stock_volume) if volume_day else None,

@@ -28,6 +28,7 @@ SPARKLINE_MINUTES = 5
 SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
 REAL_PRICES_CHECK_SECONDS = 60  # the refresher's longest wait before checking the schedule
 STATUS_FETCH_WAIT_SECONDS = 5  # the Sync dialog's status waits this long for a fetch
+CALIBRATION_BATCH = 10  # symbols calibrated between repricing chains during a sync
 OPTION_DATA_CHECK_SECONDS = 600  # the option sync's longest wait before checking the schedule
 
 log = logging.getLogger(__name__)
@@ -433,11 +434,9 @@ class MarketService:
                     except FetchError as e:
                         od.note(f"earnings dates: {e}")
                 context = Context(now, bars, earnings)
-                specs = {s.symbol: s for s in self.engine.specs}
-                for symbol in symbols:
-                    reports = specs[symbol].earnings is not None
+                for n, symbol in enumerate(symbols, start=1):
                     try:
-                        summary = await asyncio.to_thread(summarize, symbol, od.creds, context, reports, datetime.now(UTC))
+                        summary = await asyncio.to_thread(summarize, symbol, od.creds, context, datetime.now(UTC))
                     except FetchError as e:
                         od.failed(f"{symbol}'s options: {e}")
                         log.warning("fetching %s's options failed: %s", symbol, e)
@@ -448,9 +447,13 @@ class MarketService:
                         summary = {"symbol": symbol, "fetched": datetime.now(UTC).isoformat(), "shape": None}
                         od.note(f"{symbol}'s options couldn't be calibrated")
                     od.record(symbol, summary)
-                    self._calibrations_changed()
+                    # Chains reprice as symbols come in, in batches (each change
+                    # reloads every Options panel's expirations).
+                    if n % CALIBRATION_BATCH == 0:
+                        self._calibrations_changed()
             finally:
                 od.finished()
+                self._calibrations_changed()
 
     async def _refresh_option_data(self) -> None:
         """Keep calibrations about a day old, in the background, after the first
@@ -458,7 +461,12 @@ class MarketService:
         assert self.option_data
         await self._prices_tried.wait()
         while True:
-            await self.refresh_option_data()
+            try:
+                await self.refresh_option_data()
+            except Exception as e:
+                # Keep the schedule going: try again after RETRY_AFTER.
+                log.exception("syncing option data failed")
+                self.option_data.failed(f"the option sync failed ({e})")
             wait = self.option_data.seconds_until_due(self.symbols)
             await asyncio.sleep(min(OPTION_DATA_CHECK_SECONDS, max(5.0, wait)))
 

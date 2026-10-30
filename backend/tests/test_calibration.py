@@ -207,3 +207,12 @@ def test_open_interest_shape() -> None:
     assert shape["per_share"] == pytest.approx(sum(oi.values()) / 1e6, abs=1e-5)
     assert shape["put_share"] > 0.6 and shape["strikes"]["put"][0] < 0 < shape["strikes"]["call"][0] + 0.5
     assert c.calibrate("XYZ", snaps, FETCHED)["open_interest"] is None  # none fetched
+
+
+def test_pattern_after_a_holiday_thursdays_close() -> None:
+    # Fetched after the close on the Thursday before Good Friday 2027 (March 26):
+    # that week's options have expired; the weeklies after it still count.
+    thursday = date(2027, 3, 25)
+    fridays = [date(2027, 4, 2) + timedelta(weeks=w) for w in range(5)]  # Apr 2 ... Apr 30
+    p = c.expiration_pattern(fridays, thursday)
+    assert p["weekly_days"] == (date(2027, 4, 30) - thursday).days

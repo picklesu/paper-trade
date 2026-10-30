@@ -46,6 +46,17 @@ export const ColorType = { Solid: 'solid' }
 export const CrosshairMode = { Normal: 0 }
 export const LineStyle = { Solid: 0, Dotted: 1, Dashed: 2 }
 
+const paneElements: HTMLElement[] = []
+function paneElement(i: number): HTMLElement {
+  while (paneElements.length <= i) {
+    const el = document.createElement('div')
+    const top = paneElements.length * 100
+    el.getBoundingClientRect = () => ({ top, left: 0, right: 0, bottom: top + 100, width: 0, height: 100, x: 0, y: top, toJSON: () => ({}) })
+    paneElements.push(el)
+  }
+  return paneElements[i]
+}
+
 export const createChart = vi.fn(() => {
   let n = 0
   const panes: MockSeries[][] = [[]]
@@ -86,7 +97,14 @@ export const createChart = vi.fn(() => {
       calls.indicators = calls.indicators.filter((x) => x !== s)
     }),
     panes: () =>
-      panes.map((p, i) => ({ getSeries: () => p, paneIndex: () => i, setStretchFactor: vi.fn(), setHeight: vi.fn() })),
+      panes.map((p, i) => ({
+        getSeries: () => p,
+        paneIndex: () => i,
+        setStretchFactor: vi.fn(),
+        setHeight: vi.fn(),
+        // Each pane 100px below the last (jsdom lays nothing out).
+        getHTMLElement: () => paneElement(i),
+      })),
     removePane: vi.fn((i: number) => {
       panes.splice(i, 1)
       sync()

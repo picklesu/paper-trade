@@ -386,6 +386,8 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     along its bottom, Indicators and Latest at the right of the quote line.
     **The quote line (user's request, after 8a): only symbol, name, price and change** (the name
     hides under 520px); everything else it had is a Watchlist column (Open and Prev Close added).
+    **RSI/MACD values sit at the top of their own panes** (user's request): `PriceChart` measures each
+    pane's top from `pane.getHTMLElement()` (again on any pane resize, via ResizeObserver).
     `AppData.tsx`/`appDataContext.ts` hold the stream data and the selected symbol, shared by
     panels. `PanelViews.tsx` has the panel components; each is wrapped in
     `<div class="dock-panel" data-panel="Title">`. `panels.ts`: the registry,

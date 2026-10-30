@@ -221,6 +221,36 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     // Only settings and bar size reconfigure; symbol and timeline changes reload the bars (show()).
   }, [settings, interval]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Where each pane starts within the chart area, so RSI and MACD values sit at the top of
+  // their own panes. Measured again whenever a pane resizes (the window, or a divider drag).
+  const area = useRef<HTMLDivElement>(null)
+  const [paneTops, setPaneTops] = useState<number[]>([])
+  const ownPanes = INDICATORS.filter((i) => i.pane === 'own' && settings[i.id].on && applicable(i.id, interval))
+    .map((i) => i.id)
+    .join(',')
+  useEffect(() => {
+    const c = chart.current
+    const host = area.current
+    if (!c || !host) return
+    const measure = () => {
+      const base = host.getBoundingClientRect().top
+      const tops = c.panes().map((p) => (p.getHTMLElement()?.getBoundingClientRect().top ?? base) - base)
+      setPaneTops((old) => (old.length === tops.length && old.every((t, i) => t === tops[i]) ? old : tops))
+    }
+    // The chart lays new panes out on its next frame.
+    const frame = requestAnimationFrame(measure)
+    const observer = new ResizeObserver(measure)
+    observer.observe(host)
+    for (const p of c.panes()) {
+      const el = p.getHTMLElement()
+      if (el) observer.observe(el)
+    }
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  }, [ownPanes])
+
   const changeSettings = (next: IndicatorSettings) => {
     setSettings(next)
     saveSettings(next)
@@ -392,6 +422,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       : indicatorSeries.map((s) => ({
           id: s.id,
           label: s.label,
+          ownPane: INDICATORS.find((i) => i.id === s.id)!.pane === 'own',
           values: s.lines.map(({ key, values }) => ({ key, value: values[legendIndex], color: lineColor(s.id, key) })),
         }))
 
@@ -467,7 +498,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
           Latest ⇥
         </button>
       </div>
-      <div className="chart-area">
+      <div className="chart-area" ref={area}>
         <div ref={box} className="chart-canvas" data-testid="chart" />
         {legend && (
           <div className="chart-legend" aria-label="Bar details">
@@ -478,22 +509,27 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             <span className={direction(legend[4] - legend[1])}>C {price(legend[4])}</span>
             <span className={direction(legend[4] - legend[1])}>{percent(((legend[4] - legend[1]) / legend[1]) * 100)}</span>
             <span className="muted">Vol {volume(legend[5])}</span>
-            {indicatorValues.length > 0 && (
+            {indicatorValues.some((iv) => !iv.ownPane) && (
               <span className="legend-indicators">
-                {indicatorValues.map((iv) => (
-                  <span key={iv.id}>
-                    <span className="muted">{iv.label}</span>{' '}
-                    {iv.values.map((v) => (
-                      <span key={v.key} style={{ color: v.color }}>
-                        {v.value === null ? '–' : price(v.value)}{' '}
-                      </span>
-                    ))}
-                  </span>
-                ))}
+                {indicatorValues
+                  .filter((iv) => !iv.ownPane)
+                  .map((iv) => (
+                    <IndicatorValues key={iv.id} {...iv} />
+                  ))}
               </span>
             )}
           </div>
         )}
+        {/* RSI and MACD: at the top of their own panes, in the order the panes are made. */}
+        {indicatorValues
+          .filter((iv) => iv.ownPane)
+          .map((iv, k) =>
+            paneTops[k + 1] === undefined ? null : (
+              <div key={iv.id} className="chart-legend pane-legend" style={{ top: paneTops[k + 1] + 4 }} aria-label={`${iv.label} values`}>
+                <IndicatorValues {...iv} />
+              </div>
+            ),
+          )}
         {(loading || error || clock.building_history) && (
           <div className="chart-status">
             {error
@@ -506,5 +542,19 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       </div>
       {toolbar}
     </div>
+  )
+}
+
+/** An indicator's label and its values at the legend's bar, each in its line's color. */
+function IndicatorValues({ label, values }: { label: string; values: { key: string; value: number | null; color: string }[] }) {
+  return (
+    <span>
+      <span className="muted">{label}</span>{' '}
+      {values.map((v) => (
+        <span key={v.key} style={{ color: v.color }}>
+          {v.value === null ? '–' : price(v.value)}{' '}
+        </span>
+      ))}
+    </span>
   )
 }

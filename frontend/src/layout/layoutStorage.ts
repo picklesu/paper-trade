@@ -4,6 +4,23 @@ import type { SerializedDockview } from 'dockview-react'
 // layouts are then ignored instead of half-applied. (v2: no tab bars, one panel per group,
 // side panels collapsed to the left by default. v3: no floating windows; panels on any edge.)
 const KEY = 'paper-trade.layout.v3'
+// The panels the app had when the layout was saved, so panels added since (Options) can
+// start collapsed at their default edge instead of off. Layouts saved before this was
+// recorded had the first five.
+const PANELS_KEY = 'paper-trade.layout.panels'
+const FIRST_PANELS = ['chart', 'watchlist', 'ticket', 'positions', 'orders']
+
+/** Of `ids`, those the app didn't have when the saved layout was made. */
+export function panelsAddedSinceSave(ids: readonly string[]): string[] {
+  try {
+    const raw = localStorage.getItem(PANELS_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : FIRST_PANELS
+    const known = Array.isArray(parsed) ? parsed : FIRST_PANELS
+    return ids.filter((id) => !known.includes(id))
+  } catch {
+    return []
+  }
+}
 
 /** The saved layout for this browser, if any (storage can be unavailable), without panels
  *  that no longer exist (`known` are the component names; e.g. Activity was removed). */
@@ -51,9 +68,10 @@ function dropUnknownPanels(layout: SerializedDockview, known: ReadonlySet<string
   return out
 }
 
-export function saveLayout(layout: SerializedDockview): void {
+export function saveLayout(layout: SerializedDockview, panelIds: readonly string[]): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(layout))
+    localStorage.setItem(PANELS_KEY, JSON.stringify(panelIds))
   } catch {
     // Not saved; the layout still works until the page reloads.
   }
@@ -62,6 +80,7 @@ export function saveLayout(layout: SerializedDockview): void {
 export function clearLayout(): void {
   try {
     localStorage.removeItem(KEY)
+    localStorage.removeItem(PANELS_KEY)
   } catch {
     // Nothing to clear.
   }

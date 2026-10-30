@@ -1,15 +1,16 @@
-import { type AddPanelOptions, type DockviewApi, type DockviewGroupPanel, type IDockviewPanel, Orientation } from 'dockview-react'
+import { type AddPanelOptions, type DockviewApi, type DockviewGroupPanel, type IDockviewPanel, type IDockviewPanelProps, Orientation } from 'dockview-react'
 import type { FunctionComponent } from 'react'
 import { type Edge, edgeOf } from './edges'
-import { ChartView, OrdersView, PositionsView, TicketView, WatchlistView } from './PanelViews'
+import { ChartView, OptionsView, OrdersView, PositionsView, TicketView, WatchlistView } from './PanelViews'
 
-export type PanelId = 'chart' | 'watchlist' | 'ticket' | 'positions' | 'orders'
+export type PanelId = 'chart' | 'watchlist' | 'ticket' | 'options' | 'positions' | 'orders'
 
 /** Every view, by id. Panel ids double as dockview component names. */
-export const PANELS: Record<PanelId, { title: string; component: FunctionComponent }> = {
+export const PANELS: Record<PanelId, { title: string; component: FunctionComponent<IDockviewPanelProps> }> = {
   chart: { title: 'Chart', component: ChartView },
   watchlist: { title: 'Watchlist', component: WatchlistView },
   ticket: { title: 'Order Entry', component: TicketView },
+  options: { title: 'Options', component: OptionsView },
   positions: { title: 'Positions', component: PositionsView },
   orders: { title: 'Orders', component: OrdersView },
 }
@@ -21,10 +22,10 @@ export const COMPONENTS = Object.fromEntries(PANEL_IDS.map((id) => [id, PANELS[i
 /** The panels around the chart, in the order they line up on an edge (top to bottom on the
  *  left and right, left to right on the top and bottom). The chart is always docked in the
  *  middle. */
-export const SIDE_PANELS: PanelId[] = ['watchlist', 'ticket', 'positions', 'orders']
+export const SIDE_PANELS: PanelId[] = ['watchlist', 'ticket', 'options', 'positions', 'orders']
 
 /** Where each panel goes by default (and when brought back without a remembered edge). */
-export const DEFAULT_EDGE: Partial<Record<PanelId, Edge>> = { watchlist: 'left', ticket: 'left', positions: 'bottom', orders: 'bottom' }
+export const DEFAULT_EDGE: Partial<Record<PanelId, Edge>> = { watchlist: 'left', ticket: 'left', options: 'bottom', positions: 'bottom', orders: 'bottom' }
 
 /** How thick an edge's panels are by default: the width of the left and right columns, the
  *  height of the top and bottom rows (the chart takes the rest). */
@@ -59,7 +60,7 @@ const groupsOn = (api: DockviewApi, edge: Edge, edges = panelEdges(api)) =>
   SIDE_PANELS.filter((id) => edges.get(id) === edge).map((id) => docked(api, id)!)
 
 /** The default workspace: the chart, with Watchlist and Order Entry collapsed on the left
- *  and Positions and Orders on the bottom. */
+ *  and Options, Positions and Orders on the bottom. */
 export function buildDefaultLayout(api: DockviewApi): void {
   // Start from an empty grid, not `api.clear()`: that keeps the old grid's root branch.
   api.fromJSON({ grid: { root: { type: 'branch', data: [] }, orientation: Orientation.HORIZONTAL, width: api.width, height: api.height }, panels: {} })
@@ -92,6 +93,11 @@ export function dockSpot(api: DockviewApi, id: PanelId, edge: Edge): DockSpot {
   const size = EDGE_SIZE[edge]
   if (edge === 'left' || edge === 'right') return { side: edge, size }
   return { beside: 'chart', side: edge === 'top' ? 'above' : 'below', size }
+}
+
+/** Add a panel collapsed at its default edge (one added to the app since a saved layout). */
+export function addCollapsed(api: DockviewApi, id: PanelId): void {
+  addPanel(api, id, DEFAULT_EDGE[id]!).group.api.setVisible(false)
 }
 
 /** Add a closed panel on an edge. */

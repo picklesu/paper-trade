@@ -138,12 +138,12 @@ describe('App', () => {
     vi.restoreAllMocks()
   })
 
-  it('lays out the default workspace before data arrives: the chart, Watchlist and Order Entry collapsed left, Positions and Orders bottom', () => {
+  it('lays out the default workspace before data arrives: the chart, Watchlist and Order Entry collapsed left, Options, Positions and Orders bottom', () => {
     render(<App />)
     expect(panel('Chart')).toBeInTheDocument()
     expect(tabsOn('left')).toEqual(['Watchlist', 'Order Entry'])
-    expect(tabsOn('bottom')).toEqual(['Positions', 'Orders'])
-    for (const name of ['Watchlist', 'Order Entry', 'Positions', 'Orders']) expect(isOpen(name)).toBe(false)
+    expect(tabsOn('bottom')).toEqual(['Options', 'Positions', 'Orders'])
+    for (const name of ['Watchlist', 'Order Entry', 'Options', 'Positions', 'Orders']) expect(isOpen(name)).toBe(false)
     // No tab bars: the Panels menu places panels.
     const headers = [...document.querySelectorAll<HTMLElement>('.dv-tabs-and-actions-container')]
     expect(headers.length).toBeGreaterThan(0)
@@ -289,7 +289,7 @@ describe('workspace', () => {
     render(<App />)
     openMenu()
     // The chart always sits in the middle: it isn't in the menu.
-    expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual(['Watchlist on', 'Order Entry on', 'Positions on', 'Orders on'])
+    expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual(['Watchlist on', 'Order Entry on', 'Options on', 'Positions on', 'Orders on'])
     closeMenu()
 
     fireEvent.click(stripTab('Order Entry'))
@@ -307,7 +307,7 @@ describe('workspace', () => {
 
     setEdge('Positions', 'Left')
     await waitFor(() => expect(tabsOn('left')).toEqual(['Positions']))
-    expect(tabsOn('bottom')).toEqual(['Orders'])
+    expect(tabsOn('bottom')).toEqual(['Options', 'Orders'])
   })
 
   it('Off removes a panel and its tab; On brings it back open on the edge it was on', async () => {
@@ -373,8 +373,31 @@ describe('workspace', () => {
     openMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Reset layout/ }))
     await waitFor(() => expect(tabsOn('left')).toEqual(['Watchlist', 'Order Entry']))
-    expect(tabsOn('bottom')).toEqual(['Positions', 'Orders'])
+    expect(tabsOn('bottom')).toEqual(['Options', 'Positions', 'Orders'])
     expect(isOpen('Positions')).toBe(false)
+  })
+
+  it('adds a panel new since the saved layout collapsed at its edge, not off', async () => {
+    const { unmount } = render(<App />)
+    setOn('Options', false)
+    setEdge('Watchlist', 'Right')
+    window.dispatchEvent(new Event('pagehide'))
+    unmount()
+    // As saved by the app before Options existed.
+    localStorage.removeItem('paper-trade.layout.panels')
+    render(<App />)
+    expect(tabsOn('right')).toEqual(['Watchlist'])
+    expect(tabsOn('bottom')).toEqual(['Options', 'Positions', 'Orders'])
+    expect(isOpen('Options')).toBe(false)
+  })
+
+  it('keeps a panel turned off once the saved layout knows it', async () => {
+    const { unmount } = render(<App />)
+    setOn('Options', false)
+    window.dispatchEvent(new Event('pagehide'))
+    unmount()
+    render(<App />)
+    expect(tabsOn('bottom')).toEqual(['Positions', 'Orders'])
   })
 
   it('saves the layout under StrictMode too, as the real page runs', async () => {

@@ -1232,3 +1232,93 @@ body {
   padding: 6px 8px;
   font-size: 15px;
 }
+
+/* Options chain */
+.option-chain {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.chain-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.chain-symbol {
+  font-weight: 700;
+}
+.chain-info {
+  display: flex;
+  gap: 14px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+}
+.chain-earnings {
+  color: var(--warn);
+}
+.chain-menu {
+  margin-left: auto;
+}
+.chain-menu .list-menu-panel {
+  right: 0;
+}
+.chain-empty {
+  padding: 12px;
+  font-size: 12px;
+}
+.chain-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.chain-table th,
+.chain-table td {
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+/* The two header rows stick together, so no rows show between them. */
+.chain-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.chain-table thead th {
+  position: static;
+}
+.chain-sides th {
+  padding-top: 4px;
+  padding-bottom: 2px;
+  color: var(--text);
+  text-align: center;
+  border-bottom: none;
+}
+.chain-table .strike {
+  background: var(--bg);
+  font-weight: 600;
+  text-align: center;
+}
+.chain-table td.itm {
+  background: rgba(59, 130, 246, 0.08);
+}
+.price-line td {
+  height: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--accent);
+  position: relative;
+}
+.price-line span {
+  position: absolute;
+  left: 50%;
+  top: -8px;
+  transform: translateX(-50%);
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+}

@@ -11,8 +11,8 @@ import { StripContext } from './stripContext'
 import { EdgeStrip } from './EdgeStrip'
 import { type Edge, edgeOf, savedSizes } from './edges'
 import { ApiSetterContext, type LayoutControls, LayoutContext } from './layoutContext'
-import { clearLayout, loadLayout, saveLayout } from './layoutStorage'
-import { buildDefaultLayout, collapseEmptyEdges, COMPONENTS, DEFAULT_EDGE, EDGE_SIZE, edgeTidier, PANEL_IDS, type PanelId, type PanelPlace, panelEdges, panelPlaces, placePanel } from './panels'
+import { clearLayout, loadLayout, panelsAddedSinceSave, saveLayout } from './layoutStorage'
+import { addCollapsed, buildDefaultLayout, collapseEmptyEdges, COMPONENTS, DEFAULT_EDGE, EDGE_SIZE, edgeTidier, PANEL_IDS, type PanelId, type PanelPlace, panelEdges, panelPlaces, placePanel, SIDE_PANELS } from './panels'
 import { useEdgeStrips } from './useEdgeStrips'
 
 const NOWHERE = Object.fromEntries(PANEL_IDS.map((id) => [id, { state: 'off', edge: null }])) as Record<PanelId, PanelPlace>
@@ -105,7 +105,7 @@ export const Workspace = memo(function Workspace() {
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = undefined
-      saveLayout(api.toJSON())
+      saveLayout(api.toJSON(), PANEL_IDS)
     }, SAVE_DELAY_MS)
   }
   const strips = useEdgeStrips(api)
@@ -120,7 +120,7 @@ export const Workspace = memo(function Workspace() {
       window.clearTimeout(saveTimer.current)
       saveTimer.current = undefined
       try {
-        if (apiRef.current) saveLayout(apiRef.current.toJSON())
+        if (apiRef.current) saveLayout(apiRef.current.toJSON(), PANEL_IDS)
       } catch {
         // The workspace was already torn down; its last state was saved before.
       }
@@ -155,7 +155,19 @@ export const Workspace = memo(function Workspace() {
       clearLayout()
       buildDefaultLayout(api)
     }
-    if (saved) collapseEmptyEdges(api)
+    if (saved) {
+      // Panels the app gained since the layout was saved come in collapsed. A problem
+      // there only skips that panel (the Panels menu can still turn it on), never
+      // the user's layout.
+      for (const id of panelsAddedSinceSave(SIDE_PANELS)) {
+        try {
+          addCollapsed(api, id as PanelId)
+        } catch {
+          // Left off.
+        }
+      }
+      collapseEmptyEdges(api)
+    }
     // StrictMode's development double-mount readies a second dockview on the same element.
     disposeSizes.current()
     if (host.current) disposeSizes.current = keepSidePanelSizes(api, host.current, saved)

@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from paper_trade.market.calendar import MARKET_TZ, session_open
+from paper_trade.market.calendar import MARKET_TZ, is_trading_day, session_open
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.history import History
 from paper_trade.store import Store
@@ -92,8 +92,12 @@ def test_paging_back_has_no_gaps_or_duplicates(h: History) -> None:
 
 
 def test_weekly_bars_are_whole_weeks(h: History) -> None:
-    for t in times(h.bars("SPY", "1W", count=100)):
-        assert datetime.fromtimestamp(t, MARKET_TZ).weekday() == 0 or t == times(h.bars("SPY", "1W", count=100))[0]
+    weeks = times(h.bars("SPY", "1W", count=100))
+    for t in weeks[1:]:
+        # Each starts at its week's first session: Monday, or later after a holiday.
+        day = datetime.fromtimestamp(t, MARKET_TZ).date()
+        monday = day - timedelta(days=day.weekday())
+        assert all(not is_trading_day(monday + timedelta(days=i)) for i in range(day.weekday())), day
 
 
 def test_fine_bars_stop_at_their_lookback(h: History) -> None:

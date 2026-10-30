@@ -70,7 +70,7 @@ def test_goto_forward_rewind_and_reset() -> None:
         assert action == "forward"
         assert svc.engine.time == target == svc.clock.now()
         progress = [m for m in drain(q) if m["type"] == "progress"]
-        assert progress and progress[-1]["total"] == 40
+        assert progress and progress[-1]["total"] == 38  # Jan 5 to Mar 2, less MLK Day and Presidents' Day
 
         action, _ = await svc.goto(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), new_future=True)
         assert action == "rewind"

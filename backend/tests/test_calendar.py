@@ -4,7 +4,10 @@ from paper_trade.market.calendar import (
     MARKET_TZ,
     SESSION_SECONDS,
     add_trading_seconds,
+    is_trading_day,
     next_trading_day,
+    nyse_holidays,
+    previous_trading_day,
     session_seconds,
     snap,
     trading_days_between,
@@ -99,3 +102,26 @@ def test_previous_trading_day() -> None:
 
     assert previous_trading_day(date(2026, 1, 12)) == date(2026, 1, 9)  # Monday -> Friday
     assert previous_trading_day(date(2026, 1, 7)) == date(2026, 1, 6)
+
+
+def test_nyse_holidays_match_the_published_calendars() -> None:
+    assert [d.isoformat() for d in nyse_holidays(2026)] == [
+        "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+        "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    ]  # fmt: skip
+    # Weekend rules: Saturday holidays move to Friday, Sunday ones to Monday; but a
+    # Saturday New Year's Day isn't observed. Juneteenth since 2022.
+    assert date(2027, 12, 24) in nyse_holidays(2027) and date(2027, 7, 5) in nyse_holidays(2027)
+    assert date(2021, 12, 31) not in nyse_holidays(2021) and date(2022, 1, 1) not in nyse_holidays(2022)
+    assert all(d.month != 6 for d in nyse_holidays(2021))
+    assert date(2027, 3, 26) in nyse_holidays(2027)  # Good Friday
+
+
+def test_holidays_are_skipped() -> None:
+    assert not is_trading_day(date(2026, 11, 26))
+    assert next_trading_day(date(2026, 11, 25)) == date(2026, 11, 27)
+    assert previous_trading_day(date(2026, 1, 20)) == date(2026, 1, 16)  # over MLK Day
+    assert snap(et(2026, 7, 3, 12, 0)) == et(2026, 7, 6, 9, 30)
+    # The close before a holiday weekend continues at the next open.
+    assert add_trading_seconds(et(2026, 4, 2, 15, 59), 60) == et(2026, 4, 6, 9, 30)
+    assert trading_days_between(date(2026, 12, 23), date(2026, 12, 28)) == 2  # Dec 24 and 28

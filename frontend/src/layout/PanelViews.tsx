@@ -1,10 +1,15 @@
-import { type ReactNode, useMemo } from 'react'
+import type { IDockviewPanelProps } from 'dockview-react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Orders, Positions } from '../components/AccountViews'
+import { OptionChain } from '../components/OptionChain'
 import { OrderTicket } from '../components/OrderTicket'
 import { Placeholder } from '../components/Panel'
 import { PriceChart } from '../components/PriceChart'
 import { QuoteDetail } from '../components/QuoteDetail'
 import { Watchlist } from '../components/Watchlist'
+import { fetchExpirations } from '../lib/api'
+import { pickExpiration } from '../lib/options'
+import type { Expiration } from '../lib/types'
 import { useAppData } from './appDataContext'
 
 // The workspace panels. Each fills its dockview panel and scrolls on its own.
@@ -73,6 +78,71 @@ export function TicketView() {
   const { tick, quotes, orders, selected } = useAppData()
   const quote = quotes.get(selected)
   return <Frame label="Order Entry">{quote && tick ? <OrderTicket quote={quote} account={tick.account} orders={orders} /> : waiting}</Frame>
+}
+
+export function OptionsView({ api }: IDockviewPanelProps) {
+  const { tick, selected, chain, setChainRequest } = useAppData()
+  const shown = usePanelShown(api)
+  const [wanted, setWanted] = useState<string | null>(null)
+  const expirations = useExpirations(selected, tick?.clock.session_open, tick?.clock.timeline)
+  const expiration = pickExpiration(expirations, wanted)
+
+  // Stream the chain only while the panel is showing (not collapsed to its edge).
+  useEffect(() => {
+    setChainRequest(shown && expiration ? { symbol: selected, expiration } : null)
+  }, [shown, selected, expiration, setChainRequest])
+  useEffect(() => () => setChainRequest(null), [setChainRequest])
+
+  const current = chain && chain.symbol === selected && chain.expiration === expiration ? chain : null
+  return (
+    <Frame label="Options">
+      {tick ? (
+        <OptionChain symbol={selected} expirations={expirations} expiration={expiration} onExpiration={setWanted} chain={current} />
+      ) : (
+        waiting
+      )}
+    </Frame>
+  )
+}
+
+/** Whether a panel is showing: dockview hides a collapsed panel's group. */
+function usePanelShown(api: IDockviewPanelProps['api']): boolean {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      // Follow the group the panel is in now (moving a panel puts it in another).
+      let groupSub = api.group?.api.onDidVisibilityChange(onChange)
+      const subs = [
+        api.onDidVisibilityChange(onChange),
+        api.onDidGroupChange(() => {
+          groupSub?.dispose()
+          groupSub = api.group?.api.onDidVisibilityChange(onChange)
+          onChange()
+        }),
+      ]
+      return () => {
+        subs.forEach((s) => s.dispose())
+        groupSub?.dispose()
+      }
+    },
+    [api],
+  )
+  return useSyncExternalStore(subscribe, () => api.isVisible && (api.group?.api.isVisible ?? true))
+}
+
+/** A symbol's open expirations, again whenever the trading day or the timeline changes. */
+function useExpirations(symbol: string, sessionOpen: string | undefined, timeline: number | undefined): Expiration[] {
+  const [loaded, setLoaded] = useState<{ symbol: string; list: Expiration[] }>({ symbol: '', list: [] })
+  useEffect(() => {
+    if (sessionOpen === undefined) return
+    let live = true
+    fetchExpirations(symbol)
+      .then((list) => live && setLoaded({ symbol, list }))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [symbol, sessionOpen, timeline])
+  return loaded.symbol === symbol ? loaded.list : []
 }
 
 export function PositionsView() {

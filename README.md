@@ -14,7 +14,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - **Volatility clusters:** a big day, a drop especially, is followed by turbulent days that calm down gradually. A stock stays jumpy for a while after its own big moves (earnings, news) too.
 - **Fat tails:** overnight gaps are occasionally large; stocks gap on **earnings** four times a year (on a fixed quarterly schedule, with heavier volume that day), jump on news now and then, and the whole market sometimes sells off at the open.
 - Within a day, prices move most just after the open and pick up again into the close. **Volume** is heavier on big moves and after news, and **spreads widen** when the market is volatile (at the open, in volatile spells, after selloffs).
-- **Session hours, without the wait:** the market trades 9:30 AM–4:00 PM ET, Monday–Friday. At the close it continues straight from the next session's open (with an overnight gap), so whenever you use the app the market is open. Exchange holidays are not modeled.
+- **Session hours, without the wait:** the market trades 9:30 AM–4:00 PM ET, Monday–Friday, except NYSE holidays (New Year's Day, MLK Day, Presidents' Day, Good Friday, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving, Christmas). At the close it continues straight from the next session's open (with an overnight gap), so whenever you use the app the market is open. Early closes (1:00 PM around some holidays) are full sessions here.
 - Use the top-bar controls to pause or run at 1×, 10×, 60× or 600×.
 - **Real prices:** with free Alpaca API keys (see [Real prices](#real-prices)), **Go to… → Sync to real prices…** moves the market to the latest real closes and continues from there; new markets start from them too. The simulation moves prices randomly afterwards, so they drift from real ones over time.
 - **Go to…** jumps to any date and time:
@@ -40,6 +40,15 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - **Look up a symbol from anywhere:** just start typing a ticker (or press **/**), then **Enter** shows it in the chart and order entry. Clicking the symbol in the quote line does the same. (F stays full screen.)
 - **The quote line** shows bid and ask with their sizes, the day's range as a bar, volume, spread, the 52-week range and average volume (from the history), open and previous close. What doesn't fit a narrow chart is dropped from the right.
 - The browser only receives quotes for what's on screen (the watchlist, the selected symbol and your positions), and only rows whose quote changed are redrawn.
+
+## Options
+
+- The **Options** panel (bottom edge by default; open it from its tab) shows the selected symbol's **option chain**: calls on the left, puts on the right, strikes in the middle, in-the-money options shaded and a line at the current price. It follows the symbol you pick anywhere in the app.
+- **Expirations:** SPY, QQQ and IWM have daily expirations for two weeks; every symbol has Friday weeklies for six weeks, monthlies (third Friday) for a year and January expirations two years out. When a Friday is a holiday, that week's options expire on Thursday. The picker shows days left and the kind (D daily, W weekly, M monthly).
+- **Columns** (⋯, saved in your browser, the same on both sides): bid, ask, mark, implied volatility, delta, gamma, theta (per day), vega (per volatility point), rho, volume and open interest. Choose how many strikes to show around the price.
+- **How prices are made** (there's no real options data): Black-Scholes at a 4% rate with no dividends. Implied volatility starts from the stock's own current volatility in the simulation (higher in turbulent markets) and drifts back to normal for longer expirations; out-of-the-money puts are dearer (most for the index funds); an expiration that spans an earnings date carries the earnings move, so its implied volatility drops the day after the report. Bids and asks sit on penny or nickel ticks, wider far from the money and for long expirations. Volume and open interest are made up, for show.
+- The header shows the at-the-money implied volatility and the **expected move** by expiration (one standard deviation).
+- Options can't be traded yet (Phase 8 adds trading, expiration, exercise and assignment).
 
 ## Charts
 
@@ -107,8 +116,8 @@ cd frontend && npm test
 | 5.8 | Sync to real prices | Done |
 | 5.9 | Real prices from Alpaca: all symbols in one request, refreshed every 15 minutes (replaces Alpha Vantage's 25 requests a day) | Done |
 | 6 | Watchlists and quotes: named lists, columns, sorting, sparklines, symbol lookup, fuller quote | Done |
-| 7 | Options chain with Greeks | |
-| 8 | Option expiration, exercise, assignment | |
+| 7 | Options chain with Greeks, exchange holidays | Done |
+| 8 | Option trading, expiration, exercise, assignment | |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |
 | 11 | Analysis tools: screener, portfolio analytics, journal | |

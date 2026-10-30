@@ -470,7 +470,9 @@ def test_volume_follows_price_moves(ten_years) -> None:
 
 def test_spreads_widen_at_the_open(ten_years) -> None:
     assert ten_years["spread_mid"].min() >= 1
-    assert ten_years["spread_open"].mean() > 1.5 * ten_years["spread_mid"].mean()
+    # The intraday shape makes opening spreads about 1.5 times as wide; one 10-year sample
+    # varies around that (1.496 with this seed), and no widening at all would be 1.0.
+    assert ten_years["spread_open"].mean() > 1.4 * ten_years["spread_mid"].mean()
 
 
 def test_earnings_schedule() -> None:

@@ -4,11 +4,14 @@ Every message is tagged with a `type`: `tick` (clock, quotes, account),
 `orders`, `watchlists`, and progress messages for fast-forwards and the history
 build. A client can send {"type": "subscribe", "symbols": [...]} to receive only
 those symbols' quotes in its ticks (until then, it gets every symbol); it gets
-a tick with them straight away.
+a tick with them straight away. Adding "chain": {"symbol", "expiration"} also
+puts that option chain in its ticks of the current market (as `chain`; null if
+there's no such expiration, e.g. it just expired; absent from a tick sent late).
 """
 
 import contextlib
 import json
+from datetime import date
 
 import anyio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -24,11 +27,22 @@ async def stream(ws: WebSocket) -> None:
     svc: MarketService = ws.app.state.market
     queue = svc.subscribe()
     symbols: set[str] | None = None  # quotes this client wants (None: all)
+    chain: tuple[str, date] | None = None  # the option chain it shows, if any
 
     def only_subscribed(msg: dict) -> dict:
-        if msg["type"] != "tick" or symbols is None:
+        if msg["type"] != "tick" or (symbols is None and chain is None):
             return msg
-        return {**msg, "quotes": [q for q in msg["quotes"] if q["symbol"] in symbols]}
+        out = dict(msg)
+        if symbols is not None:
+            out["quotes"] = [q for q in msg["quotes"] if q["symbol"] in symbols]
+        # The chain is computed now, so it only goes with a tick of the current market
+        # (not one queued from earlier, nor during a jump); the client keeps the last one.
+        if chain is not None and not svc.jumping and msg["clock"]["time"] == svc.engine.time.isoformat():
+            try:
+                out["chain"] = svc.option_chain(*chain)
+            except ValueError:
+                out["chain"] = None
+        return out
 
     try:
         # A task group (not bare asyncio tasks) so that when either side ends, or the
@@ -38,7 +52,7 @@ async def stream(ws: WebSocket) -> None:
             async def receive() -> None:
                 # Ends when the client goes away, even if no ticks are flowing because
                 # the market is paused.
-                nonlocal symbols
+                nonlocal symbols, chain
                 with contextlib.suppress(WebSocketDisconnect):
                     while (event := await ws.receive())["type"] != "websocket.disconnect":
                         try:
@@ -47,6 +61,7 @@ async def stream(ws: WebSocket) -> None:
                             continue
                         if isinstance(msg, dict) and msg.get("type") == "subscribe" and isinstance(msg.get("symbols"), list):
                             symbols = {s for s in msg["symbols"] if isinstance(s, str)}
+                            chain = _chain_request(msg.get("chain"))
                             # Right away, even while paused (no ticks flowing); during a jump
                             # the final state comes when it ends.
                             if not svc.jumping:
@@ -65,3 +80,11 @@ async def stream(ws: WebSocket) -> None:
     finally:
         svc.unsubscribe(queue)
 
+
+def _chain_request(raw: object) -> tuple[str, date] | None:
+    if not isinstance(raw, dict) or not isinstance(raw.get("symbol"), str):
+        return None
+    try:
+        return raw["symbol"].upper(), date.fromisoformat(str(raw.get("expiration")))
+    except ValueError:
+        return None

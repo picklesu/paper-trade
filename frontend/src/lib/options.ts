@@ -1,4 +1,4 @@
-import type { ChainCalibration, ChainSide, Expiration } from './types'
+import type { ChainCalibration, ChainSide, Expiration, Side } from './types'
 
 export type ChainColumnId = keyof ChainSide
 
@@ -74,6 +74,33 @@ export function expirationLabel(e: Expiration): string {
   const [y, m, d] = e.date.split('-').map(Number)
   const day = new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   return `${day} '${String(y).slice(2)} (${e.days === 0 ? 'today' : `${e.days}d`}) ${KIND_LETTER[e.kind]}`
+}
+
+/** The OCC symbol of a contract, e.g. AAPL261120C00230000. */
+export function occSymbol(underlying: string, expiration: string, right: 'call' | 'put', strike: number): string {
+  const [y, m, d] = expiration.split('-')
+  return `${underlying}${y.slice(2)}${m}${d}${right === 'call' ? 'C' : 'P'}${String(Math.round(strike * 1000)).padStart(8, '0')}`
+}
+
+/** The contract an OCC symbol names; null if it isn't one. */
+export function parseOcc(symbol: string): { underlying: string; expiration: string; right: 'call' | 'put'; strike: number } | null {
+  const m = /^([A-Z.]+)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/.exec(symbol)
+  if (!m) return null
+  return { underlying: m[1], expiration: `20${m[2]}-${m[3]}-${m[4]}`, right: m[5] === 'C' ? 'call' : 'put', strike: Number(m[6]) / 1000 }
+}
+
+/** "AAPL Nov 20 '26 230 Call", as the server labels contracts. */
+export function contractLabel(underlying: string, expiration: string, right: 'call' | 'put', strike: number): string {
+  const [y, m, d] = expiration.split('-').map(Number)
+  const month = new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short' })
+  return `${underlying} ${month} ${d} '${String(y).slice(2)} ${strike} ${right === 'call' ? 'Call' : 'Put'}`
+}
+
+/** "Buy to open", "Sell to close", "Sell to open (covered call)"... from what's held. */
+export function optionAction(side: Side, held: number, right: 'call' | 'put'): string {
+  if (side === 'buy') return held < 0 ? 'Buy to close' : 'Buy to open'
+  if (held > 0) return 'Sell to close'
+  return right === 'call' ? 'Sell to open (covered call)' : 'Sell to open (cash-secured put)'
 }
 
 const percent = (v: number) => `${(v * 100).toFixed(1)}%`

@@ -94,7 +94,15 @@ export function marketStamp(iso: string): string {
   return `${day} ${marketTime(iso)}`
 }
 
-const TYPE_LABEL = { market: 'Market', limit: 'Limit', stop: 'Stop', stop_limit: 'Stop limit' } as const
+const TYPE_LABEL = {
+  market: 'Market',
+  limit: 'Limit',
+  stop: 'Stop',
+  stop_limit: 'Stop limit',
+  exercise: 'Exercise',
+  assignment: 'Assignment',
+  expiration: 'Expiration',
+} as const
 
 /** "Limit 580.00", "Stop 570.00", "Stop limit 570.00 / 571.00", "Market". */
 export function orderTypeLabel(o: { type: keyof typeof TYPE_LABEL; limit_price: number | null; stop_price: number | null }): string {

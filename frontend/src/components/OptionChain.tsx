@@ -6,6 +6,7 @@ import {
   type ChainColumnId,
   DEFAULT_CHAIN_COLUMNS,
   expirationLabel,
+  occSymbol,
   priceRow,
   sanitizeChainColumns,
   STRIKE_COUNTS,
@@ -14,7 +15,7 @@ import {
 } from '../lib/options'
 import { price } from '../lib/format'
 import { useStoredState } from '../lib/storage'
-import type { Expiration, OptionChain as Chain } from '../lib/types'
+import type { Expiration, OptionChain as Chain, Side } from '../lib/types'
 
 interface Props {
   symbol: string
@@ -23,11 +24,13 @@ interface Props {
   onExpiration: (date: string) => void
   /** The chain for `symbol` and `expiration` (null while it loads). */
   chain: Chain | null
+  /** A bid (sell) or ask (buy) was clicked: trade that contract at that price. */
+  onTrade?: (symbol: string, side: Side, price: number) => void
 }
 
 /** Calls on the left, puts on the right, strikes in the middle; in-the-money options
  *  shaded and a line where the price is. */
-export function OptionChain({ symbol, expirations, expiration, onExpiration, chain }: Props) {
+export function OptionChain({ symbol, expirations, expiration, onExpiration, chain, onTrade }: Props) {
   const [columns, setColumns] = useStoredState<ChainColumnId[]>('paper-trade.options.columns', DEFAULT_CHAIN_COLUMNS, sanitizeChainColumns)
   const [count, setCount] = useStoredState<number>('paper-trade.options.strikes', 12, (v) => (STRIKE_COUNTS.includes(v as number) ? (v as number) : null))
 
@@ -65,7 +68,7 @@ export function OptionChain({ symbol, expirations, expiration, onExpiration, cha
         )}
         <ColumnsMenu columns={columns} onColumns={setColumns} />
       </div>
-      {chain ? <ChainTable chain={chain} columns={columns} count={count} /> : <p className="muted chain-empty">Loading the chain…</p>}
+      {chain ? <ChainTable chain={chain} columns={columns} count={count} onTrade={onTrade} /> : <p className="muted chain-empty">Loading the chain…</p>}
     </div>
   )
 }
@@ -79,7 +82,7 @@ function CalibrationNote({ chain }: { chain: Chain }) {
   )
 }
 
-function ChainTable({ chain, columns, count }: { chain: Chain; columns: ChainColumnId[]; count: number }) {
+function ChainTable({ chain, columns, count, onTrade }: { chain: Chain; columns: ChainColumnId[]; count: number; onTrade?: Props['onTrade'] }) {
   const scroller = useRef<HTMLDivElement>(null)
   // Center the price line when a different chain or strike count shows (not on every tick).
   useEffect(() => {
@@ -98,13 +101,13 @@ function ChainTable({ chain, columns, count }: { chain: Chain; columns: ChainCol
       <tr key={k}>
         {outward.map((id) => (
           <td key={`c-${id}`} className={k < chain.spot ? 'num itm' : 'num'}>
-            {CHAIN_COLUMN_BY_ID[id].format(chain.call[id][i])}
+            <Cell chain={chain} right="call" id={id} i={i} onTrade={onTrade} />
           </td>
         ))}
         <td className="strike">{price(k)}</td>
         {columns.map((id) => (
           <td key={`p-${id}`} className={k > chain.spot ? 'num itm' : 'num'}>
-            {CHAIN_COLUMN_BY_ID[id].format(chain.put[id][i])}
+            <Cell chain={chain} right="put" id={id} i={i} onTrade={onTrade} />
           </td>
         ))}
       </tr>,
@@ -137,6 +140,21 @@ function ChainTable({ chain, columns, count }: { chain: Chain; columns: ChainCol
         <tbody>{rows}</tbody>
       </table>
     </div>
+  )
+}
+
+/** A chain value; a bid or ask is a button that trades at it (sell at the bid, buy at the ask). */
+function Cell({ chain, right, id, i, onTrade }: { chain: Chain; right: 'call' | 'put'; id: ChainColumnId; i: number; onTrade?: Props['onTrade'] }) {
+  const value = chain[right][id][i]
+  const text = CHAIN_COLUMN_BY_ID[id].format(value)
+  if (!onTrade || (id !== 'bid' && id !== 'ask') || value <= 0) return <>{text}</>
+  const side: Side = id === 'ask' ? 'buy' : 'sell'
+  const symbol = occSymbol(chain.symbol, chain.expiration, right, chain.strikes[i])
+  const what = `${side === 'buy' ? 'Buy' : 'Sell'} ${chain.symbol} ${price(chain.strikes[i])} ${right} at ${text}`
+  return (
+    <button type="button" className={`chain-trade ${side}`} title={what} aria-label={what} onClick={() => onTrade(symbol, side, value)}>
+      {text}
+    </button>
   )
 }
 

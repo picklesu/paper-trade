@@ -357,3 +357,24 @@ def test_option_endpoints_and_streamed_chain(client: TestClient) -> None:
         while tick.get("chain", "missing") == chain:
             tick = next_message(ws, "tick")
         assert tick["chain"] is None  # no such expiration
+
+
+def test_trade_and_exercise_options(client: TestClient) -> None:
+    client.post("/api/clock", json={"paused": True})
+    expiry = client.get("/api/options/expirations?symbol=AAPL").json()[2]["date"]
+    chain = client.get(f"/api/options/chain?symbol=AAPL&expiration={expiry}").json()
+    i = min(range(len(chain["strikes"])), key=lambda j: abs(chain["strikes"][j] - chain["spot"] * 0.9))
+    symbol = f"AAPL{expiry[2:4]}{expiry[5:7]}{expiry[8:10]}C{round(chain['strikes'][i] * 1000):08d}"
+    preview = client.post("/api/orders/preview", json={"symbol": symbol, "side": "buy", "qty": 1, "type": "market"}).json()
+    assert preview["option"]["right"] == "call" and preview["effect"] == "open" and preview["max_loss"] > 0
+    order = client.post("/api/orders", json={"symbol": symbol, "side": "buy", "qty": 1, "type": "market"}).json()
+    assert order["status"] == "filled" and order["option"]["strike"] == chain["strikes"][i]
+    row = client.get("/api/account").json()["positions"][0]
+    assert row["option"]["label"].startswith("AAPL ") and row["qty"] == 1
+    ex = client.post("/api/options/exercise/preview", json={"symbol": symbol, "qty": 1}).json()
+    assert ex["shares"] == 100 and ex["warnings"]  # selling would get more than exercising
+    records = client.post("/api/options/exercise", json={"symbol": symbol, "qty": 1}).json()
+    assert [r["type"] for r in records] == ["exercise", "exercise"]
+    assert client.post("/api/options/exercise", json={"symbol": symbol, "qty": 1}).status_code == 422
+    held = {p["symbol"]: p["qty"] for p in client.get("/api/account").json()["positions"]}
+    assert held == {"AAPL": 100}

@@ -1,9 +1,9 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchQuoteStats, fetchSymbols } from '../lib/api'
 import { useStoredState } from '../lib/storage'
 import { type ChainRequest, useStream } from '../lib/stream'
 import type { QuoteStats, SymbolInfo } from '../lib/types'
-import { AppDataContext } from './appDataContext'
+import { AppDataContext, type TicketRequest } from './appDataContext'
 
 const ACTIVE_LIST_KEY = 'paper-trade.watchlist.active'
 
@@ -18,6 +18,11 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [chainRequest, setChainRequest] = useState<ChainRequest | null>(null)
   // The symbol lookup's text while it's open (null: closed).
   const [lookup, setLookup] = useState<string | null>(null)
+  const [ticketRequest, setTicketRequest] = useState<TicketRequest | null>(null)
+  const requestTicket = useCallback(
+    (request: Omit<TicketRequest, 'id'>) => setTicketRequest((last) => ({ ...request, id: (last?.id ?? 0) + 1 })),
+    [],
+  )
   const symbols = useSymbols()
   const stats = useQuoteStats(tick?.clock.session_open, tick?.clock.timeline)
 
@@ -25,7 +30,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
   // Only what's on screen: the watchlist's symbols, the selected one and those held, and
   // the option chain if the Options panel is open.
-  const held = tick?.account.positions.map((p) => p.symbol).join(',') ?? ''
+  // (Options: their underlying's quotes.)
+  const held = tick?.account.positions.map((p) => p.option?.underlying ?? p.symbol).join(',') ?? ''
   const listSymbols = activeList?.symbols.join(',')
   const chainSymbol = chainRequest?.symbol
   const chainExpiration = chainRequest?.expiration
@@ -55,8 +61,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       setLookup,
       chain,
       setChainRequest,
+      ticketRequest,
+      requestTicket,
     }),
-    [status, tick, quotes, progress, orders, history, watchlists, activeList, setActiveListId, symbols, stats, selected, lookup, chain],
+    [status, tick, quotes, progress, orders, history, watchlists, activeList, setActiveListId, symbols, stats, selected, lookup, chain, ticketRequest, requestTicket],
   )
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>
 }

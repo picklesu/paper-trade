@@ -66,6 +66,12 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
         const group = api.getPanel(id)?.group
         place(id, edge, group?.api.isVisible ? 'open' : 'collapsed')
       },
+      show: (id) => {
+        if (!api) return
+        const group = api.getPanel(id)?.group
+        if (!group) place(id, edgeFor(id), 'open')
+        else if (!group.api.isVisible) place(id, edgeFor(id), 'open')
+      },
       reset: () => {
         if (!api) return
         clearLayout()

@@ -44,7 +44,7 @@ export function latestVersion(order: Order, replacedBy: Map<number, Order>): Ord
 
 /** The ticket's sentence about an order, with a tone for coloring. */
 export function describeOrder(o: Order): { text: string; tone: 'ok' | 'info' | 'error' } {
-  const what = `${o.qty.toLocaleString()} ${o.symbol}`
+  const what = `${o.qty.toLocaleString()} ${o.option?.label ?? o.symbol}`
   if (o.status === 'filled') {
     return { text: `${o.side === 'buy' ? 'Bought' : 'Sold'} ${what} at ${price(o.fill_price!)}`, tone: 'ok' }
   }

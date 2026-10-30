@@ -2,7 +2,8 @@
 import { useState } from 'react'
 import { cancelOrder } from '../lib/api'
 import { direction, dollars, marketStamp, orderTypeLabel, percent, price, signedDollars } from '../lib/format'
-import type { Account, Order } from '../lib/types'
+import type { Account, Order, Position } from '../lib/types'
+import { ExerciseDialog } from './ExerciseDialog'
 import { statusText, tifLabel } from '../lib/orders'
 import { ModifyOrderDialog } from './ModifyOrderDialog'
 import { Placeholder } from './Panel'
@@ -28,34 +29,85 @@ export function Positions({ account, onSelect }: { account: Account | null; onSe
 }
 
 function PositionsTable({ account, onSelect }: { account: Account | null; onSelect: (s: string) => void }) {
-  if (!account?.positions.length) return <Placeholder text="No positions. Use the order ticket to buy shares." />
+  const [exercising, setExercising] = useState<Position | null>(null)
+  if (!account?.positions.length) return <Placeholder text="No positions. Use the order ticket to buy shares or options." />
+  const hasOptions = account.positions.some((p) => p.option)
+  // Theta is dollars a day, so it adds up across symbols; delta is in each symbol's shares, so it doesn't.
+  const theta = account.positions.reduce((sum, p) => sum + (p.theta ?? 0), 0)
   return (
-    <table className="grid-table clickable">
-      <thead>
-        <tr>
-          <th>Symbol</th>
-          <th className="num">Qty</th>
-          <th className="num">Avg cost</th>
-          <th className="num">Last</th>
-          <th className="num">Market value</th>
-          <th className="num">Unrealized P&L</th>
-        </tr>
-      </thead>
-      <tbody>
-        {account.positions.map((p) => (
-          <tr key={p.symbol} onClick={() => onSelect(p.symbol)}>
-            <td className="sym">{p.symbol}</td>
-            <td className="num">{p.qty.toLocaleString()}</td>
-            <td className="num">{price(p.avg_cost)}</td>
-            <td className="num">{price(p.last)}</td>
-            <td className="num">{dollars(p.market_value)}</td>
-            <td className={`num ${direction(p.unrealized)}`}>
-              {signedDollars(p.unrealized)} ({percent(p.unrealized_pct)})
-            </td>
+    <>
+      <table className="grid-table clickable">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th className="num">Qty</th>
+            <th className="num">Avg cost</th>
+            <th className="num" title="Options: the mark, between bid and ask">
+              Last
+            </th>
+            <th className="num">Market value</th>
+            <th className="num">Unrealized P&L</th>
+            {hasOptions && (
+              <>
+                <th className="num" title="Share-equivalent delta: how many shares the position moves like">
+                  Delta
+                </th>
+                <th className="num" title="Theta: what the position gains or loses in a day from time passing">
+                  Theta
+                </th>
+                <th />
+              </>
+            )}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {account.positions.map((p) => (
+            <tr key={p.symbol} onClick={() => onSelect(p.option?.underlying ?? p.symbol)}>
+              <td className="sym">{p.option?.label ?? p.symbol}</td>
+              <td className="num" title={p.option ? 'Contracts of 100 shares (negative: sold short)' : undefined}>
+                {p.qty.toLocaleString()}
+              </td>
+              <td className="num">{price(p.avg_cost)}</td>
+              <td className="num">{price(p.last)}</td>
+              <td className="num">{dollars(p.market_value)}</td>
+              <td className={`num ${direction(p.unrealized)}`}>
+                {signedDollars(p.unrealized)} ({percent(p.unrealized_pct)})
+              </td>
+              {hasOptions && (
+                <>
+                  <td className="num">{(p.delta ?? 0).toFixed(0)}</td>
+                  <td className={`num ${direction(p.theta ?? 0)}`}>{p.option ? signedDollars(p.theta ?? 0) : ''}</td>
+                  <td className="row-actions">
+                    {p.option && p.qty > 0 && (
+                      <button
+                        className="ctl"
+                        aria-label={`Exercise ${p.option.label}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setExercising(p)
+                        }}
+                      >
+                        Exercise…
+                      </button>
+                    )}
+                  </td>
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+        {hasOptions && (
+          <tfoot>
+            <tr>
+              <td colSpan={7}>Total theta{account.collateral ? ` · ${dollars(account.collateral)} set aside for short puts` : ''}</td>
+              <td className={`num ${direction(theta)}`}>{signedDollars(theta)}</td>
+              <td />
+            </tr>
+          </tfoot>
+        )}
+      </table>
+      {exercising?.option && <ExerciseDialog position={exercising} onClose={() => setExercising(null)} />}
+    </>
   )
 }
 
@@ -128,7 +180,7 @@ export function Orders({ orders }: { orders: Order[] }) {
             <th>Type</th>
             <th>TIF</th>
             <th>Status</th>
-            <th className="num" title="Profit or loss a filled sell realized against your average cost">
+            <th className="num" title="Profit or loss a closing trade (a sell, or buying back an option sold) realized against your average price">
               P/L
             </th>
             <th>Updated</th>
@@ -140,8 +192,8 @@ export function Orders({ orders }: { orders: Order[] }) {
             <tr key={o.id}>
               <td className="muted">{o.id}</td>
               <td>{marketStamp(o.created_at)}</td>
-              <td className="sym">{o.symbol}</td>
-              <td className={o.side === 'buy' ? 'up' : 'down'}>{o.side === 'buy' ? 'Buy' : 'Sell'}</td>
+              <td className="sym">{o.option?.label ?? o.symbol}</td>
+              <td className={o.side === 'buy' ? 'up' : 'down'}>{sideText(o)}</td>
               <td className="num">{o.qty.toLocaleString()}</td>
               <td>{orderTypeLabel(o)}</td>
               <td>{tifLabel(o.tif, true)}</td>
@@ -169,7 +221,7 @@ export function Orders({ orders }: { orders: Order[] }) {
         {realizedTotal !== null && (
           <tfoot>
             <tr>
-              <td colSpan={8}>Realized P/L of the sells shown</td>
+              <td colSpan={8}>Realized P/L of the closing trades shown</td>
               <td className={`num ${direction(realizedTotal)}`}>{signedDollars(realizedTotal)}</td>
               <td colSpan={2} />
             </tr>
@@ -184,6 +236,12 @@ export function Orders({ orders }: { orders: Order[] }) {
       )}
     </>
   )
+}
+
+/** "Buy", "Sell", or for options "Buy to open", "Sell to close"... */
+function sideText(o: Order): string {
+  const verb = o.side === 'buy' ? 'Buy' : 'Sell'
+  return o.option && o.effect ? `${verb} to ${o.effect}` : verb
 }
 
 /** What a filled order made or lost. A sell realizes P/L against the average cost; a buy only

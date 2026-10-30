@@ -55,20 +55,43 @@ export interface ClockState {
 
 export type Regime = 'calm' | 'normal' | 'volatile'
 
+/** An option contract, as the server describes it. */
+export interface OptionInfo {
+  underlying: string
+  /** "YYYY-MM-DD" */
+  expiration: string
+  right: 'call' | 'put'
+  strike: number
+  /** "AAPL Nov 20 '26 230 Call" */
+  label: string
+}
+
 export interface Position {
+  /** A stock's symbol, or an option's OCC symbol (see `option`). */
   symbol: string
+  /** Shares, or contracts (negative: short). */
   qty: number
+  /** Per share (an option's price per share; a contract is 100). */
   avg_cost: number
+  /** The last price, or an option's mark (between bid and ask). */
   last: number
   market_value: number
   unrealized: number
   unrealized_pct: number
+  /** Share-equivalent delta and dollars a day of theta (older servers send neither). */
+  delta?: number
+  theta?: number
+  option?: OptionInfo
+  bid?: number
+  ask?: number
 }
 
 export interface Account {
   starting_cash: number
   cash: number
   buying_power: number
+  /** Cash securing short puts. */
+  collateral?: number
   net_liq: number
   day_pnl: number
   realized: number
@@ -76,7 +99,8 @@ export interface Account {
 }
 
 export type Side = 'buy' | 'sell'
-export type OrderType = 'market' | 'limit' | 'stop' | 'stop_limit'
+/** Exercise, assignment and expiration are records of what happened to options, not orders placed. */
+export type OrderType = 'market' | 'limit' | 'stop' | 'stop_limit' | 'exercise' | 'assignment' | 'expiration'
 export type TimeInForce = 'day' | 'gtc'
 export type OrderStatus = 'working' | 'filled' | 'canceled' | 'expired' | 'rejected'
 
@@ -98,8 +122,11 @@ export interface Order {
   reason: string | null
   /** The order this one replaced (cancel/replace). */
   replaces: number | null
-  /** The P&L a filled sell realized against the average cost; null for buys and unfilled orders. */
+  /** The P&L a closing fill realized against the average cost; null for opening ones and unfilled orders. */
   realized: number | null
+  /** Options: whether it opens or closes a position, and the contract. */
+  effect?: 'open' | 'close' | null
+  option?: OptionInfo
 }
 
 /** What placing an order would do, from POST /api/orders/preview. */
@@ -123,6 +150,32 @@ export interface OrderPreview {
   position_after: number
   avg_cost_after: number
   estimated_realized: number | null
+  warnings: string[]
+  /** Options only. */
+  option?: OptionInfo
+  effect?: 'open' | 'close'
+  breakeven?: number | null
+  max_loss?: number | null
+  max_gain?: number | null
+  /** Cash a put sold to open sets aside. */
+  collateral?: number
+  /** Shares a call sold to open locks. */
+  shares_locked?: number
+}
+
+/** What exercising long contracts now would do. */
+export interface ExercisePreview {
+  symbol: string
+  option: OptionInfo
+  qty: number
+  /** Shares received (call) or delivered (negative, put). */
+  shares: number
+  strike: number
+  cash_change: number
+  cash_before: number
+  cash_after: number
+  intrinsic: number
+  bid: number
   warnings: string[]
 }
 

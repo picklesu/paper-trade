@@ -213,7 +213,7 @@ describe('App', () => {
     expect(within(row(1)).getByText('—')).toBeInTheDocument()
 
     // The sells shown are added up.
-    expect(within(orders).getByText('Realized P/L of the sells shown').closest('tr')).toHaveTextContent('+$11.82')
+    expect(within(orders).getByText('Realized P/L of the closing trades shown').closest('tr')).toHaveTextContent('+$11.82')
 
     // Filters narrow the list; Filled lists trades in the order they filled, latest first.
     fireEvent.click(within(orders).getByRole('button', { name: 'Filled (3)' }))

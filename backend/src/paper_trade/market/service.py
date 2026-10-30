@@ -9,7 +9,7 @@ from typing import Literal
 
 import numpy as np
 
-from paper_trade.market.calendar import MARKET_TZ, market_day, session_open, snap, trading_days_between
+from paper_trade.market.calendar import MARKET_TZ, market_day, session_close, session_open, snap, trading_days_between
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
@@ -75,7 +75,7 @@ class MarketService:
         self._real_task: asyncio.Task | None = None
         self.watchlists = Watchlists(store, self.symbols)
         self._stats: tuple[tuple, dict] | None = None
-        self._chains: dict[tuple[str, date], tuple[tuple[datetime, int, int], dict]] = {}
+        self._chains: dict[tuple[str, date], tuple[tuple, dict]] = {}
         self._real_lock = asyncio.Lock()
         self.option_data = option_data
         self.calibrations = options.calibrations(option_data.saved) if option_data else {}
@@ -83,6 +83,7 @@ class MarketService:
         self._option_task: asyncio.Task | None = None
         self._option_lock = asyncio.Lock()
         self._prices_tried = asyncio.Event()  # the option sync starts after the first price fetch
+        self.broker.calibration = self.calibration
 
     @property
     def jumping(self) -> bool:
@@ -127,7 +128,12 @@ class MarketService:
     def option_expirations(self, symbol: str) -> list[dict]:
         today = market_day(self.engine.time)
         pattern = self.calibration(symbol).pattern
-        return [e.to_dict(today) for e in options.expirations(symbol, self.engine.time, pattern)]
+        listed = {e.day: e for e in options.expirations(symbol, self.engine.time, pattern)}
+        # Expirations of contracts held stay listed (a new calibration's pattern may drop them).
+        for c in self.broker.held_contracts(symbol):
+            if c.expiry not in listed and session_close(c.expiry) > self.engine.time:
+                listed[c.expiry] = options.Expiration(c.expiry, "weekly")
+        return [listed[d].to_dict(today) for d in sorted(listed)]
 
     def option_chain(self, symbol: str, expiration: date) -> dict:
         """One expiration's chain now (computed once per market time and timeline,
@@ -136,12 +142,13 @@ class MarketService:
         for an unknown symbol or expiration."""
         if symbol not in self.symbols:
             raise ValueError(f"unknown symbol: {symbol}")
-        key, now = (symbol, expiration), (self.engine.time, self.timeline, self._calibration_version)
+        held = frozenset(c.strike for c in self.broker.held_contracts(symbol) if c.expiry == expiration)
+        key, now = (symbol, expiration), (self.engine.time, self.timeline, self._calibration_version, held)
         cached = self._chains.get(key)
         if cached is None or cached[0] != now:
             if len(self._chains) > 16:
                 self._chains.clear()
-            self._chains[key] = (now, options.chain(self.engine, symbol, expiration, self.calibration(symbol)))
+            self._chains[key] = (now, options.chain(self.engine, symbol, expiration, self.calibration(symbol), set(held)))
         return self._chains[key][1]
 
     def watchlists_changed(self) -> None:

@@ -5,8 +5,8 @@ Every message is tagged with a `type`: `tick` (clock, quotes, account),
 build. A client can send {"type": "subscribe", "symbols": [...]} to receive only
 those symbols' quotes in its ticks (until then, it gets every symbol); it gets
 a tick with them straight away. Adding "chain": {"symbol", "expiration"} also
-puts that option chain in each of its ticks (as `chain`; null if there's no
-such expiration, e.g. it just expired).
+puts that option chain in its ticks of the current market (as `chain`; null if
+there's no such expiration, e.g. it just expired; absent from a tick sent late).
 """
 
 import contextlib
@@ -35,7 +35,9 @@ async def stream(ws: WebSocket) -> None:
         out = dict(msg)
         if symbols is not None:
             out["quotes"] = [q for q in msg["quotes"] if q["symbol"] in symbols]
-        if chain is not None:
+        # The chain is computed now, so it only goes with a tick of the current market
+        # (not one queued from earlier, nor during a jump); the client keeps the last one.
+        if chain is not None and not svc.jumping and msg["clock"]["time"] == svc.engine.time.isoformat():
             try:
                 out["chain"] = svc.option_chain(*chain)
             except ValueError:

@@ -36,7 +36,7 @@ def _easter(year: int) -> date:
     return date(year, month, day + 1)
 
 
-def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+def nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
     """The `n`th `weekday` (0 = Monday) of the month; n = -1 for the last."""
     if n > 0:
         first = date(year, month, 1)
@@ -59,14 +59,14 @@ def nyse_holidays(year: int) -> list[date]:
     days = [
         # New Year's Day on a Saturday isn't observed (the Friday before ends a year).
         _observed(date(year, 1, 1), saturday_to_friday=False),
-        _nth_weekday(year, 1, 0, 3),  # Martin Luther King Jr. Day
-        _nth_weekday(year, 2, 0, 3),  # Washington's Birthday
+        nth_weekday(year, 1, 0, 3),  # Martin Luther King Jr. Day
+        nth_weekday(year, 2, 0, 3),  # Washington's Birthday
         _easter(year) - timedelta(days=2),  # Good Friday
-        _nth_weekday(year, 5, 0, -1),  # Memorial Day
+        nth_weekday(year, 5, 0, -1),  # Memorial Day
         _observed(date(year, 6, 19)) if year >= 2022 else None,  # Juneteenth
         _observed(date(year, 7, 4)),  # Independence Day
-        _nth_weekday(year, 9, 0, 1),  # Labor Day
-        _nth_weekday(year, 11, 3, 4),  # Thanksgiving
+        nth_weekday(year, 9, 0, 1),  # Labor Day
+        nth_weekday(year, 11, 3, 4),  # Thanksgiving
         _observed(date(year, 12, 25)),  # Christmas
     ]
     return [d for d in days if d is not None]

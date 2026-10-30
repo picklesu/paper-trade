@@ -33,13 +33,16 @@ export const DEFAULT_CHAIN_COLUMNS: ChainColumnId[] = ['bid', 'ask', 'iv', 'delt
 export function sanitizeChainColumns(raw: unknown): ChainColumnId[] | null {
   if (!Array.isArray(raw)) return null
   const ids = raw.filter((c): c is ChainColumnId => typeof c === 'string' && c in CHAIN_COLUMN_BY_ID)
-  return ids.length || raw.length === 0 ? [...new Set(ids)] : null
+  return ids.length ? [...new Set(ids)] : null // none: the defaults
 }
 
+/** Turn a column on or off; the last one stays (a chain of bare strikes shows nothing). */
 export function toggleChainColumn(columns: ChainColumnId[], id: ChainColumnId): ChainColumnId[] {
   const on = new Set(columns)
-  if (on.has(id)) on.delete(id)
-  else on.add(id)
+  if (on.has(id)) {
+    if (on.size === 1) return columns
+    on.delete(id)
+  } else on.add(id)
   return CHAIN_COLUMNS.map((c) => c.id).filter((c) => on.has(c))
 }
 

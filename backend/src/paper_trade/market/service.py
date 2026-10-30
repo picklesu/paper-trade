@@ -71,7 +71,7 @@ class MarketService:
         self._real_task: asyncio.Task | None = None
         self.watchlists = Watchlists(store, self.symbols)
         self._stats: tuple[tuple, dict] | None = None
-        self._chains: dict[tuple[str, date], tuple[datetime, dict]] = {}
+        self._chains: dict[tuple[str, date], tuple[tuple[datetime, int], dict]] = {}
         self._real_lock = asyncio.Lock()
 
     @property
@@ -116,16 +116,17 @@ class MarketService:
         return [e.to_dict(today) for e in options.expirations(symbol, self.engine.time)]
 
     def option_chain(self, symbol: str, expiration: date) -> dict:
-        """One expiration's chain now (computed once per market time, however
-        many clients show it). Raises ValueError for an unknown symbol or expiration."""
+        """One expiration's chain now (computed once per market time and timeline,
+        however many clients show it: a new future can come back to the same time
+        with other prices). Raises ValueError for an unknown symbol or expiration."""
         if symbol not in self.symbols:
             raise ValueError(f"unknown symbol: {symbol}")
-        key = (symbol, expiration)
+        key, now = (symbol, expiration), (self.engine.time, self.timeline)
         cached = self._chains.get(key)
-        if cached is None or cached[0] != self.engine.time:
+        if cached is None or cached[0] != now:
             if len(self._chains) > 16:
                 self._chains.clear()
-            self._chains[key] = (self.engine.time, options.chain(self.engine, symbol, expiration))
+            self._chains[key] = (now, options.chain(self.engine, symbol, expiration))
         return self._chains[key][1]
 
     def watchlists_changed(self) -> None:

@@ -191,20 +191,21 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     Alpaca's response format was checked against the official alpaca-py SDK (the docs site blocks
     scripts). Old store keys `real_prices_usage`/`_attempts`/`_pause` from 5.8 are deleted on load.
   - `market/options.py` (7): `expirations(symbol, now)` (dailies for SPY/QQQ/IWM over 10
-    trading days, Friday weeklies 6 weeks, third-Friday monthlies 12 months, January LEAPS 2
-    years; holiday → the trading day before; today's drops at the close), `strikes` (standard
+    trading days, Friday weeklies 6 weeks, third-Friday monthlies 12 months, the next 2 Januaries after
+    them (LEAPS); holiday → the trading day before; today's drops at the close), `strikes` (standard
     steps by price, doubled past 60 days; ±3 sd, at least ±12%, at most ±0.9 in log terms, ≤160),
     `atm_variance` (today's vol = spec vol × `engine.vol_ratio()` [market GARCH variance × regime
     for the ρ² part, own variance × regime for the rest] reverting to normal at κ=4/yr, plus
     `earnings_move²` per report between tomorrow and expiry: the IV crush is that term vanishing),
     `smile` (SSVI: ρ −0.7 index funds, −0.35 stocks, +0.1 GLD, −0.15 TLT; η 1.1/0.9; γ 0.5),
-    `black_scholes` (vectorized; erf via `np.frompyfunc(math.erf)`; theta per day, vega/rho per
+    `black_scholes` (vectorized; normal CDF by Zelen-Severo, error <1e-7; theta per day, vega/rho per
     point; RATE 4%, no dividends), `quote_prices` (ticks: pennies for SPY/QQQ/IWM and under $3,
     else nickels; width 1%/2% of price × (1..3 by |Δ|) × (1+0.3 yrs) × the stock's spread
     factor), `activity` (made-up OI anchored to the previous close, steady all day; volume grows
     with the session), `chain(engine, symbol, expiry)` (columns: strikes, call/put lists).
     Engine helpers: `vol_ratio`, `earnings_days(spec, start, end)`. `MarketService.option_chain`
-    caches per market time; `GET /api/options/expirations?symbol=`,
+    caches per (market time, timeline); chains ride only on ticks of the current market (not late
+    or mid-jump ones; the browser keeps the last); `GET /api/options/expirations?symbol=`,
     `GET /api/options/chain?symbol=&expiration=`; a stream subscription may add
     `"chain": {symbol, expiration}` and its ticks then carry `chain` (null if no such expiration).
   - `watchlists.py` (6): `Watchlists`, named lists in the store's `watchlists` key (`next_id`,
@@ -383,7 +384,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 230 (pytest), frontend 145 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 231 (pytest), frontend 145 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

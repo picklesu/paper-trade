@@ -147,17 +147,27 @@ export const Workspace = memo(function Workspace() {
     disposeFromJSON.current = () => afterLoad.dispose()
     let saved = loadLayout(new Set(Object.keys(COMPONENTS)))
     try {
-      if (saved) {
-        api.fromJSON(saved)
-        for (const id of panelsAddedSinceSave(SIDE_PANELS)) addCollapsed(api, id as PanelId)
-      } else buildDefaultLayout(api)
+      if (saved) api.fromJSON(saved)
+      else buildDefaultLayout(api)
     } catch {
       // A saved layout from an older version, or corrupted: start from the default.
       saved = null
       clearLayout()
       buildDefaultLayout(api)
     }
-    if (saved) collapseEmptyEdges(api)
+    if (saved) {
+      // Panels the app gained since the layout was saved come in collapsed. A problem
+      // there only skips that panel (the Panels menu can still turn it on), never
+      // the user's layout.
+      for (const id of panelsAddedSinceSave(SIDE_PANELS)) {
+        try {
+          addCollapsed(api, id as PanelId)
+        } catch {
+          // Left off.
+        }
+      }
+      collapseEmptyEdges(api)
+    }
     // StrictMode's development double-mount readies a second dockview on the same element.
     disposeSizes.current()
     if (host.current) disposeSizes.current = keepSidePanelSizes(api, host.current, saved)

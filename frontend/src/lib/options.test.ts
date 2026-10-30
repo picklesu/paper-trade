@@ -37,7 +37,9 @@ describe('option chain helpers', () => {
   it('keeps columns in order and ignores unusable saved ones', () => {
     expect(toggleChainColumn(['bid', 'ask'], 'delta')).toEqual(['bid', 'ask', 'delta'])
     expect(toggleChainColumn(['oi', 'bid'], 'iv')).toEqual(['bid', 'iv', 'oi'])
+    expect(toggleChainColumn(['iv'], 'iv')).toEqual(['iv']) // the last column stays
     expect(sanitizeChainColumns(['bogus'])).toBeNull()
+    expect(sanitizeChainColumns([])).toBeNull()
     expect(sanitizeChainColumns(['iv', 'iv'])).toEqual(['iv'])
   })
 })

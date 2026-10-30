@@ -24,7 +24,8 @@ def test_expirations_dailies_weeklies_monthlies_and_leaps() -> None:
     spy = days("SPY", et(2026, 1, 14, 12, 0))
     assert spy[:4] == [("2026-01-14", "daily"), ("2026-01-15", "daily"), ("2026-01-16", "monthly"), ("2026-01-20", "daily")]
     assert ("2026-01-19", "daily") not in spy  # MLK Day
-    assert spy[-2:] == [("2027-01-15", "leaps"), ("2028-01-21", "leaps")]
+    assert ("2027-01-15", "monthly") in spy  # inside the year of monthlies
+    assert spy[-2:] == [("2028-01-21", "leaps"), ("2029-01-19", "leaps")]  # the Januaries beyond
     aapl = days("AAPL", et(2026, 1, 14, 12, 0))
     assert aapl[:3] == [("2026-01-16", "monthly"), ("2026-01-23", "weekly"), ("2026-01-30", "weekly")]
     assert all(kind != "daily" for _, kind in aapl)
@@ -63,6 +64,12 @@ def test_black_scholes_parity_and_greeks_match_finite_differences() -> None:
     assert np.allclose(put["theta"], sooner["put"]["price"] - later["put"]["price"], rtol=1e-3)
     higher = o.black_scholes(spot, k, t, vol, rate=o.RATE + 0.01)
     assert np.allclose(call["rho"], higher["call"]["price"] - call["price"], rtol=0.05)
+
+
+def test_normal_cdf_is_accurate() -> None:
+    x = np.linspace(-8, 8, 2001)
+    exact = np.array([0.5 * (1 + math.erf(v / math.sqrt(2))) for v in x])
+    assert np.abs(o._cdf(x) - exact).max() < 1e-7
 
 
 def test_smile_skews_to_puts_most_for_index_funds() -> None:

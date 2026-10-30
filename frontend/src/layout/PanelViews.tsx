@@ -1,5 +1,5 @@
 import type { IDockviewPanelProps } from 'dockview-react'
-import { type ReactNode, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Orders, Positions } from '../components/AccountViews'
 import { OptionChain } from '../components/OptionChain'
 import { OrderTicket } from '../components/OrderTicket'
@@ -107,13 +107,26 @@ export function OptionsView({ api }: IDockviewPanelProps) {
 
 /** Whether a panel is showing: dockview hides a collapsed panel's group. */
 function usePanelShown(api: IDockviewPanelProps['api']): boolean {
-  return useSyncExternalStore(
-    (onChange) => {
-      const subs = [api.onDidVisibilityChange(onChange), api.group?.api.onDidVisibilityChange(onChange)]
-      return () => subs.forEach((s) => s?.dispose())
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      // Follow the group the panel is in now (moving a panel puts it in another).
+      let groupSub = api.group?.api.onDidVisibilityChange(onChange)
+      const subs = [
+        api.onDidVisibilityChange(onChange),
+        api.onDidGroupChange(() => {
+          groupSub?.dispose()
+          groupSub = api.group?.api.onDidVisibilityChange(onChange)
+          onChange()
+        }),
+      ]
+      return () => {
+        subs.forEach((s) => s.dispose())
+        groupSub?.dispose()
+      }
     },
-    () => api.isVisible && (api.group?.api.isVisible ?? true),
+    [api],
   )
+  return useSyncExternalStore(subscribe, () => api.isVisible && (api.group?.api.isVisible ?? true))
 }
 
 /** A symbol's open expirations, again whenever the trading day or the timeline changes. */

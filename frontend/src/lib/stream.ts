@@ -76,7 +76,9 @@ export function useStream() {
           const jumped = timeline.current !== null && timeline.current !== msg.clock.timeline
           timeline.current = msg.clock.timeline
           setQuotes((prev) => mergeQuotes(prev, msg.quotes, jumped))
-          setChain(msg.chain ?? null)
+          // Absent: a tick sent late (the server leaves the chain off); keep the last one.
+          if (msg.chain !== undefined) setChain(msg.chain)
+          else if (!wanted.current?.chain) setChain(null)
           setProgress(null)
         } else if (msg.type === 'progress') {
           setProgress(msg)

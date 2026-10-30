@@ -13,7 +13,7 @@ model price, wider far from the money, for long expirations and when the
 market is volatile. Volume and open interest are made up, for show.
 
 Expirations: daily for SPY, QQQ and IWM over the next two weeks; Fridays for six
-weeks; monthlies (third Friday) for a year; January monthlies two years out.
+weeks; monthlies (third Friday) for a year; then the next two Januaries (LEAPS).
 An expiration on a holiday moves to the trading day before. Options expire at
 the 4:00 PM close.
 """
@@ -26,6 +26,7 @@ import numpy as np
 
 from paper_trade.market.calendar import (
     SESSION_SECONDS,
+    nth_weekday,
     add_trading_days,
     is_trading_day,
     market_day,
@@ -69,8 +70,7 @@ class Expiration:
 
 
 def _third_friday(year: int, month: int) -> date:
-    first = date(year, month, 1)
-    return first + timedelta(days=(4 - first.weekday()) % 7 + 14)
+    return nth_weekday(year, month, 4, 3)
 
 
 def expirations(symbol: str, now: datetime) -> list[Expiration]:
@@ -91,11 +91,16 @@ def expirations(symbol: str, now: datetime) -> list[Expiration]:
     friday = today + timedelta(days=(4 - today.weekday()) % 7)
     for w in range(WEEKLY_WEEKS):
         add(friday + timedelta(weeks=w), "weekly")
+    last_monthly = today
     for m in range(MONTHLY_MONTHS + 1):
         year, month = today.year + (today.month - 1 + m) // 12, (today.month - 1 + m) % 12 + 1
-        add(_third_friday(year, month), "monthly")
-    for y in range(1, LEAPS_YEARS + 1):
-        add(_third_friday(today.year + y, 1), "leaps")
+        last_monthly = _third_friday(year, month)
+        add(last_monthly, "monthly")
+    # LEAPS: the next Januaries beyond the monthlies.
+    year = last_monthly.year + 1
+    for _ in range(LEAPS_YEARS):
+        add(_third_friday(year, 1), "leaps")
+        year += 1
     # Drop any that expired earlier today (the close has passed).
     return [Expiration(d, found[d]) for d in sorted(found) if session_close(d) > now]
 
@@ -150,11 +155,14 @@ def smile(theta: float, k: np.ndarray, symbol: str) -> np.ndarray:
     return theta / 2 * (1 + rho * phi * k + np.sqrt((phi * k + rho) ** 2 + 1 - rho**2))
 
 
-_erf = np.frompyfunc(math.erf, 1, 1)
-
-
 def _cdf(x: np.ndarray) -> np.ndarray:
-    return 0.5 * (1 + _erf(x / math.sqrt(2)).astype(float))
+    """The standard normal CDF, vectorized: Zelen and Severo's approximation
+    (Abramowitz and Stegun 26.2.17), accurate to 7.5e-8, a hundredth of a cent
+    even on a $1,000 stock."""
+    t = 1 / (1 + 0.2316419 * np.abs(x))
+    poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+    upper = _pdf(x) * poly  # P(Z > |x|)
+    return np.where(x >= 0, 1 - upper, upper)
 
 
 def _pdf(x: np.ndarray) -> np.ndarray:

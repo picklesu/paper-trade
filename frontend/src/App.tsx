@@ -1,3 +1,4 @@
+import { SymbolLookup } from './components/SymbolLookup'
 import { TopBar } from './components/TopBar'
 import { AppDataProvider } from './layout/AppData'
 import { useAppData } from './layout/appDataContext'
@@ -27,6 +28,7 @@ function Shell() {
       <main className="workspace">
         <Workspace />
       </main>
+      <SymbolLookup />
     </div>
   )
 }

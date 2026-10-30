@@ -33,6 +33,7 @@ FINE_MINUTES = {"1m": 1, "5m": 5, "15m": 15}
 # How many sessions back the finer bars go (they're computed on request).
 FINE_LOOKBACK_DAYS = {"1m": 60, "5m": 252, "15m": 252}
 MAX_COUNT = 2000
+AVG_VOLUME_DAYS = 30  # sessions in the average daily volume
 BATCH_ROWS = 50_000  # rows per commit: about 100 sessions of 40 symbols
 
 Bar = list[float]
@@ -165,6 +166,41 @@ class History:
         return out
 
     # ----- queries ---------------------------------------------------------------------
+
+    def quote_stats(self) -> dict[str, dict]:
+        """Each symbol's 52-week high and low and average daily volume over the
+        last AVG_VOLUME_DAYS sessions, from finished sessions before today (the
+        UI folds in today's own range). Symbols with no stored history are left out."""
+        self.flush()
+        today = market_day(self.engine.time)
+        year_ago = (today - timedelta(weeks=52)).isoformat()
+        days = [
+            d
+            for (d,) in self.db.execute(
+                "SELECT DISTINCT day FROM bars30 WHERE day < ? ORDER BY day DESC LIMIT ?",
+                (today.isoformat(), AVG_VOLUME_DAYS),
+            )
+        ]
+        if not days:
+            return {}
+        ranges = self.db.execute(
+            "SELECT symbol, MAX(h), MIN(l) FROM bars30 WHERE day >= ? AND day < ? GROUP BY symbol",
+            (year_ago, today.isoformat()),
+        )
+        volumes = dict(
+            self.db.execute(
+                "SELECT symbol, SUM(v) FROM bars30 WHERE day >= ? AND day < ? GROUP BY symbol",
+                (days[-1], today.isoformat()),
+            ).fetchall()
+        )
+        return {
+            symbol: {
+                "high_52w": round(high, 2),
+                "low_52w": round(low, 2),
+                "avg_volume": int(volumes.get(symbol, 0) / len(days)),
+            }
+            for symbol, high, low in ranges
+        }
 
     def bars(self, symbol: str, interval: str, end: datetime | None = None, count: int = 500) -> dict:
         """Up to `count` bars, oldest first, and whether older bars exist.

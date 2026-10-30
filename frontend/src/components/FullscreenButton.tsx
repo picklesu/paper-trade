@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
-
-const typing = (el: EventTarget | null) =>
-  el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))
+import { typing } from '../lib/keyboard'
 
 /** Full screen hides the OS and browser bars, which can take 100px or more from the chart.
  *  F toggles it too (Esc leaves, as browsers always allow). */

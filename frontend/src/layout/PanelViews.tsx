@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useMemo } from 'react'
 import { Orders, Positions } from '../components/AccountViews'
 import { OrderTicket } from '../components/OrderTicket'
 import { Placeholder } from '../components/Panel'
@@ -22,13 +22,19 @@ function Frame({ label, children }: { label: string; children: ReactNode }) {
 const waiting = <Placeholder text="Waiting for market data…" />
 
 export function ChartView() {
-  const { tick, orders, history, selected } = useAppData()
-  const quote = tick?.quotes.find((q) => q.symbol === selected)
+  const { tick, quotes, stats, orders, history, selected, setLookup } = useAppData()
+  const quote = quotes.get(selected)
   return (
     <Frame label="Chart">
       {quote && tick ? (
         <div className="chart-panel">
-          <PriceChart quote={quote} clock={tick.clock} orders={orders} history={history} header={<QuoteDetail quote={quote} />} />
+          <PriceChart
+            quote={quote}
+            clock={tick.clock}
+            orders={orders}
+            history={history}
+            header={<QuoteDetail quote={quote} stats={stats[selected]} onLookup={() => setLookup('')} />}
+          />
         </div>
       ) : (
         waiting
@@ -38,15 +44,34 @@ export function ChartView() {
 }
 
 export function WatchlistView() {
-  const { tick, selected, setSelected } = useAppData()
+  const { tick, quotes, stats, watchlists, activeList, setActiveListId, symbols, selected, setSelected } = useAppData()
+  const positions = tick?.account.positions
+  const held = useMemo(() => new Map((positions ?? []).map((p) => [p.symbol, p.qty])), [positions])
   return (
-    <Frame label="Watchlist">{tick?.quotes.length ? <Watchlist quotes={tick.quotes} selected={selected} onSelect={setSelected} /> : waiting}</Frame>
+    <Frame label="Watchlist">
+      {tick && watchlists && activeList ? (
+        <Watchlist
+          lists={watchlists}
+          list={activeList}
+          onPickList={setActiveListId}
+          quotes={quotes}
+          stats={stats}
+          held={held}
+          symbols={symbols}
+          clock={tick.clock}
+          selected={selected}
+          onSelect={setSelected}
+        />
+      ) : (
+        waiting
+      )}
+    </Frame>
   )
 }
 
 export function TicketView() {
-  const { tick, orders, selected } = useAppData()
-  const quote = tick?.quotes.find((q) => q.symbol === selected)
+  const { tick, quotes, orders, selected } = useAppData()
+  const quote = quotes.get(selected)
   return <Frame label="Order Entry">{quote && tick ? <OrderTicket quote={quote} account={tick.account} orders={orders} /> : waiting}</Frame>
 }
 

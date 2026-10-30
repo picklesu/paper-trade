@@ -11,6 +11,29 @@ export interface Quote {
   change: number
   change_pct: number
   volume: number
+  /** Shares shown at the bid and ask (simulated, for show). */
+  bid_size: number
+  ask_size: number
+}
+
+/** 52-week range and average daily volume, from finished sessions (not today). */
+export interface QuoteStats {
+  high_52w: number
+  low_52w: number
+  avg_volume: number
+}
+
+export interface SymbolInfo {
+  symbol: string
+  name: string
+  sector: string | null
+}
+
+export interface Watchlist {
+  id: number
+  name: string
+  /** In the user's order. */
+  symbols: string[]
 }
 
 export interface ClockState {
@@ -129,7 +152,13 @@ export interface HistoryMessage {
   total: number
 }
 
+/** Every watchlist; sent on connect and whenever one changes. */
+export interface WatchlistsMessage {
+  type: 'watchlists'
+  watchlists: Watchlist[]
+}
+
 // Messages pushed by the backend.
-export type StreamMessage = TickMessage | ProgressMessage | OrdersMessage | HistoryMessage
+export type StreamMessage = TickMessage | ProgressMessage | OrdersMessage | HistoryMessage | WatchlistsMessage
 
 export type GotoAction = 'forward' | 'rewind' | 'reset' | 'none'

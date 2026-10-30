@@ -36,9 +36,9 @@ A paper trading simulator that runs 24/7 on simulated market data.
 ## Watchlists and quotes
 
 - **Several named watchlists**, saved with the market: pick one in the Watchlist panel; **+** adds a symbol (type a ticker or part of a name); hover a row and click **×** to remove it; **drag rows** to reorder. **⋯** creates, renames and deletes lists.
-- **Sort** by clicking a column header (high to low, low to high, then back to your own order). **Choose columns** in **⋯ → Columns**: last, change, change %, today's chart (a sparkline against the previous close), day range, bid, ask, bid/ask sizes, spread, volume, average volume (30 days), 52-week high/low and shares held. A dot next to a symbol means you hold it.
+- **Sort** by clicking a column header (high to low, low to high, then back to your own order). **Choose columns** in **⋯ → Columns**: last, change, change %, today's chart (a sparkline against the previous close), day range, open, previous close, bid, ask, bid/ask sizes, spread, volume, average volume (30 days), 52-week high/low and shares held. A dot next to a symbol means you hold it.
 - **Look up a symbol from anywhere:** just start typing a ticker (or press **/**), then **Enter** shows it in the chart and order entry. Clicking the symbol in the quote line does the same. (F stays full screen.)
-- **The quote line** shows bid and ask with their sizes, the day's range as a bar, volume, spread, the 52-week range and average volume (from the history), open and previous close. What doesn't fit a narrow chart is dropped from the right.
+- **The quote line** above the chart shows only the symbol, company name, price and change (the name hides on a narrow chart); bid/ask, ranges, volumes, open and previous close are Watchlist columns.
 - The browser only receives quotes for what's on screen (the watchlist, the selected symbol and your positions), and only rows whose quote changed are redrawn.
 
 ## Options

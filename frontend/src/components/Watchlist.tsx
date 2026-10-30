@@ -303,6 +303,10 @@ function Cell({ id, row, flash, points, step }: { id: ColumnId; row: RowData; fl
           <RangeBar low={q!.low} high={q!.high} value={q!.last} label={`Day range ${price(q!.low)}–${price(q!.high)}`} />
         </td>
       )
+    case 'open':
+      return <td className="num">{price(q!.open)}</td>
+    case 'prev_close':
+      return <td className="num">{price(q!.prev_close)}</td>
     case 'bid':
       return <td className="num">{price(q!.bid)}</td>
     case 'ask':

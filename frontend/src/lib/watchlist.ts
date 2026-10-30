@@ -21,6 +21,8 @@ export type ColumnId =
   | 'volume'
   | 'avg_volume'
   | 'range'
+  | 'open'
+  | 'prev_close'
   | 'high_52w'
   | 'low_52w'
   | 'spark'
@@ -49,6 +51,8 @@ export const COLUMNS: Column[] = [
   { id: 'change_pct', label: 'Chg %', title: 'Change %', value: fromQuote((q) => q.change_pct) },
   { id: 'spark', label: 'Today', title: 'Today’s chart', value: fromQuote((q) => q.change_pct) },
   { id: 'range', label: 'Day Range', title: 'Day range (low to high)', value: fromQuote(rangePosition) },
+  { id: 'open', label: 'Open', title: 'Today’s open', value: fromQuote((q) => q.open) },
+  { id: 'prev_close', label: 'Prev Close', title: 'Previous close', value: fromQuote((q) => q.prev_close) },
   { id: 'bid', label: 'Bid', title: 'Bid', value: fromQuote((q) => q.bid) },
   { id: 'ask', label: 'Ask', title: 'Ask', value: fromQuote((q) => q.ask) },
   { id: 'bid_size', label: 'Bid Sz', title: 'Bid size', value: fromQuote((q) => q.bid_size) },

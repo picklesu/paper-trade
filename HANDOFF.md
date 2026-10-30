@@ -27,14 +27,54 @@ _Last updated: 2026-10-30, after Phase 7.5 (option prices calibrated to real mar
 | Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
 | 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
 | 7.5. Option prices calibrated to real markets (the user approved the proposal as is) | Merged | #33 |
-| 8. Option trading, expiration, exercise, assignment | After 7.5 | — |
+| 8. Option trading, expiration, exercise, assignment | **Proposed, waiting for the user's approval** (split 8a/8b recommended) | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Phase 7.5 is done; the user tests it.** Next: Phase 8 (option trading): propose the details
-before building (see the Phase 7 bullet below). Decisions so far (2026-10-30):
+**Phase 7.5 is merged (#33); the user hasn't reported back on it yet. The Phase 8 proposal below
+waits for the user's approval.**
+
+**Phase 8 proposal (option trading), given to the user 2026-10-30, not yet approved.** Claude
+recommended splitting it: **8a** trading, expiration, exercise and assignment; **8b** dividends
+(with early exercise before ex-dividend dates), American-style pricing, the real interest rate
+and a VIX-like index. 8a:
+1. **Orders:** buy to open/sell to close calls and puts; sell to open, and buy to close, covered
+   calls (100 shares per contract, locked: not available to stock sells, and shares already
+   promised to a working sell can't cover a call) and cash-secured puts (strike × 100 cash set
+   aside; the premium received is added to cash). Working option buys set cash aside like stock
+   buys. Market and limit, day or GTC; no stops on options (most brokers don't allow them).
+   Fills: market at the ask/bid; a limit fills when the model's ask/bid reaches it. Matching uses
+   the stock's per-second path; an option's price also moves with time inside a minute (theta,
+   the opening spread fading, the intraday IV nudge), so a minute is skipped only if the limit
+   can't be reached at the minute's best stock price at either end of the minute (with a small
+   margin); otherwise its seconds are checked. No commissions (as for stocks).
+2. **Entry:** clicking a chain bid/ask fills the Order Entry ticket (buy at the ask, sell at the
+   bid; opens it); the ticket gets a Stock/Option mode with the contract shown
+   ("AAPL Nov 20 '26 230 Call"), its review shows cost/credit, max loss, breakeven, cash or shares
+   set aside.
+3. **Positions:** option rows (contracts, average price, mark, value, P&L today and total, delta
+   and theta per position), net liq includes options at the mark; position totals for delta and
+   theta. A held contract's expiration stays listed even if a new calibration's pattern drops it.
+4. **Expiration** at the 4:00 PM close: in-the-money by $0.01 or more is exercised or assigned
+   (like the OCC's exercise by exception); others expire worthless. A long call the cash can't
+   cover, or a long put without 100 shares per contract (exercising it would sell short, which a
+   cash account can't), is sold at its last bid at 3:59 PM instead, as brokers do before the
+   close. Shares move at the strike; Orders show exercise, assignment and expiration as entries
+   with P&L.
+5. **Early exercise and assignment:** "Exercise" on a long position any day before expiration,
+   only if affordable (cash for a call's shares at the strike, the shares for a put); the app
+   warns when the option is worth more sold. Short in-the-money options can be assigned early
+   when their time value is nearly gone (a small daily chance, rising as time value falls under a
+   few cents), drawn from a stream keyed by name and the market's seed like the engine's, so
+   "Replay the same prices" replays the same assignments; 8b adds the dividend case.
+6. **Going back in time** works as for stocks: option fills, exercises, assignments, expirations
+   and closing sales after the target are rolled back (the contracts come back). Recorded fill
+   prices stay; the rewind preview values held options with the current calibration (the one in
+   force then isn't kept) and says so.
+
+Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
   (they were the 5.5c steps). Don't propose them again.
 - **Done in 5.7:** 40 symbols, sector factors, volume following moves, spreads widening with

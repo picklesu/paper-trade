@@ -7,6 +7,7 @@ const list: Expiration[] = [
   { date: '2026-11-06', kind: 'weekly', days: 4 },
   { date: '2026-11-20', kind: 'monthly', days: 18 },
   { date: '2027-01-15', kind: 'leaps', days: 74 },
+  { date: '2027-03-31', kind: 'quarterly', days: 149 },
 ]
 
 describe('option chain helpers', () => {
@@ -32,6 +33,7 @@ describe('option chain helpers', () => {
   it('labels expirations with days left and kind', () => {
     expect(expirationLabel(list[0])).toBe("Nov 2 '26 (today) D")
     expect(expirationLabel(list[2])).toBe("Nov 20 '26 (18d) M")
+    expect(expirationLabel(list[4])).toBe("Mar 31 '27 (149d) Q")
   })
 
   it('keeps columns in order and ignores unusable saved ones', () => {

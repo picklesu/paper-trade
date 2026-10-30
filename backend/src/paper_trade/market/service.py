@@ -4,17 +4,18 @@ subscribers. Everything here runs on the event loop's thread."""
 import asyncio
 import contextlib
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 import numpy as np
 
-from paper_trade.market.calendar import market_day, session_open, snap, trading_days_between
+from paper_trade.market.calendar import MARKET_TZ, market_day, session_open, snap, trading_days_between
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
 from paper_trade.market import options
-from paper_trade.realprices import STATUS_REFRESH_AFTER, RealPrices
+from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, summarize
+from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 from paper_trade.watchlists import Watchlists
@@ -27,6 +28,7 @@ SPARKLINE_MINUTES = 5
 SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
 REAL_PRICES_CHECK_SECONDS = 60  # the refresher's longest wait before checking the schedule
 STATUS_FETCH_WAIT_SECONDS = 5  # the Sync dialog's status waits this long for a fetch
+OPTION_DATA_CHECK_SECONDS = 600  # the option sync's longest wait before checking the schedule
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ class MarketService:
         store: Store,
         history_days: int = HISTORY_DAYS,
         real: RealPrices | None = None,
+        option_data: OptionData | None = None,
     ) -> None:
         self.clock = clock
         self.engine = engine
@@ -71,8 +74,14 @@ class MarketService:
         self._real_task: asyncio.Task | None = None
         self.watchlists = Watchlists(store, self.symbols)
         self._stats: tuple[tuple, dict] | None = None
-        self._chains: dict[tuple[str, date], tuple[tuple[datetime, int], dict]] = {}
+        self._chains: dict[tuple[str, date], tuple[tuple[datetime, int, int], dict]] = {}
         self._real_lock = asyncio.Lock()
+        self.option_data = option_data
+        self.calibrations = options.calibrations(option_data.saved) if option_data else {}
+        self._calibration_version = 0
+        self._option_task: asyncio.Task | None = None
+        self._option_lock = asyncio.Lock()
+        self._prices_tried = asyncio.Event()  # the option sync starts after the first price fetch
 
     @property
     def jumping(self) -> bool:
@@ -111,22 +120,27 @@ class MarketService:
             "series": {s: [round(float(p), 2) for p in closes[:, cols[s]]] for s in symbols if s in cols},
         }
 
+    def calibration(self, symbol: str) -> options.Calibration:
+        return self.calibrations.get(symbol, options.DEFAULT)
+
     def option_expirations(self, symbol: str) -> list[dict]:
         today = market_day(self.engine.time)
-        return [e.to_dict(today) for e in options.expirations(symbol, self.engine.time)]
+        pattern = self.calibration(symbol).pattern
+        return [e.to_dict(today) for e in options.expirations(symbol, self.engine.time, pattern)]
 
     def option_chain(self, symbol: str, expiration: date) -> dict:
         """One expiration's chain now (computed once per market time and timeline,
         however many clients show it: a new future can come back to the same time
-        with other prices). Raises ValueError for an unknown symbol or expiration."""
+        with other prices, and a new calibration changes them). Raises ValueError
+        for an unknown symbol or expiration."""
         if symbol not in self.symbols:
             raise ValueError(f"unknown symbol: {symbol}")
-        key, now = (symbol, expiration), (self.engine.time, self.timeline)
+        key, now = (symbol, expiration), (self.engine.time, self.timeline, self._calibration_version)
         cached = self._chains.get(key)
         if cached is None or cached[0] != now:
             if len(self._chains) > 16:
                 self._chains.clear()
-            self._chains[key] = (now, options.chain(self.engine, symbol, expiration))
+            self._chains[key] = (now, options.chain(self.engine, symbol, expiration, self.calibration(symbol)))
         return self._chains[key][1]
 
     def watchlists_changed(self) -> None:
@@ -145,6 +159,8 @@ class MarketService:
             "origin": self.engine.origin.isoformat(),
             "session_open": session_open(market_day(self.engine.time)).isoformat(),
             "timeline": self.timeline,
+            # Bumped when an option calibration changes (expirations may change too).
+            "calibration": self._calibration_version,
             "building_history": self.building_history,
         }
 
@@ -300,8 +316,15 @@ class MarketService:
 
     def real_prices_status(self) -> dict:
         if self.real is None:
-            return {"configured": False, "available": 0, "total": len(self.symbols)}
-        return self.real.status(self.symbols)
+            status = {"configured": False, "available": 0, "total": len(self.symbols)}
+        else:
+            status = self.real.status(self.symbols)
+        return status | {"options": self.option_data_status()}
+
+    def option_data_status(self) -> dict:
+        if self.option_data is None:
+            return {"configured": False, "calibrated": 0, "total": len(self.symbols)}
+        return self.option_data.status(self.symbols)
 
     def real_start_prices(self) -> np.ndarray | None:
         """Previous closes for a new market: saved real prices where there are
@@ -366,10 +389,78 @@ class MarketService:
         then on the schedule. Waits are checked against the wall clock at least
         every minute, as a sleeping computer pauses asyncio's clock."""
         assert self.real
-        await self.refresh_real_prices()
+        try:
+            await self.refresh_real_prices()
+        finally:
+            self._prices_tried.set()
         while True:
             await asyncio.sleep(min(REAL_PRICES_CHECK_SECONDS, self.real.seconds_until_refresh()))
             await self.refresh_real_prices(None)
+
+    # ----- real option data --------------------------------------------------------
+
+    def _calibrations_changed(self) -> None:
+        assert self.option_data
+        self.calibrations = options.calibrations(self.option_data.saved)
+        self._calibration_version += 1
+
+    async def refresh_option_data(self) -> None:
+        """Fetch and calibrate every symbol whose real option chain is due (see
+        OptionData.due), one at a time in a worker thread, saving each as it's
+        done. A failed request stops the sync (it's tried again later; symbols
+        done so far are kept)."""
+        od = self.option_data
+        if not (od and od.configured):
+            return
+        async with self._option_lock:
+            symbols = od.due(self.symbols)
+            if not symbols:
+                return
+            assert od.creds
+            od.attempt(len(symbols))
+            try:
+                now = datetime.now(UTC)
+                try:
+                    bars = await asyncio.to_thread(fetch_bars, self.symbols, od.creds, now)
+                except FetchError as e:
+                    od.failed(f"daily bars: {e}")
+                    return
+                earnings = None
+                if od.earnings_key:
+                    today = now.astimezone(MARKET_TZ).date()
+                    try:
+                        earnings = await asyncio.to_thread(fetch_earnings, od.earnings_key, self.symbols, today)
+                    except FetchError as e:
+                        od.note(f"earnings dates: {e}")
+                context = Context(now, bars, earnings)
+                specs = {s.symbol: s for s in self.engine.specs}
+                for symbol in symbols:
+                    reports = specs[symbol].earnings is not None
+                    try:
+                        summary = await asyncio.to_thread(summarize, symbol, od.creds, context, reports, datetime.now(UTC))
+                    except FetchError as e:
+                        od.failed(f"{symbol}'s options: {e}")
+                        log.warning("fetching %s's options failed: %s", symbol, e)
+                        return
+                    except Exception:
+                        # Keep it from being retried straight away; the defaults apply.
+                        log.exception("calibrating %s's options failed", symbol)
+                        summary = {"symbol": symbol, "fetched": datetime.now(UTC).isoformat(), "shape": None}
+                        od.note(f"{symbol}'s options couldn't be calibrated")
+                    od.record(symbol, summary)
+                    self._calibrations_changed()
+            finally:
+                od.finished()
+
+    async def _refresh_option_data(self) -> None:
+        """Keep calibrations about a day old, in the background, after the first
+        price fetch (they share Alpaca's rate limit)."""
+        assert self.option_data
+        await self._prices_tried.wait()
+        while True:
+            await self.refresh_option_data()
+            wait = self.option_data.seconds_until_due(self.symbols)
+            await asyncio.sleep(min(OPTION_DATA_CHECK_SECONDS, max(5.0, wait)))
 
     # ----- trading -----------------------------------------------------------------
 
@@ -440,8 +531,14 @@ class MarketService:
         self._task = asyncio.create_task(self._run())
         if self.real and self.real.configured:
             self._real_task = asyncio.create_task(self._refresh_real_prices())
+        if self.option_data and self.option_data.configured:
+            self._option_task = asyncio.create_task(self._refresh_option_data())
 
     async def stop(self) -> None:
+        if self._option_task:
+            self._option_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._option_task
         if self._real_task:
             self._real_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

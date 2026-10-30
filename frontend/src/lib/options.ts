@@ -1,4 +1,4 @@
-import type { ChainSide, Expiration } from './types'
+import type { ChainCalibration, ChainSide, Expiration } from './types'
 
 export type ChainColumnId = keyof ChainSide
 
@@ -16,6 +16,8 @@ const count = (v: number) => v.toLocaleString('en-US')
 export const CHAIN_COLUMNS: ChainColumn[] = [
   { id: 'bid', label: 'Bid', title: 'Bid', format: fixed(2) },
   { id: 'ask', label: 'Ask', title: 'Ask', format: fixed(2) },
+  { id: 'bid_size', label: 'Bid Sz', title: 'Bid size (contracts)', format: count },
+  { id: 'ask_size', label: 'Ask Sz', title: 'Ask size (contracts)', format: count },
   { id: 'mark', label: 'Mark', title: 'Mark (between bid and ask)', format: fixed(2) },
   { id: 'iv', label: 'IV', title: 'Implied volatility', format: (v) => `${(v * 100).toFixed(1)}%` },
   { id: 'delta', label: 'Delta', title: 'Delta', format: fixed(2) },
@@ -65,13 +67,41 @@ export const priceRow = (strikes: number[], spot: number) => {
   return i < 0 ? strikes.length : i
 }
 
-const KIND_LETTER: Record<Expiration['kind'], string> = { daily: 'D', weekly: 'W', monthly: 'M', leaps: 'M' }
+const KIND_LETTER: Record<Expiration['kind'], string> = { daily: 'D', weekly: 'W', quarterly: 'Q', monthly: 'M', leaps: 'M' }
 
-/** "Nov 20 '26 (21d) M": the date, days left and kind (daily, weekly, monthly). */
+/** "Nov 20 '26 (21d) M": the date, days left and kind (daily, weekly, quarterly: month- or quarter-end, monthly). */
 export function expirationLabel(e: Expiration): string {
   const [y, m, d] = e.date.split('-').map(Number)
   const day = new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   return `${day} '${String(y).slice(2)} (${e.days === 0 ? 'today' : `${e.days}d`}) ${KIND_LETTER[e.kind]}`
+}
+
+const percent = (v: number) => `${(v * 100).toFixed(1)}%`
+
+/** The Options header's note on where the smile's shape comes from: its label and the details. */
+export function calibrationNote(c: ChainCalibration, symbol: string): { label: string; title: string } {
+  const premium = `Options are priced ${c.premium.toFixed(2)}× the simulated volatility (implied over realized, the volatility risk premium).`
+  if (!c.as_of) {
+    return {
+      label: 'Estimated',
+      title: `No real option data for ${symbol} yet: the smile's skew and curvature are built-in estimates. ${premium} With Alpaca keys, the server fits each symbol to its real options once a day.`,
+    }
+  }
+  const lines = [
+    `Skew and smile fitted to ${symbol}'s real options on ${shortDate(c.as_of, true)}${c.fit_error != null ? ` (within ${c.fit_error.toFixed(1)} volatility points)` : ''}; the simulation sets the level.`,
+    premium,
+  ]
+  const e = c.earnings
+  if (e?.move != null) {
+    const when = e.timing === 'pre-market' ? ', before the open' : e.timing === 'post-market' ? ', after the close' : ''
+    lines.push(`Real options imply a ${percent(e.move)} move on ${symbol}'s report (${shortDate(e.day, false)}${when}); the simulation has its own earnings dates.`)
+  }
+  return { label: `Calibrated ${shortDate(c.as_of, false)}`, title: lines.join(' ') }
+}
+
+function shortDate(iso: string, year: boolean): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(year ? { year: 'numeric' } : {}) })
 }
 
 /** The expiration to show when the list changes: the one picked if it's still open,

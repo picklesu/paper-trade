@@ -47,6 +47,8 @@ export interface ClockState {
   session_open: string
   /** Changes whenever market time jumps or history changes: charts reload. */
   timeline: number
+  /** Changes when an option calibration changes: expirations load again. */
+  calibration?: number
   /** The years of history before the market's start are still being generated. */
   building_history: boolean
 }
@@ -127,7 +129,8 @@ export interface OrderPreview {
 export interface Expiration {
   /** "YYYY-MM-DD"; options expire at that day's 4:00 PM close. */
   date: string
-  kind: 'daily' | 'weekly' | 'monthly' | 'leaps'
+  /** Quarterly: a month- or quarter-end expiration. */
+  kind: 'daily' | 'weekly' | 'quarterly' | 'monthly' | 'leaps'
   /** Calendar days from today. */
   days: number
 }
@@ -136,6 +139,9 @@ export interface Expiration {
 export interface ChainSide {
   bid: number[]
   ask: number[]
+  /** Contracts shown at the bid and ask. */
+  bid_size: number[]
+  ask_size: number[]
   mark: number[]
   iv: number[]
   delta: number[]
@@ -148,6 +154,20 @@ export interface ChainSide {
   rho: number[]
   volume: number[]
   oi: number[]
+}
+
+/** What real option prices say about the symbol (fitted once a day). */
+export interface ChainCalibration {
+  /** The trading day of the real options the shape was fitted to; null: built-in estimates. */
+  as_of: string | null
+  /** The fitted skew (SSVI rho) at 30 days; null without a fit. */
+  skew: number | null
+  /** Implied over realized volatility at 30 days (applied to the simulated volatility). */
+  premium: number
+  /** The real next report and its implied move (null if not measurable). */
+  earnings: { day: string; timing: string; move: number | null } | null
+  /** Median fit error, in volatility points. */
+  fit_error: number | null
 }
 
 export interface OptionChain {
@@ -163,6 +183,7 @@ export interface OptionChain {
   expected_move: number
   /** An earnings report falls before expiration (implied volatility is higher until it passes). */
   earnings: boolean
+  calibration: ChainCalibration
   strikes: number[]
   call: ChainSide
   put: ChainSide

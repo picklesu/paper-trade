@@ -1,3 +1,4 @@
+import dataclasses
 import math
 from datetime import UTC, date, datetime
 
@@ -148,11 +149,133 @@ def test_activity_is_steady_and_peaks_near_the_money() -> None:
     assert sum(by_strike(later, "volume")[k] for k in both) > sum(by_strike(a, "volume")[k] for k in both)
 
 
-def test_chains_follow_the_market_volatility() -> None:
+def test_chains_follow_the_market_volatility(monkeypatch) -> None:
+    monkeypatch.setattr(o, "today_ratio", lambda engine, i, spec, ratio: ratio)
+    monkeypatch.setattr(o, "SELLOFF_SKEW", 0.0)
     e = engine_at(et(2026, 1, 14, 12, 0))
     exp = o.expirations("SPY", e.time)[5].day
-    base = o.chain(e, "SPY", exp)["atm_iv"]
+    c = o.chain(e, "SPY", exp)
     ratio = float(e.vol_ratio()[e.symbol_index("SPY")])
-    t = o.chain(e, "SPY", exp)["years"]
-    expected = math.sqrt(o.atm_variance(SPEC["SPY"], ratio, t, 0) / t)
-    assert base == pytest.approx(expected, rel=1e-3)
+    t = c["years"]
+    theta = o.atm_variance(SPEC["SPY"], ratio, t, 0, o.DEFAULT_PREMIUM)
+    q = e.quotes["SPY"]
+    # The smile stays anchored at the open: the ATM volatility is read where the price is now.
+    expected = math.sqrt(o.smile(theta, np.array([math.log(q.last / q.open)]), "SPY")[0] / t)
+    assert c["atm_iv"] == pytest.approx(expected, rel=1e-3)
+
+
+def test_premium_and_calibrated_shape_set_the_prices() -> None:
+    e = engine_at(et(2026, 1, 14, 12, 0))
+    exp = o.expirations("AAPL", e.time)[6].day
+    base = o.chain(e, "AAPL", exp)
+    rich = o.chain(e, "AAPL", exp, o.Calibration(premium=((0.01, 1.3), (2.0, 1.3))))
+    # (Not exactly in proportion: the smile's curvature eases as the level rises.)
+    assert rich["atm_iv"] == pytest.approx(base["atm_iv"] * 1.3 / o.DEFAULT_PREMIUM, rel=3e-3)
+    # A real fit with calls dearer than puts (like gold's long end) turns the skew around.
+    up = o.chain(e, "AAPL", exp, o.Calibration(as_of=date(2026, 1, 13), rho=((0.1, 0.4),), eta=0.8))
+    ks, iv = np.array(up["strikes"]), np.array(up["call"]["iv"])
+    lo, hi = np.argmin(abs(ks - up["spot"] * 0.9)), np.argmin(abs(ks - up["spot"] * 1.1))
+    assert iv[hi] > iv[lo] and up["calibration"]["as_of"] == "2026-01-13"
+    assert np.array(base["call"]["iv"])[lo] > np.array(base["call"]["iv"])[hi]
+
+
+def test_sticky_strike_and_skew_steepen_when_the_stock_falls(monkeypatch) -> None:
+    monkeypatch.setattr(o, "today_ratio", lambda engine, i, spec, ratio: ratio)
+    e = engine_at(et(2026, 1, 14, 12, 0))
+    q = e.quotes["SPY"]
+    exp = o.expirations("SPY", e.time)[5].day
+    ratio = float(e.vol_ratio()[e.symbol_index("SPY")])
+    years = o.chain(e, "SPY", exp)["years"]
+    theta = o.atm_variance(SPEC["SPY"], ratio, years, 0, o.DEFAULT_PREMIUM)
+    at_open = math.sqrt(theta / years)
+    # The same strikes keep their volatility, so with the price below the open
+    # (negative skew) the at-the-money volatility is higher than at the open.
+    below = q.last < q.open
+    assert (o.chain(e, "SPY", exp)["atm_iv"] > at_open) == below
+    # A selloff steepens the skew.
+    fell = dataclasses.replace(q, last=q.prev_close * 0.96)
+    monkeypatch.setitem(e.quotes, "SPY", fell)
+    calm, sold = o.chain(e, "SPY", exp), None
+    monkeypatch.setattr(o, "SELLOFF_SKEW", 0.0)
+    sold = o.chain(e, "SPY", exp)
+    ks = np.array(calm["strikes"])
+    far = np.argmin(abs(ks - fell.last * 0.9))
+    assert calm["put"]["iv"][far] > sold["put"]["iv"][far]
+
+
+def test_today_ratio_follows_the_move_so_far() -> None:
+    class Stub:
+        def __init__(self, closes: list[float], time: datetime) -> None:
+            self._closes, self.time = np.array(closes)[:, None], time
+            self.quotes = {"SPY": dataclasses.replace(engine_at(et(2026, 1, 14, 9, 30)).quotes["SPY"], open=closes[0])}
+
+        def day_closes(self, step: int) -> np.ndarray:
+            return self._closes[1:]
+
+    noon = et(2026, 1, 14, 12, 0)
+    still = Stub([100.0] * 31, noon)
+    wild = Stub(list(100 * np.exp(np.cumsum(np.r_[0, np.tile([0.01, -0.01], 15)]))), noon)
+    assert o.today_ratio(still, 0, SPEC["SPY"], 1.0) < 1.0 < o.today_ratio(wild, 0, SPEC["SPY"], 1.0)
+    assert o.today_ratio(Stub([100.0], et(2026, 1, 14, 9, 31)), 0, SPEC["SPY"], 1.0) == 1.0  # too early to say
+
+
+def test_spreads_are_wider_at_the_open_and_sizes_are_shown() -> None:
+    e = engine_at(et(2026, 1, 14, 9, 31))
+    exp = o.expirations("AAPL", e.time)[3].day
+    spec = SPEC["AAPL"]
+    early = o.spread_factor(e, spec, exp) / e.spread_factor(e.time)
+    e.advance(et(2026, 1, 14, 11, 0))
+    assert early > 1.8 and o.spread_factor(e, spec, exp) / e.spread_factor(e.time) == pytest.approx(1, abs=0.01)
+    c = o.chain(e, "AAPL", exp)
+    sizes = np.array(c["call"]["ask_size"])
+    assert (sizes >= 1).all() and c["call"]["bid_size"][0] >= 1
+    assert c == o.chain(e, "AAPL", exp)  # steady within a second
+    assert c["call"]["ask_size"] != c["put"]["ask_size"]
+
+
+def test_spreads_widen_before_earnings() -> None:
+    # AAPL reports before the Jan 26, 2026 session.
+    e = engine_at(et(2026, 1, 22, 12, 0))
+    spec = SPEC["AAPL"]
+    plain = o.spread_factor(e, spec, date(2026, 1, 23))  # expires before the report
+    assert o.spread_factor(e, spec, date(2026, 2, 20)) == pytest.approx(plain * o.EARNINGS_SPREAD)
+
+
+def test_calibrated_volume_follows_the_stock_and_the_real_mix() -> None:
+    e = engine_at(et(2026, 1, 14, 12, 0))
+    shape = {
+        "per_share": 0.05,
+        "put_share": 0.25,
+        "per_expiry": [0.5, 0.05, 0.02, 0.01, 0.005, 0.001],
+        "strikes": {"call": [1.0, 0.8], "put": [-1.0, 0.8]},
+    }
+    cal = o.Calibration(volume=shape)
+    exp = o.expirations("SPY", e.time)[0].day  # today: the first bucket
+    c = o.chain(e, "SPY", exp, cal)
+    calls, puts = sum(c["call"]["volume"]), sum(c["put"]["volume"])
+    expected = 0.05 * 0.5 * e.quotes["SPY"].volume
+    assert calls + puts == pytest.approx(expected, rel=0.2)
+    assert calls == pytest.approx(3 * puts, rel=0.3)
+    ks = np.array(c["strikes"])
+    assert ks[np.argmax(c["call"]["volume"])] > c["spot"] > ks[np.argmax(c["put"]["volume"])]
+    real_oi = {"per_share": 0.2, "put_share": 0.6, "per_expiry": [0.1] * 6, "strikes": {"call": [1.0, 1.0], "put": [-1.0, 1.0]}}
+    with_oi = o.chain(e, "SPY", exp, o.Calibration(volume=shape, open_interest=real_oi))
+    total = sum(with_oi["call"]["oi"]) + sum(with_oi["put"]["oi"])
+    assert total == pytest.approx(0.2 * 0.1 * SPEC["SPY"].daily_volume, rel=0.1)
+    e.advance(et(2026, 1, 14, 14, 0))
+    later = o.chain(e, "SPY", exp, cal)
+    oi = lambda chain: dict(zip(chain["strikes"], chain["call"]["oi"]))  # noqa: E731
+    assert all(oi(later)[k] == oi(c)[k] for k in set(later["strikes"]) & set(c["strikes"]))
+    assert sum(later["call"]["volume"]) > calls
+
+
+def test_a_real_pattern_lists_the_expirations() -> None:
+    pattern = o.DEFAULT_PATTERN | {"short_weekdays": [0, 2], "short_days": 12, "quarter_end_months": 6}
+    e = engine_at(et(2026, 1, 14, 12, 0))
+    days = {x.day: x.kind for x in o.expirations("AAPL", e.time, pattern)}
+    assert days[date(2026, 1, 21)] == "daily" and date(2026, 1, 22) not in days
+    assert days[date(2026, 3, 31)] == "quarterly"
+    c = o.chain(e, "AAPL", date(2026, 3, 31), o.Calibration(pattern=pattern))
+    assert c["kind"] == "quarterly"
+    with pytest.raises(ValueError):
+        o.chain(e, "AAPL", date(2026, 3, 31))  # not listed by default

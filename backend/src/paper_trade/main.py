@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from paper_trade import __version__, realprices
+from paper_trade import __version__, optiondata, realprices
 from paper_trade.api import health, market, stream, trading, watchlists
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
@@ -40,8 +40,10 @@ def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: 
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         store = Store(db_path or os.environ.get("PAPER_TRADE_DB") or DEFAULT_DB)
         clock, engine = load_market(store, seed)
-        real = realprices.RealPrices(store, realprices.credentials())
-        svc = MarketService(clock, engine, store, history_days, real)
+        creds = realprices.credentials()
+        real = realprices.RealPrices(store, creds)
+        option_data = optiondata.OptionData(store, creds, optiondata.av_key())
+        svc = MarketService(clock, engine, store, history_days, real, option_data)
         app.state.market = svc
         svc.start()
         yield

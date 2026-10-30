@@ -27,14 +27,45 @@ _Last updated: 2026-10-30, after Phase 7.5 (option prices calibrated to real mar
 | Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
 | 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
 | 7.5. Option prices calibrated to real markets (the user approved the proposal as is) | Merged | #33 |
-| 8. Option trading, expiration, exercise, assignment | After 7.5 | — |
+| 8. Option trading, expiration, exercise, assignment | **Proposed, waiting for the user's approval** (split 8a/8b recommended) | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Phase 7.5 is done; the user tests it.** Next: Phase 8 (option trading): propose the details
-before building (see the Phase 7 bullet below). Decisions so far (2026-10-30):
+**Phase 7.5 is done. The Phase 8 proposal below waits for the user's approval.**
+
+**Phase 8 proposal (option trading), given to the user 2026-10-30, not yet approved.** Claude
+recommended splitting it: **8a** trading, expiration, exercise and assignment; **8b** dividends
+(with early exercise before ex-dividend dates), American-style pricing, the real interest rate
+and a VIX-like index. 8a:
+1. **Orders:** buy to open/sell to close calls and puts; sell to open covered calls (100 shares
+   per contract, locked against selling) and cash-secured puts (strike × 100 cash set aside,
+   less nothing: the premium received is just cash). Market and limit, day or GTC; no stops on
+   options (most brokers don't allow them). Fills: market at the ask/bid; a limit fills when the
+   model's ask/bid reaches it. Matching uses the stock's per-second path (an option's price moves
+   one way with the stock at a fixed moment, so minutes whose stock high/low can't reach the
+   limit are skipped, as for stocks). No commissions (as for stocks).
+2. **Entry:** clicking a chain bid/ask fills the Order Entry ticket (buy at the ask, sell at the
+   bid; opens it); the ticket gets a Stock/Option mode with the contract shown
+   ("AAPL Nov 20 '26 230 Call"), its review shows cost/credit, max loss, breakeven, cash or shares
+   set aside.
+3. **Positions:** option rows (contracts, average price, mark, value, P&L today and total, delta
+   and theta per position), net liq includes options at the mark; position totals for delta and
+   theta. A held contract's expiration stays listed even if a new calibration's pattern drops it.
+4. **Expiration** at the 4:00 PM close: in-the-money by $0.01 or more is exercised or assigned
+   (like the OCC's exercise by exception); others expire worthless. A long call the cash can't
+   cover is sold at its intrinsic value instead (as brokers do). Shares move at the strike;
+   Orders/Activity show exercise, assignment and expiration as entries with P&L.
+5. **Early exercise and assignment:** "Exercise" on a long position any day before expiration
+   (the app warns when the option is worth more sold). Short in-the-money options can be assigned
+   early when their time value is nearly gone (a small daily chance, rising as time value falls
+   under a few cents); 8b adds the dividend case.
+6. **Going back in time** works as for stocks: option fills, exercises and assignments after the
+   target are rolled back. Recorded fill prices stay even if a later calibration would price that
+   moment differently.
+
+Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
   (they were the 5.5c steps). Don't propose them again.
 - **Done in 5.7:** 40 symbols, sector factors, volume following moves, spreads widening with

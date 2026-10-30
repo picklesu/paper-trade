@@ -185,10 +185,13 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     last 30 stored sessions; about 130ms on 5 years), `GET /api/sparklines?symbols=` (the engine's
     `day_closes(5)`: closes every 5 minutes so far plus the latest), `GET|POST /api/watchlists`,
     `PATCH|DELETE /api/watchlists/{id}` (PATCH sets name and/or the whole symbol list). Changes
-    are broadcast as a `watchlists` stream message (also sent on connect).
+    are broadcast as a `watchlists` stream message (also sent on connect). Saved lists drop
+    symbols the market no longer has on load. `bars30_day` index serves the stats (40ms).
   - **Stream subscriptions (6):** a client sends `{"type": "subscribe", "symbols": [...]}`; its
     ticks then carry only those quotes (filtered per connection in `api/stream.py`), and it gets a
-    tick straight away (even while paused). The frontend subscribes to the active list, the
+    tick straight away (even while paused; not during a jump). `MarketService.send` makes room in
+    a full queue by dropping the oldest tick/progress message, so `orders`/`watchlists` arrive.
+    The frontend drops quotes from before a time jump (`mergeQuotes(..., fresh)`). The frontend subscribes to the active list, the
     selected symbol and held symbols once lists arrive; until then it gets all.
   - **Quote sizes (6):** `Quote.bid_size`/`ask_size`, round lots from `_quote_sizes`: geometric
     with mean 1 + daily volume / 4M / spread factor, hashed (`_unit_hash`, splitmix64) from the
@@ -342,7 +345,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 214 (pytest), frontend 133 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 216 (pytest), frontend 134 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

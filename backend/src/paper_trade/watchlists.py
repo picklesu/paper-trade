@@ -26,6 +26,10 @@ class Watchlists:
             ]
             saved = {"next_id": len(lists) + 1, "lists": lists}
             store.set("watchlists", saved)
+        else:
+            # Symbols the market no longer has (the symbol list changed) would make every edit fail.
+            for wl in saved["lists"]:
+                wl["symbols"] = [s for s in wl["symbols"] if s in symbols]
         self._data = saved
 
     @property

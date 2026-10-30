@@ -72,6 +72,8 @@ class History:
             "CREATE TABLE IF NOT EXISTS bars30 (symbol TEXT, day TEXT, i INTEGER,"
             " o REAL, h REAL, l REAL, c REAL, v REAL, PRIMARY KEY (symbol, day, i))"
         )
+        # For queries by date across symbols (quote stats).
+        db.execute("CREATE INDEX IF NOT EXISTS bars30_day ON bars30 (day)")
 
     # ----- storing finished sessions ------------------------------------------------
 
@@ -169,7 +171,7 @@ class History:
 
     def quote_stats(self) -> dict[str, dict]:
         """Each symbol's 52-week high and low and average daily volume over the
-        last AVG_VOLUME_DAYS sessions, from finished sessions before today (the
+        last AVG_VOLUME_DAYS sessions (over the days each symbol has), from finished sessions before today (the
         UI folds in today's own range). Symbols with no stored history are left out."""
         self.flush()
         today = market_day(self.engine.time)
@@ -187,17 +189,18 @@ class History:
             "SELECT symbol, MAX(h), MIN(l) FROM bars30 WHERE day >= ? AND day < ? GROUP BY symbol",
             (year_ago, today.isoformat()),
         )
-        volumes = dict(
-            self.db.execute(
-                "SELECT symbol, SUM(v) FROM bars30 WHERE day >= ? AND day < ? GROUP BY symbol",
+        volumes = {
+            symbol: total / count
+            for symbol, total, count in self.db.execute(
+                "SELECT symbol, SUM(v), COUNT(DISTINCT day) FROM bars30 WHERE day >= ? AND day < ? GROUP BY symbol",
                 (days[-1], today.isoformat()),
-            ).fetchall()
-        )
+            )
+        }
         return {
             symbol: {
                 "high_52w": round(high, 2),
                 "low_52w": round(low, 2),
-                "avg_volume": int(volumes.get(symbol, 0) / len(days)),
+                "avg_volume": int(volumes.get(symbol, 0)),
             }
             for symbol, high, low in ranges
         }

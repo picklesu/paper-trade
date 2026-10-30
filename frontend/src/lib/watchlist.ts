@@ -67,7 +67,8 @@ export const DEFAULT_COLUMNS: ColumnId[] = ['last', 'change_pct', 'spark']
 export function sanitizeColumns(raw: unknown): ColumnId[] | null {
   if (!Array.isArray(raw)) return null
   const ids = raw.filter((c): c is ColumnId => typeof c === 'string' && c in COLUMN_BY_ID)
-  return [...new Set(ids)]
+  // Nothing usable (e.g. saved by a build with other column names): the defaults.
+  return ids.length || raw.length === 0 ? [...new Set(ids)] : null
 }
 
 /** Columns turned on, in the menu's order. */
@@ -115,9 +116,10 @@ export function sortRows(rows: Row[], sort: Sort | null): Row[] {
 
 /** `symbols` with `symbol` moved to just before `before` (null: to the end). */
 export function moveSymbol(symbols: string[], symbol: string, before: string | null): string[] {
-  if (symbol === before) return symbols
   const rest = symbols.filter((s) => s !== symbol)
   const at = before === null ? rest.length : rest.indexOf(before)
-  if (at < 0) return symbols
-  return [...rest.slice(0, at), symbol, ...rest.slice(at)]
+  if (at < 0 || rest.length === symbols.length) return symbols
+  const moved = [...rest.slice(0, at), symbol, ...rest.slice(at)]
+  // Dropped where it already was: the same array, so callers can tell nothing changed.
+  return moved.every((s, i) => s === symbols[i]) ? symbols : moved
 }

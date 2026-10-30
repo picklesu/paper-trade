@@ -135,6 +135,29 @@ describe('Watchlist', () => {
     expect(props.onSelect).not.toHaveBeenCalledWith('AAPL') // removing doesn't select
   })
 
+  it('sends quick edits one after another, in order', async () => {
+    const order: string[] = []
+    let release: () => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'PATCH') {
+          const symbols = JSON.parse(String(init.body)).symbols
+          order.push(symbols.join(','))
+          if (order.length === 1) await new Promise<void>((r) => (release = r)) // the first is slow
+          return { ok: true, json: async () => ({ id: 1, name: 'Main', symbols }) }
+        }
+        return { ok: true, json: async () => ({ step_minutes: 5, session_open: '', series: {} }) }
+      }),
+    )
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove AAPL' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove MSFT' }))
+    await waitFor(() => expect(order).toEqual(['SPY,MSFT']))
+    release()
+    await waitFor(() => expect(order).toEqual(['SPY,MSFT', 'SPY']))
+  })
+
   it('reorders by dragging a row', async () => {
     const fn = mockServer()
     renderList()
@@ -202,6 +225,7 @@ describe('mergeQuotes', () => {
     expect(second.get('SPY')).toBe(a)
     expect(second.get('AAPL')!.last).toBe(229)
     expect(mergeQuotes(second, []).get('SPY')).toBe(a) // unsubscribed symbols keep their last quote
+    expect(mergeQuotes(second, [b], true).has('SPY')).toBe(false) // but not across a time jump
   })
 })
 

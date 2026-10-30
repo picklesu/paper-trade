@@ -23,6 +23,7 @@ SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it ru
 MAX_JUMP_DAYS = 252 * 5
 PROGRESS_EVERY_DAYS = 5
 SPARKLINE_MINUTES = 5
+SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
 REAL_PRICES_CHECK_SECONDS = 60  # the refresher's longest wait before checking the schedule
 STATUS_FETCH_WAIT_SECONDS = 5  # the Sync dialog's status waits this long for a fetch
 
@@ -129,13 +130,24 @@ class MarketService:
 
     def publish(self, msg: dict, force: bool = False) -> None:
         """Send to every subscriber. A slow client just misses messages, since the
-        next tick carries full state; with `force`, its oldest message is dropped
+        next tick carries full state; with `force`, a queued tick makes room
         instead, for messages that must arrive."""
         for q in self._subscribers:
-            if force and q.full():
-                q.get_nowait()
-            with contextlib.suppress(asyncio.QueueFull):
-                q.put_nowait(msg)
+            self.send(q, msg, force)
+
+    @staticmethod
+    def send(q: asyncio.Queue[dict], msg: dict, force: bool = True) -> None:
+        """Queue `msg` for one subscriber. When the queue is full and `force` is
+        set, the oldest message a later one supersedes (a tick or progress) makes
+        room, so `orders` and `watchlists` messages already queued still arrive."""
+        if q.full() and force:
+            held = [q.get_nowait() for _ in range(q.qsize())]
+            stale = next((i for i, m in enumerate(held) if m["type"] in SUPERSEDED), 0)
+            del held[stale]
+            for m in held:
+                q.put_nowait(m)
+        with contextlib.suppress(asyncio.QueueFull):
+            q.put_nowait(msg)
 
     def publish_all(self) -> None:
         """Full state that must reach every client: after orders or time change."""

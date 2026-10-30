@@ -1,5 +1,6 @@
 import { direction, percent, price, signed, volume } from '../lib/format'
 import type { Quote, QuoteStats } from '../lib/types'
+import { high52 as high52Of, low52 as low52Of } from '../lib/watchlist'
 import { RangeBar } from './Sparkline'
 
 interface Props {
@@ -13,8 +14,9 @@ interface Props {
 /** One-line quote header above the chart. */
 export function QuoteDetail({ quote, stats, onLookup }: Props) {
   const dir = direction(quote.change)
-  const high52 = stats && Math.max(stats.high_52w, quote.high)
-  const low52 = stats && Math.min(stats.low_52w, quote.low)
+  const row = { symbol: quote.symbol, quote, stats, qty: 0 }
+  const high52 = high52Of(row) ?? undefined
+  const low52 = low52Of(row) ?? undefined
   return (
     <div className="quote-detail">
       <button className="quote-symbol" onClick={onLookup} title="Look up another symbol (or just type one)">

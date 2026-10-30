@@ -19,8 +19,9 @@ function sameQuote(a: Quote, b: Quote): boolean {
   return true
 }
 
-export function mergeQuotes(prev: QuoteMap, incoming: Quote[]): QuoteMap {
-  const next = new Map(prev)
+export function mergeQuotes(prev: QuoteMap, incoming: Quote[], fresh = false): QuoteMap {
+  // `fresh`: time jumped, so quotes not in this tick are from another timeline.
+  const next = fresh ? new Map<string, Quote>() : new Map(prev)
   for (const q of incoming) {
     const old = prev.get(q.symbol)
     next.set(q.symbol, old && sameQuote(old, q) ? old : q)
@@ -41,6 +42,7 @@ export function useStream() {
   const [watchlists, setWatchlists] = useState<Watchlist[] | null>(null)
   const socket = useRef<WebSocket | null>(null)
   const wanted = useRef<string[] | null>(null)
+  const timeline = useRef<number | null>(null)
 
   const sendSubscription = (ws: WebSocket | null) => {
     if (ws && wanted.current && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', symbols: wanted.current }))
@@ -63,7 +65,9 @@ export function useStream() {
         const msg = JSON.parse(ev.data) as StreamMessage
         if (msg.type === 'tick') {
           setTick(msg)
-          setQuotes((prev) => mergeQuotes(prev, msg.quotes))
+          const jumped = timeline.current !== null && timeline.current !== msg.clock.timeline
+          timeline.current = msg.clock.timeline
+          setQuotes((prev) => mergeQuotes(prev, msg.quotes, jumped))
           setProgress(null)
         } else if (msg.type === 'progress') {
           setProgress(msg)

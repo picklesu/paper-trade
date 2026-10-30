@@ -115,3 +115,11 @@ def test_quote_sizes_are_round_lots_and_steady_within_a_second() -> None:
         samples.append((engine.quotes["SPY"].bid_size, engine.quotes["XLV"].bid_size))
     spy, xlv = np.mean(samples, axis=0)
     assert spy > 2 * xlv
+
+
+def test_saved_lists_drop_symbols_the_market_no_longer_has() -> None:
+    store = Store(":memory:")
+    Watchlists(store, SYMBOLS).update(1, symbols=["XOM", "SPY"])
+    lists = Watchlists(store, ["SPY", "QQQ"])  # XOM is gone
+    assert lists.get(1)["symbols"] == ["SPY"]
+    lists.update(1, symbols=["QQQ", "SPY"])  # edits still work

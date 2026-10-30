@@ -47,10 +47,10 @@ async def stream(ws: WebSocket) -> None:
                             continue
                         if isinstance(msg, dict) and msg.get("type") == "subscribe" and isinstance(msg.get("symbols"), list):
                             symbols = {s for s in msg["symbols"] if isinstance(s, str)}
-                            # Right away, even while paused (no ticks flowing).
-                            if queue.full():
-                                queue.get_nowait()
-                            queue.put_nowait(svc.snapshot())
+                            # Right away, even while paused (no ticks flowing); during a jump
+                            # the final state comes when it ends.
+                            if not svc.jumping:
+                                svc.send(queue, svc.snapshot())
                 tg.cancel_scope.cancel()
 
             tg.start_soon(receive)

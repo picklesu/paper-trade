@@ -25,6 +25,13 @@ import { useSparklines } from '../lib/sparklines'
 import { RangeBar, Sparkline } from './Sparkline'
 import { SymbolSearch } from './SymbolSearch'
 
+// Each list's edits go to the server one after another, so a later edit can't be
+// overtaken by an earlier one (each sends the whole list).
+const saves = new Map<number, Promise<void>>()
+function queueSave(listId: number, save: () => Promise<void>) {
+  saves.set(listId, (saves.get(listId) ?? Promise.resolve()).then(save))
+}
+
 interface Props {
   lists: List[]
   list: List
@@ -62,7 +69,7 @@ export function Watchlist({ lists, list, onPickList, quotes, stats, held, symbol
   const setSymbols = useCallback(
     (next: string[]) => {
       setPending({ base: list, symbols: next })
-      void run(() => updateWatchlist(list.id, { symbols: next }))
+      queueSave(list.id, () => run(() => updateWatchlist(list.id, { symbols: next })))
     },
     [list, run],
   )

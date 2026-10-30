@@ -70,6 +70,9 @@ describe('watchlist helpers', () => {
     expect(moveSymbol(list, 'A', 'C')).toEqual(['B', 'A', 'C', 'D'])
     expect(moveSymbol(list, 'B', null)).toEqual(['A', 'C', 'D', 'B'])
     expect(moveSymbol(list, 'B', 'B')).toBe(list)
+    expect(moveSymbol(list, 'B', 'C')).toBe(list) // dropped on the row below: no change
+    expect(moveSymbol(list, 'D', null)).toBe(list)
+    expect(moveSymbol(list, 'Z', 'A')).toBe(list)
   })
 
   it('keeps columns in menu order and drops unknown saved ones', () => {
@@ -78,6 +81,8 @@ describe('watchlist helpers', () => {
     expect(toggleColumn(DEFAULT_COLUMNS, 'spark')).toEqual(['last', 'change_pct'])
     expect(sanitizeColumns(['last', 'bogus', 'last', 3])).toEqual(['last'])
     expect(sanitizeColumns('x')).toBeNull()
+    expect(sanitizeColumns(['chg'])).toBeNull() // nothing usable: the defaults
+    expect(sanitizeColumns([])).toEqual([]) // all turned off on purpose
     expect(sanitizeSort({ key: 'last', dir: -1 })).toEqual({ key: 'last', dir: -1 })
     expect(sanitizeSort({ key: 'nope', dir: 1 })).toBeNull()
   })

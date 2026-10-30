@@ -379,10 +379,12 @@ body {
   font-size: 11px;
   line-height: 1.45;
 }
-.menu-credit a {
+.menu-item.menu-credit {
   color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
 }
-.menu-credit a:hover {
+.menu-item.menu-credit:hover {
   color: var(--text);
 }
 

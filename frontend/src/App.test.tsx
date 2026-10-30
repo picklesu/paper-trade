@@ -350,10 +350,13 @@ describe('workspace', () => {
     expect(saved).not.toContain('"orders"')
   })
 
-  it('credits TradingView in the Panels menu', () => {
+  it('credits TradingView in the Panels menu (the chart library’s notice and link)', () => {
     render(<App />)
     openMenu()
-    expect(screen.getByRole('link', { name: 'TradingView' })).toHaveAttribute('href', 'https://www.tradingview.com/')
+    const credit = screen.getByRole('menuitem', { name: /TradingView Lightweight Charts™, © 2025 TradingView, Inc\./ })
+    expect(credit).toHaveAttribute('href', 'https://www.tradingview.com/')
+    fireEvent.click(credit)
+    expect(screen.queryByRole('menu', { name: 'Panels' })).not.toBeInTheDocument()
   })
 
   it('remembers the layout across reloads, and Reset layout restores the default', async () => {

@@ -24,7 +24,7 @@ _Last updated: 2026-10-30, after Phase 6 (watchlists and quotes)._
 | 5.9. Real prices from Alpaca instead of Alpha Vantage (the user chose it over ThetaData and Yahoo) | Merged | #27 |
 | Fix: Alpaca certificate checks on macOS (truststore) | Merged | #28 |
 | 6. Watchlists and quotes (the user approved the proposal as is) | Merged | #29 |
-| Fix: TradingView logo off the chart; the required credit link is in the Panels menu, notice in `NOTICE` (user's request) | Merged | #30 |
+| Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
 | 7. Options chain with Greeks | **Next, when the user says so.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.

@@ -34,6 +34,38 @@ _Last updated: 2026-10-30, after Phase 7.5 (option prices calibrated to real mar
 
 ## Pick up here
 
+**Phase 8b proposal**
+Both sources work with your existing keys:
+- Dividends: Alpaca's corporate-actions data lists real ex-dates and amounts (AAPL: $0.26–0.27 quarterly).
+- Interest rate: Alpha Vantage gives the daily 3-month Treasury yield (4.18% on Oct 28).
+
+1. Dividends
+   - Real schedule: each symbol's dividend pattern comes from its real history: how often, which months, and the yield. For example AAPL quarterly at about 0.45% a year, KO about 2.9%, TLT monthly, SPY in Mar/Jun/Sep/Dec. Like the expiration pattern, it's laid over any simulated date. Symbols that don't pay, like TSLA, get none.
+   - Price drops on the ex-date: the stock opens lower by the dividend, as real stocks do. Price drift is reduced by the yield, so the long-run total return stays the same.
+   - Your account: if you hold shares at the ex-date, the cash arrives on the payment date a few days later. Orders shows it as a dividend record.
+2. More accurate option prices
+   - Dividends in pricing: dividends before expiration lower call prices and raise put prices, using the standard escrowed-dividend method.
+   - Early-exercise value (real US stock options can be exercised any day before expiration):
+     - Calls: Black's approximation, which checks whether exercising just before each ex-date is worth more.
+     - Puts: the Bjerksund–Stensland approximation, so a deep in-the-money put is never priced below its intrinsic value.
+
+     Both are fast enough to price every second, like now.
+   - Greeks are computed from these prices.
+   - Dividend assignment risk: a covered call can be assigned the day before an ex-date when its remaining time value is less than the dividend. This is the classic surprise for covered-call sellers. Exercising a long call to capture a dividend works too.
+3. The real interest rate: the daily 3-month Treasury yield replaces the fixed 4%, used for all pricing. Like the option calibration, today's real rate applies at any simulated date. It's fetched once a day, and without a key the fixed 4% stays.
+4. A VIX-like index:
+   - What it is: 30-day expected volatility for the simulated S&P 500, computed from the simulated SPY options with the real VIX method (a strip of out-of-the-money options, interpolated to 30 days).
+   - Where it shows: "VIX" in the watchlist and the chart, with 5 years of history. It can't be traded.
+   - What it does: rises in volatile regimes and selloffs, falls in calm markets, and runs a few points above realized volatility because of the premium.
+
+Cost: ex-dividend drops change how prices are generated. As with earlier model changes, your saved market continues from current prices, its 5-year history is rebuilt once, and prices jump once at the switch. Your account and orders are kept.
+
+Not included: interest on uninvested cash (real brokers pay some). It's easy to add if you want it.
+
+Two decisions:
+- Uncertainty shocks: include the Bloom shocks in 8b? The VIX makes them visible as they arrive and fade, which is why I suggested pairing them.
+- "Trigger a shock" button: if the shocks are in, add one under Go to… for practice?
+
 **Phase 8a (option trading) is done; the user tests it.** Next: Phase 8b (dividends with early
 exercise before ex-dividend dates, American-style pricing, the real interest rate, a VIX-like
 index): propose the details before building.

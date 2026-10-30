@@ -27,52 +27,29 @@ _Last updated: 2026-10-30, after Phase 7.5 (option prices calibrated to real mar
 | Fix: TradingView logo off the chart (user's request); the license's notice and link are a menu item at the bottom of the Panels menu; `NOTICE` holds the notice | Merged | #30 |
 | 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
 | 7.5. Option prices calibrated to real markets (the user approved the proposal as is) | Merged | #33 |
-| 8. Option trading, expiration, exercise, assignment | **Proposed, waiting for the user's approval** (split 8a/8b recommended) | — |
+| 8a. Option trading, expiration, exercise, assignment (the user approved the proposal) | Merged | #35 |
+| 8b. Dividends, American-style pricing, the real rate, a VIX-like index | Next: propose first | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Phase 7.5 is merged (#33); the user hasn't reported back on it yet. The Phase 8 proposal below
-waits for the user's approval.**
+**Phase 8a (option trading) is done; the user tests it.** Next: Phase 8b (dividends with early
+exercise before ex-dividend dates, American-style pricing, the real interest rate, a VIX-like
+index): propose the details before building.
 
-**Phase 8 proposal (option trading), given to the user 2026-10-30, not yet approved.** Claude
-recommended splitting it: **8a** trading, expiration, exercise and assignment; **8b** dividends
-(with early exercise before ex-dividend dates), American-style pricing, the real interest rate
-and a VIX-like index. 8a:
-1. **Orders:** buy to open/sell to close calls and puts; sell to open, and buy to close, covered
-   calls (100 shares per contract, locked: not available to stock sells, and shares already
-   promised to a working sell can't cover a call) and cash-secured puts (strike × 100 cash set
-   aside; the premium received is added to cash). Working option buys set cash aside like stock
-   buys. Market and limit, day or GTC; no stops on options (most brokers don't allow them).
-   Fills: market at the ask/bid; a limit fills when the model's ask/bid reaches it. Matching uses
-   the stock's per-second path; an option's price also moves with time inside a minute (theta,
-   the opening spread fading, the intraday IV nudge), so a minute is skipped only if the limit
-   can't be reached at the minute's best stock price at either end of the minute (with a small
-   margin); otherwise its seconds are checked. No commissions (as for stocks).
-2. **Entry:** clicking a chain bid/ask fills the Order Entry ticket (buy at the ask, sell at the
-   bid; opens it); the ticket gets a Stock/Option mode with the contract shown
-   ("AAPL Nov 20 '26 230 Call"), its review shows cost/credit, max loss, breakeven, cash or shares
-   set aside.
-3. **Positions:** option rows (contracts, average price, mark, value, P&L today and total, delta
-   and theta per position), net liq includes options at the mark; position totals for delta and
-   theta. A held contract's expiration stays listed even if a new calibration's pattern drops it.
-4. **Expiration** at the 4:00 PM close: in-the-money by $0.01 or more is exercised or assigned
-   (like the OCC's exercise by exception); others expire worthless. A long call the cash can't
-   cover, or a long put without 100 shares per contract (exercising it would sell short, which a
-   cash account can't), is sold at its last bid at 3:59 PM instead, as brokers do before the
-   close. Shares move at the strike; Orders show exercise, assignment and expiration as entries
-   with P&L.
-5. **Early exercise and assignment:** "Exercise" on a long position any day before expiration,
-   only if affordable (cash for a call's shares at the strike, the shares for a put); the app
-   warns when the option is worth more sold. Short in-the-money options can be assigned early
-   when their time value is nearly gone (a small daily chance, rising as time value falls under a
-   few cents), drawn from a stream keyed by name and the market's seed like the engine's, so
-   "Replay the same prices" replays the same assignments; 8b adds the dividend case.
-6. **Going back in time** works as for stocks: option fills, exercises, assignments, expirations
-   and closing sales after the target are rolled back (the contracts come back). Recorded fill
-   prices stay; the rewind preview values held options with the current calibration (the one in
-   force then isn't kept) and says so.
+**Phase 8a (built as approved, with the review's changes; PR #35):** buy/sell to open and close;
+covered calls and cash-secured puts only; market and limit; fills from `options.price` at each
+second (the chain uses the same function, so a market order fills at the ask shown); expiration
+by exception at the close; unexercisable longs sold at the 3:59 PM bid; early assignment of deep
+in-the-money shorts (chance 0.2 × (1 − time value / $0.05) at each close, a draw keyed to the
+session's last minute seed so replays repeat it); early exercise (`POST /api/options/exercise`);
+going back in time removes exercise/assignment/expiration records. Decisions made while
+building: exercise and assignment are booked as the option closing at its intrinsic value plus
+the shares trading at the stock's price (cash nets to the strike; the option's P/L shows whether
+the trade paid); the order's effect (open/close) is inferred from the position (an order can't
+do both); a held contract's expiration and strike stay listed. Clicking a chain price fills the
+ticket with a limit at that price, so it may rest if the quote moves before it's placed.
 
 Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
@@ -343,6 +320,21 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     power, day P&L (vs holdings at the previous close) and positions. `rewind(t)` deletes
     orders created after `t` and rolls back later fills, closes and triggers. `reset()`. Fill
     rules are in the module docstring.
+    **Options (8a):** symbols are OCC symbols (`options.Contract.parse`, `MULTIPLIER` 100); the
+    ledger is signed (shorts) with `apply_fill` handling multipliers and buy-to-close realized
+    P&L. `Order.effect` ("open"/"close") is set by `_check_option`; `reserved_cash` covers working
+    option buys and puts sold to open; `collateral()` (short puts) and `locked_shares()` (short
+    calls and calls being sold) reduce buying power and free shares. `_next_option_event` prices
+    each minute at its favorable stock extreme at both ends (with `MATCH_MARGIN`), then candidate
+    minutes second by second (a test checks it against brute force). `_settle_options(day)` runs
+    at each close passed in `process_iter` (which now also runs with option positions and no
+    working orders): `_expire` (assign/exercise/expire/close out), `_maybe_assign_early`.
+    `summary` prices held contracts with `contract_quote` (mark, delta, theta per position) and
+    `_start_of_day_value` uses each contract's mark at the previous close. `options.price(engine,
+    symbol, expiry, strikes, day, sec, spot, cal)` is the vectorized pricer over (moments ×
+    strikes) using `engine.option_inputs(day, col)` (open, prev close, vol ratio by regime index,
+    spread by minute, 5-minute closes); `today_ratio` now uses finished 5-minute stretches so it's
+    steady within one.
   - `trading/orders.py`: the `Order` dataclass. Every status change is time-stamped
     (`created_at`, `triggered_at`, `filled_at`, `closed_at`).
   - `store.py`: SQLite in WAL mode with `synchronous=NORMAL` (a plain commit cost about 60ms on
@@ -483,7 +475,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 264 (pytest), frontend 149 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 281 (pytest), frontend 154 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

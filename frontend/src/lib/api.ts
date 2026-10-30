@@ -1,5 +1,20 @@
 import type { Bar, Interval } from './bars'
-import type { Account, ClockState, Expiration, GotoAction, Order, OrderPreview, OrderType, QuoteStats, Side, SymbolInfo, TimeInForce, Watchlist } from './types'
+import type {
+  Account,
+  ClockState,
+  ExercisePreview,
+  Expiration,
+  GotoAction,
+  OptionChain,
+  Order,
+  OrderPreview,
+  OrderType,
+  QuoteStats,
+  Side,
+  SymbolInfo,
+  TimeInForce,
+  Watchlist,
+} from './types'
 
 export async function updateClock(update: { speed?: number; paused?: boolean }): Promise<ClockState> {
   const resp = await fetch('/api/clock', {
@@ -122,6 +137,19 @@ export interface OrderRequest {
   tif: TimeInForce
   limit_price?: number
   stop_price?: number
+}
+
+export function previewExercise(symbol: string, qty: number): Promise<ExercisePreview> {
+  return send('/api/options/exercise/preview', 'POST', { symbol, qty })
+}
+
+/** Exercise long contracts now: returns the records (the option and the shares). */
+export function exerciseOptions(symbol: string, qty: number): Promise<Order[]> {
+  return send('/api/options/exercise', 'POST', { symbol, qty })
+}
+
+export function fetchOptionChain(symbol: string, expiration: string): Promise<OptionChain> {
+  return send(`/api/options/chain?symbol=${encodeURIComponent(symbol)}&expiration=${expiration}`, 'GET')
 }
 
 export function placeOrder(order: OrderRequest): Promise<Order> {

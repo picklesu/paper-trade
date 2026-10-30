@@ -101,3 +101,32 @@ async def replace_order(order_id: int, body: OrderChange, request: Request) -> d
         raise HTTPException(422, str(e)) from None
     svc.after_trade()
     return svc.broker.order_dict(order)
+
+
+class ExerciseRequest(BaseModel):
+    symbol: str
+    qty: int
+
+
+@router.post("/options/exercise/preview")
+async def preview_exercise(body: ExerciseRequest, request: Request) -> dict:
+    """What exercising long contracts now would do."""
+    svc = market(request)
+    svc.sync()
+    try:
+        return svc.broker.preview_exercise(body.symbol.upper(), body.qty)
+    except OrderError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.post("/options/exercise")
+async def exercise(body: ExerciseRequest, request: Request) -> list[dict]:
+    """Exercise long contracts now: returns the records (the option and the shares)."""
+    svc = market(request)
+    svc.sync()
+    try:
+        records = svc.broker.exercise(body.symbol.upper(), body.qty)
+    except OrderError as e:
+        raise HTTPException(422, str(e)) from None
+    svc.after_trade()
+    return [svc.broker.order_dict(o) for o in records]

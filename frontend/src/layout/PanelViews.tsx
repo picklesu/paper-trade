@@ -8,9 +8,10 @@ import { PriceChart } from '../components/PriceChart'
 import { QuoteDetail } from '../components/QuoteDetail'
 import { Watchlist } from '../components/Watchlist'
 import { fetchExpirations } from '../lib/api'
-import { pickExpiration } from '../lib/options'
+import { parseOcc, pickExpiration } from '../lib/options'
 import type { Expiration } from '../lib/types'
 import { useAppData } from './appDataContext'
+import { useLayout } from './layoutContext'
 
 // The workspace panels. Each fills its dockview panel and scrolls on its own.
 
@@ -75,13 +76,20 @@ export function WatchlistView() {
 }
 
 export function TicketView() {
-  const { tick, quotes, orders, selected } = useAppData()
+  const { tick, quotes, orders, selected, chain, ticketRequest } = useAppData()
   const quote = quotes.get(selected)
-  return <Frame label="Order Entry">{quote && tick ? <OrderTicket quote={quote} account={tick.account} orders={orders} /> : waiting}</Frame>
+  // A chain click is for the selected symbol; one for another symbol (stale) is ignored.
+  const fill = ticketRequest && parseOcc(ticketRequest.symbol)?.underlying === selected ? ticketRequest : null
+  return (
+    <Frame label="Order Entry">
+      {quote && tick ? <OrderTicket quote={quote} account={tick.account} orders={orders} chain={chain} fill={fill} /> : waiting}
+    </Frame>
+  )
 }
 
 export function OptionsView({ api }: IDockviewPanelProps) {
-  const { tick, selected, chain, setChainRequest } = useAppData()
+  const { tick, selected, chain, setChainRequest, requestTicket } = useAppData()
+  const layout = useLayout()
   const shown = usePanelShown(api)
   const [wanted, setWanted] = useState<string | null>(null)
   const expirations = useExpirations(selected, tick?.clock.session_open, tick?.clock.timeline, tick?.clock.calibration)
@@ -97,7 +105,17 @@ export function OptionsView({ api }: IDockviewPanelProps) {
   return (
     <Frame label="Options">
       {tick ? (
-        <OptionChain symbol={selected} expirations={expirations} expiration={expiration} onExpiration={setWanted} chain={current} />
+        <OptionChain
+          symbol={selected}
+          expirations={expirations}
+          expiration={expiration}
+          onExpiration={setWanted}
+          chain={current}
+          onTrade={(symbol, side, limit) => {
+            requestTicket({ symbol, side, limit })
+            layout?.show('ticket')
+          }}
+        />
       ) : (
         waiting
       )}

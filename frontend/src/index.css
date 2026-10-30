@@ -753,6 +753,20 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
 }
+.mode-toggle {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+}
+.option-contract {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 8px;
+}
+.option-action {
+  margin: 0;
+}
 .side {
   padding: 7px;
   border: 1px solid var(--border);
@@ -1259,6 +1273,20 @@ body {
 }
 .chain-earnings {
   color: var(--warn);
+}
+.chain-trade {
+  all: unset;
+  cursor: pointer;
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.chain-trade.buy:hover,
+.chain-trade.buy:focus-visible {
+  background: color-mix(in srgb, var(--up) 30%, transparent);
+}
+.chain-trade.sell:hover,
+.chain-trade.sell:focus-visible {
+  background: color-mix(in srgb, var(--down) 30%, transparent);
 }
 .chain-calibration {
   cursor: help;

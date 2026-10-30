@@ -11,6 +11,8 @@ export interface LayoutControls {
   /** Move a panel to an edge, keeping it open or collapsed (for an off panel, where it comes back). */
   setEdge: (id: PanelId, edge: Edge) => void
   reset: () => void
+  /** Open a panel (turning it on, or out of its edge tab). */
+  show: (id: PanelId) => void
 }
 
 export const LayoutContext = createContext<LayoutControls | null>(null)

@@ -25,7 +25,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
 
 ## Workspace
 
-- Every view is a panel: **Chart**, **Watchlist**, **Order Entry**, **Positions**, **Orders**. Panels have no tab bars or buttons, so the chart gets the room.
+- Every view is a panel: **Chart**, **Watchlist**, **Order Entry**, **Options**, **Positions**, **Orders**. Panels have no tab bars or buttons, so the chart gets the room.
 - **The chart is always in the middle; every other panel sits on an edge**: left, right, top or bottom. By default Watchlist and Order Entry are on the left and Positions and Orders on the bottom, all collapsed, so the chart has the screen.
 - Each edge has a strip of **tabs**, one per panel on it (Positions and Orders show a count when they have something). A tab **opens** its panel or **collapses** it again; it stays as you left it. Panels open on the same edge stack: top to bottom on the left and right, side by side on the top and bottom.
 - **Panels ▾** (top bar) puts each panel on an edge (◀ ▶ ▲ ▼) and turns it **On** or **Off**. **Reset layout** goes back to the default. Your layout is saved in this browser.
@@ -48,7 +48,12 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - **Columns** (⋯, saved in your browser, the same on both sides): bid, ask, bid and ask sizes, mark, implied volatility, delta, gamma, theta (per day), vega (per volatility point), rho, volume and open interest. Choose how many strikes to show around the price.
 - **How prices are made:** Black-Scholes at a 4% rate with no dividends. The **level** of implied volatility is the simulation's own: the stock's current volatility (higher in turbulent markets, nudged by how much it has moved so far today), drifting back to normal for longer expirations; an expiration that spans one of the simulation's earnings dates carries the earnings move, so its implied volatility drops the day after the report. That is multiplied by the **volatility risk premium**: real options cost more than the volatility that follows (about 1.0–1.25× by symbol and expiration, from real data; 1.12× without), so selling options has its realistic edge on average. The **shape** around it (how much dearer out-of-the-money puts are, how steep the smile is, by expiration) is fitted to each symbol's real options once a day; without real data it uses built-in estimates. Within the day, each strike keeps its volatility as the stock moves (so a falling stock moves onto the pricier puts' side), and the skew steepens in a selloff. Bids and asks sit on penny or nickel ticks, wider far from the money, for long expirations, in the first minutes after the open and in the days before earnings. Volume and open interest follow each symbol's real mix of expirations, strikes, calls and puts, scaled to the simulated day's trading (made up without real data); bid and ask sizes are for show.
 - The header shows the at-the-money implied volatility, the **expected move** by expiration (one standard deviation), and whether the smile is **calibrated** to real options and from which day; hover over it for the fitted premium and the real implied earnings move.
-- Options can't be traded yet (Phase 8 adds trading, expiration, exercise and assignment).
+- **Trading options:** click a bid (to sell) or an ask (to buy) in the chain: Order Entry opens on its **Options** tab with that contract and price, or pick the expiration, strike and call/put there yourself. Quantities are contracts of 100 shares; prices are per share. Market and limit orders, day or good till canceled; a limit fills when the chain's ask (buy) or bid (sell) reaches it, checked every second. No commissions.
+  - **Buy to open** calls and puts, and **sell to close** them.
+  - **Sell to open** only what a cash account allows: a **covered call** (100 shares you own per contract, locked until the call is closed, expires or is assigned) or a **cash-secured put** (the strike × 100 is set aside from buying power). **Buy to close** either.
+  - The review shows the breakeven at expiration, the most you can lose (or make), and the cash or shares set aside.
+- **Positions** shows options with their mark, P&L, delta (in shares) and theta (dollars a day), with totals. **Exercise…** exercises long options early (if you have the cash for a call's shares, or the shares for a put); it warns when selling would get more.
+- **Expiration** (4:00 PM on the expiration day): options $0.01 or more in the money are exercised (yours) or assigned (ones you sold); the rest expire worthless. A long call your cash can't cover, or a long put without the shares to deliver, is sold at the bid at 3:59 PM instead, as brokers do. Short options deep in the money with almost no time value left can be **assigned early** at any close (as in real markets). Orders lists each exercise, assignment and expiration with its P/L: the option closes at its value and the shares trade at the stock's price, which together is buying or selling the shares at the strike.
 
 ## Charts
 
@@ -63,7 +68,7 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - **Cash account:** $100,000 to start (change it with **Reset account…**). No margin and no short selling: buys need buying power (cash minus what open buy orders have set aside), and you can only sell shares you own.
 - **Order types:** market, limit, stop and stop limit; **Day** (expires at the 4:00 PM close) or **Good till canceled**.
 - **Fills:** market orders fill at the ask (buy) or bid (sell). A limit order fills at its price once the quote reaches it (the ask for a buy, the bid for a sell), or at a better price if the market opens past it. A stop triggers when the last price reaches it: a stop then fills at the ask/bid, and a stop limit becomes a limit order. Orders are checked against every second of prices, including at 600× and during fast-forwards.
-- **Orders** lists every order with filters (All, Working, Filled, Canceled / expired / rejected). A filled sell shows the **P/L** it realized against your average cost; the Filled filter adds them up. (A buy only opens a position: its open P/L is in Positions.)
+- **Orders** lists every order with filters (All, Working, Filled, Canceled / expired / rejected). A closing trade (a sell, or buying back an option you sold) shows the **P/L** it realized against your average price; the Filled filter adds them up. (An opening trade's open P/L is in Positions.)
 - **Review before placing:** the ticket shows a preview from the server (estimated price and total, buying power and position before and after, realized P&L on sells, warnings) before the order goes in. Afterwards, the ticket follows the order's live status.
 - **Modify** a working order from the Orders tab: it's canceled and replaced by a new order with your changes, as at a real broker. Filter the Orders tab by working, filled, or canceled/expired/rejected.
 - **Going back in time** erases trades made after that point and refunds them. Orders that were open then become open again, and positions are valued at that time's prices.
@@ -120,7 +125,8 @@ cd frontend && npm test
 | 6 | Watchlists and quotes: named lists, columns, sorting, sparklines, symbol lookup, fuller quote | Done |
 | 7 | Options chain with Greeks, exchange holidays | Done |
 | 7.5 | Option prices calibrated to real markets: each symbol's smile, volatility risk premium, expirations, volume and open interest from its real options, once a day | Done |
-| 8 | Option trading, expiration, exercise, assignment | |
+| 8a | Option trading: buy/sell to open and close (covered calls, cash-secured puts), positions with Greeks, expiration, exercise, assignment | Done |
+| 8b | Dividends (and early exercise before them), American-style pricing, the real interest rate, a VIX-like index | |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |
 | 11 | Analysis tools: screener, portfolio analytics, journal | |

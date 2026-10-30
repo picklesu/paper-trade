@@ -149,8 +149,14 @@ def test_activity_is_steady_and_peaks_near_the_money() -> None:
     assert sum(by_strike(later, "volume")[k] for k in both) > sum(by_strike(a, "volume")[k] for k in both)
 
 
+def plain_ratio(inputs, spec, sec):
+    """today_ratio without the nudge from the day's moves: the regime's level."""
+    sec = np.asarray(sec).astype(int)
+    return inputs.ratio[np.where(sec == 0, 0, (sec - 1) // 60 + 1)]
+
+
 def test_chains_follow_the_market_volatility(monkeypatch) -> None:
-    monkeypatch.setattr(o, "today_ratio", lambda engine, i, spec, ratio: ratio)
+    monkeypatch.setattr(o, "today_ratio", plain_ratio)
     monkeypatch.setattr(o, "SELLOFF_SKEW", 0.0)
     e = engine_at(et(2026, 1, 14, 12, 0))
     exp = o.expirations("SPY", e.time)[5].day
@@ -162,6 +168,27 @@ def test_chains_follow_the_market_volatility(monkeypatch) -> None:
     # The smile stays anchored at the open: the ATM volatility is read where the price is now.
     expected = math.sqrt(o.smile(theta, np.array([math.log(q.last / q.open)]), "SPY")[0] / t)
     assert c["atm_iv"] == pytest.approx(expected, rel=1e-3)
+
+
+def test_chain_and_price_agree_at_any_second() -> None:
+    """Order matching prices contracts at past seconds; the chain at that moment must agree."""
+    e = engine_at(et(2026, 1, 14, 11, 0))
+    exp = o.expirations("AAPL", e.time)[3].day
+    c = o.chain(e, "AAPL", exp)
+    day, sec = o._now(e)
+    p = o.price(e, "AAPL", exp, c["strikes"], day, [sec - 1, sec], [100.0, e.quotes["AAPL"].last])
+    assert p.call["ask"][1].tolist() == c["call"]["ask"] and p.put["bid"][1].tolist() == c["put"]["bid"]
+    k = c["strikes"][len(c["strikes"]) // 2]
+    one = o.contract_quote(e, o.Contract("AAPL", exp, "put", k))
+    assert one["bid"] == c["put"]["bid"][len(c["strikes"]) // 2]
+
+
+def test_contract_symbols() -> None:
+    c = o.Contract("AAPL", date(2026, 11, 20), "call", 232.5)
+    assert c.symbol == "AAPL261120C00232500" and o.Contract.parse(c.symbol) == c
+    assert c.label == "AAPL Nov 20 '26 232.5 Call"
+    assert o.Contract.parse("AAPL") is None and o.Contract.parse("AAPL261320C00232500") is None
+    assert c.intrinsic(240.0) == pytest.approx(7.5) and o.Contract("X", c.expiry, "put", 10).intrinsic(12) == 0
 
 
 def test_premium_and_calibrated_shape_set_the_prices() -> None:
@@ -180,7 +207,7 @@ def test_premium_and_calibrated_shape_set_the_prices() -> None:
 
 
 def test_sticky_strike_and_skew_steepen_when_the_stock_falls(monkeypatch) -> None:
-    monkeypatch.setattr(o, "today_ratio", lambda engine, i, spec, ratio: ratio)
+    monkeypatch.setattr(o, "today_ratio", plain_ratio)
     e = engine_at(et(2026, 1, 14, 12, 0))
     q = e.quotes["SPY"]
     exp = o.expirations("SPY", e.time)[5].day
@@ -195,7 +222,7 @@ def test_sticky_strike_and_skew_steepen_when_the_stock_falls(monkeypatch) -> Non
     # A selloff steepens the skew.
     fell = dataclasses.replace(q, last=q.prev_close * 0.96)
     monkeypatch.setitem(e.quotes, "SPY", fell)
-    calm, sold = o.chain(e, "SPY", exp), None
+    calm = o.chain(e, "SPY", exp)
     monkeypatch.setattr(o, "SELLOFF_SKEW", 0.0)
     sold = o.chain(e, "SPY", exp)
     ks = np.array(calm["strikes"])
@@ -204,28 +231,29 @@ def test_sticky_strike_and_skew_steepen_when_the_stock_falls(monkeypatch) -> Non
 
 
 def test_today_ratio_follows_the_move_so_far() -> None:
-    class Stub:
-        def __init__(self, closes: list[float], time: datetime) -> None:
-            self._closes, self.time = np.array(closes)[:, None], time
-            self.quotes = {"SPY": dataclasses.replace(engine_at(et(2026, 1, 14, 9, 30)).quotes["SPY"], open=closes[0])}
+    def inputs(closes5: list[float]) -> o.OptionInputs:
+        return o.OptionInputs(100.0, 100.0, np.ones(391), np.ones(390), np.array(closes5), np.zeros(391), 0)
 
-        def day_closes(self, step: int) -> np.ndarray:
-            return self._closes[1:]
-
-    noon = et(2026, 1, 14, 12, 0)
-    still = Stub([100.0] * 31, noon)
-    wild = Stub(list(100 * np.exp(np.cumsum(np.r_[0, np.tile([0.01, -0.01], 15)]))), noon)
-    assert o.today_ratio(still, 0, SPEC["SPY"], 1.0) < 1.0 < o.today_ratio(wild, 0, SPEC["SPY"], 1.0)
-    assert o.today_ratio(Stub([100.0], et(2026, 1, 14, 9, 31)), 0, SPEC["SPY"], 1.0) == 1.0  # too early to say
+    noon = 150 * 60
+    still = inputs([100.0] * 78)
+    wild = inputs(list(100 * np.exp(np.cumsum(np.tile([0.01, -0.01], 39)))))
+    spec = SPEC["SPY"]
+    assert o.today_ratio(still, spec, noon) < 1.0 < o.today_ratio(wild, spec, noon)
+    assert o.today_ratio(wild, spec, 60) == 1.0  # too early to say
+    # Steady within a 5-minute stretch.
+    assert o.today_ratio(wild, spec, noon) == o.today_ratio(wild, spec, noon + 200)
 
 
 def test_spreads_are_wider_at_the_open_and_sizes_are_shown() -> None:
     e = engine_at(et(2026, 1, 14, 9, 31))
     exp = o.expirations("AAPL", e.time)[3].day
     spec = SPEC["AAPL"]
-    early = o.spread_factor(e, spec, exp) / e.spread_factor(e.time)
+    day = date(2026, 1, 14)
+    inp = e.option_inputs(day, e.symbol_index("AAPL"))
+    early = o.spread_factor(inp, spec, day, 60, exp) / inp.spread[1]
+    late = o.spread_factor(inp, spec, day, 5400, exp) / inp.spread[90]
+    assert early > 1.8 and late == pytest.approx(1, abs=0.01)
     e.advance(et(2026, 1, 14, 11, 0))
-    assert early > 1.8 and o.spread_factor(e, spec, exp) / e.spread_factor(e.time) == pytest.approx(1, abs=0.01)
     c = o.chain(e, "AAPL", exp)
     sizes = np.array(c["call"]["ask_size"])
     assert (sizes >= 1).all() and c["call"]["bid_size"][0] >= 1
@@ -236,9 +264,10 @@ def test_spreads_are_wider_at_the_open_and_sizes_are_shown() -> None:
 def test_spreads_widen_before_earnings() -> None:
     # AAPL reports before the Jan 26, 2026 session.
     e = engine_at(et(2026, 1, 22, 12, 0))
-    spec = SPEC["AAPL"]
-    plain = o.spread_factor(e, spec, date(2026, 1, 23))  # expires before the report
-    assert o.spread_factor(e, spec, date(2026, 2, 20)) == pytest.approx(plain * o.EARNINGS_SPREAD)
+    spec, day = SPEC["AAPL"], date(2026, 1, 22)
+    inp = e.option_inputs(day, e.symbol_index("AAPL"))
+    plain = o.spread_factor(inp, spec, day, 9000, date(2026, 1, 23))  # expires before the report
+    assert o.spread_factor(inp, spec, day, 9000, date(2026, 2, 20)) == pytest.approx(plain * o.EARNINGS_SPREAD)
 
 
 def test_calibrated_volume_follows_the_stock_and_the_real_mix() -> None:

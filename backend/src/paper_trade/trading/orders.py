@@ -10,7 +10,14 @@ from datetime import datetime
 from typing import Literal
 
 Side = Literal["buy", "sell"]
-OrderType = Literal["market", "limit", "stop", "stop_limit"]
+OrderType = Literal["market", "limit", "stop", "stop_limit", "exercise", "assignment", "expiration"]
+# Exercise, assignment and expiration aren't orders anyone placed: they're
+# recorded as filled orders so the account, history and time travel treat them
+# like trades. An exercise or assignment is two records at the same moment: the
+# option closed at its intrinsic value and the shares traded at the stock's price
+# (the cash adds up to trading the shares at the strike).
+EVENT_TYPES = frozenset({"exercise", "assignment", "expiration"})
+Effect = Literal["open", "close"]
 TimeInForce = Literal["day", "gtc"]
 Status = Literal["working", "filled", "canceled", "expired", "rejected"]
 
@@ -33,6 +40,7 @@ class Order:
     closed_at: datetime | None = None  # when canceled, expired or rejected
     reason: str | None = None
     replaces: int | None = None  # the order this one replaced (cancel/replace)
+    effect: Effect | None = None  # options: opens or closes a position
 
     @property
     def has_limit(self) -> bool:
@@ -63,6 +71,7 @@ class Order:
             "closed_at": iso(self.closed_at),
             "reason": self.reason,
             "replaces": self.replaces,
+            "effect": self.effect,
         }
 
     @classmethod
@@ -87,4 +96,5 @@ class Order:
             closed_at=dt(d["closed_at"]),
             reason=d["reason"],
             replaces=d.get("replaces"),
+            effect=d.get("effect"),
         )

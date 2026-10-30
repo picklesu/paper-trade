@@ -246,6 +246,17 @@ class _Skeleton:
     next_start: _DayStart  # the following session's starting state
 
 
+@dataclass(frozen=True)
+class OptionInputs:
+    open: float  # the session's opening price
+    prev_close: float
+    ratio: np.ndarray  # (M+1,) volatility vs normal for second s at index 0 if s == 0, else (s-1)//60 + 1
+    spread: np.ndarray  # (M,) the stock's spread factor by minute
+    closes5: np.ndarray  # price at the end of each 5-minute stretch
+    volume: np.ndarray  # (M+1,) shares traded before each minute
+    minute_seed: int  # the session's last minute seed: a draw keyed to this market's path
+
+
 class MarketEngine:
     def __init__(
         self,
@@ -475,6 +486,26 @@ class MarketEngine:
         var = rho2 * start.variance * self._market_mults[r] ** 2 + (1 - rho2) * own * self._own_mults[r] ** 2
         return np.sqrt(var)
 
+    def option_inputs(self, day: date, col: int) -> "OptionInputs":
+        """What a session's option prices for one symbol depend on besides its
+        price and the time (see options.price)."""
+        sk = self._skeleton(day)
+        start = self._starts[day]
+        own = 1.0 if start.own_variance is None else float(start.own_variance[col])
+        rho2 = float(self._rho[col] ** 2)
+        by_regime = np.sqrt(rho2 * start.variance * self._market_mults**2 + (1 - rho2) * own * self._own_mults**2)
+        # Second s follows the regime of minute (s-1)//60; the open, the previous session's.
+        regimes = np.concatenate([[start.regime], sk.regimes])
+        return OptionInputs(
+            open=float(np.exp(sk.open[0, col])),
+            prev_close=float(start.prev_close[col]),
+            ratio=by_regime[regimes],
+            spread=sk.spread.copy(),
+            closes5=np.exp(sk.close[4::5, col]),
+            volume=sk.cum_volume[:, col].copy(),
+            minute_seed=int(sk.minute_seed[-1]),
+        )
+
     def spread_factor(self, t: datetime) -> float:
         """How many times wider than normal spreads are at market time `t`."""
         t = snap(t)
@@ -571,6 +602,10 @@ class MarketEngine:
             if hits.size:
                 return int(60 * m + a + hits[0])
         return None
+
+    def minute_prices(self, day: date, m: int, col: int) -> np.ndarray:
+        """(60,) one symbol's price at each second of minute `m` of a session."""
+        return self._fine(day, m, col)[:, col]
 
     def price_at(self, day: date, second: int, col: int) -> float:
         """One symbol's price `second` seconds after a session's open."""

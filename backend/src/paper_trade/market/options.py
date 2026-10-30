@@ -45,6 +45,7 @@ from paper_trade.market.calendar import (
     market_day,
     nth_weekday,
     session_close,
+    session_open,
     session_seconds,
     trading_day_on_or_before,
 )
@@ -52,6 +53,7 @@ from paper_trade.market.engine import (
     GAP_SHARE,
     TRADING_DAYS_PER_YEAR,
     MarketEngine,
+    OptionInputs,
     _intraday_shape,
     _key,
     _unit_hash,
@@ -111,10 +113,11 @@ DEFAULT_PATTERN = {
 DAILY_PATTERN = DEFAULT_PATTERN | {"short_weekdays": [0, 1, 2, 3, 4], "short_days": 14}
 
 
-def _interp(nodes: tuple[tuple[float, float], ...], years: float) -> float:
-    """Linear in log tenor between nodes, flat beyond them."""
+def _interp(nodes: tuple[tuple[float, float], ...], years):
+    """Linear in log tenor between nodes, flat beyond them (years: a number or an array)."""
     xs = [math.log(n[0]) for n in nodes]
-    return float(np.interp(math.log(max(years, 1e-6)), xs, [n[1] for n in nodes]))
+    out = np.interp(np.log(np.maximum(years, 1e-6)), xs, [n[1] for n in nodes])
+    return float(out) if np.ndim(out) == 0 else out
 
 
 @dataclass(frozen=True)
@@ -136,13 +139,13 @@ class Calibration:
     def calibrated(self) -> bool:
         return self.as_of is not None
 
-    def rho_at(self, symbol: str, years: float) -> float:
+    def rho_at(self, symbol: str, years):
         return _interp(self.rho, years) if self.rho else SKEW.get(symbol, SKEW[_kind(symbol)])
 
     def eta_for(self, symbol: str) -> float:
         return self.eta if self.eta is not None else CURVATURE[_kind(symbol)]
 
-    def premium_at(self, years: float) -> float:
+    def premium_at(self, years):
         return _interp(self.premium, years) if self.premium else DEFAULT_PREMIUM
 
     def describe(self) -> dict:
@@ -275,15 +278,16 @@ def _kind(symbol: str) -> str:
     return "index" if symbol in INDEX_FUNDS else "stock"
 
 
-def atm_variance(spec: SymbolSpec, ratio: float, years: float, earnings: int, premium: float = 1.0) -> float:
+def atm_variance(spec: SymbolSpec, ratio, years, earnings: int, premium=1.0):
     """Total implied variance at the money to expiry: today's volatility drifting
     back to normal, plus each earnings move's variance before expiry, all
-    scaled by the volatility risk premium."""
+    scaled by the volatility risk premium (numbers or arrays)."""
     normal = spec.vol**2
-    now = (spec.vol * ratio) ** 2
-    k = VOL_REVERSION * years
-    average = normal + (now - normal) * (1 - math.exp(-k)) / k if k > 1e-9 else now
-    return (average * years + earnings * spec.earnings_move**2) * premium**2
+    now = (spec.vol * np.asarray(ratio)) ** 2
+    k = VOL_REVERSION * np.asarray(years)
+    average = np.where(k > 1e-9, normal + (now - normal) * -np.expm1(-k) / np.maximum(k, 1e-12), now)
+    out = (average * years + earnings * spec.earnings_move**2) * np.asarray(premium) ** 2
+    return float(out) if np.ndim(out) == 0 else out
 
 
 def ssvi_phi_cap(theta, rho):
@@ -298,14 +302,14 @@ def ssvi(theta, k, rho, phi):
     return theta / 2 * (1 + rho * phi * k + np.sqrt((phi * k + rho) ** 2 + 1 - rho**2))
 
 
-def smile(theta: float, k: np.ndarray, symbol: str, cal: Calibration = DEFAULT, rho: float | None = None, years: float = 0.25) -> np.ndarray:
+def smile(theta, k, symbol: str, cal: Calibration = DEFAULT, rho=None, years=0.25):
     """Total variance at log-moneyness k = ln(K/F), given ATM total variance
-    theta: the symbol's SSVI surface (`rho` overrides its skew)."""
+    theta: the symbol's SSVI surface (`rho` overrides its skew). Arrays broadcast."""
     if rho is None:
         rho = cal.rho_at(symbol, years)
     gamma = cal.gamma
     phi = cal.eta_for(symbol) / (theta**gamma * (1 + theta) ** (1 - gamma))
-    return ssvi(theta, k, rho, min(phi, float(ssvi_phi_cap(theta, rho))))
+    return ssvi(theta, k, rho, np.minimum(phi, ssvi_phi_cap(theta, rho)))
 
 
 def _cdf(x: np.ndarray) -> np.ndarray:
@@ -322,18 +326,18 @@ def _pdf(x: np.ndarray) -> np.ndarray:
     return np.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
 
-def black_scholes(spot: float, k: np.ndarray, years: float, vol: np.ndarray, rate: float = RATE) -> dict[str, dict]:
+def black_scholes(spot, k, years, vol, rate: float = RATE) -> dict[str, dict]:
     """Prices and Greeks for calls and puts at strikes `k`: theta per calendar
-    day, vega and rho per 1 point (of volatility, of the rate)."""
-    t = max(years, 1e-6)
-    sq = vol * math.sqrt(t)
+    day, vega and rho per 1 point (of volatility, of the rate). Arrays broadcast."""
+    t = np.maximum(years, 1e-6)
+    sq = vol * np.sqrt(t)
     d1 = (np.log(spot / k) + (rate + vol * vol / 2) * t) / sq
     d2 = d1 - sq
-    disc = math.exp(-rate * t)
+    disc = np.exp(-rate * t)
     nd1, nd2, pd1 = _cdf(d1), _cdf(d2), _pdf(d1)
     gamma = pd1 / (spot * sq)
-    vega = spot * pd1 * math.sqrt(t) / 100
-    decay = -spot * pd1 * vol / (2 * math.sqrt(t))
+    vega = spot * pd1 * np.sqrt(t) / 100
+    decay = -spot * pd1 * vol / (2 * np.sqrt(t))
     call = {
         "price": spot * nd1 - k * disc * nd2,
         "delta": nd1,
@@ -351,7 +355,7 @@ def black_scholes(spot: float, k: np.ndarray, years: float, vol: np.ndarray, rat
     return {"call": call, "put": put}
 
 
-def quote_prices(symbol: str, mid: np.ndarray, delta: np.ndarray, years: float, market_factor: float) -> tuple[np.ndarray, np.ndarray]:
+def quote_prices(symbol: str, mid: np.ndarray, delta: np.ndarray, years, market_factor) -> tuple[np.ndarray, np.ndarray]:
     """Bids and asks on ticks ($0.01 below $3, $0.05 above, except penny-wide
     index funds) around the model price: wider far from the money, for long
     expirations and by `market_factor` (wide spreads in the stock, the open,
@@ -369,13 +373,13 @@ def quote_prices(symbol: str, mid: np.ndarray, delta: np.ndarray, years: float, 
     return np.round(bid, 2), np.round(ask, 2)
 
 
-def spread_factor(engine: MarketEngine, spec: SymbolSpec, expiry: date) -> float:
-    """How much wider than usual option spreads are now: the stock's own spread
-    factor, wider in the first minutes and in the sessions before earnings."""
-    now = engine.time
-    factor = engine.spread_factor(now) * (1 + OPEN_SPREAD * math.exp(-session_seconds(now) / 600))
-    today = market_day(now)
-    soon = earnings_days(spec, today + timedelta(days=1), min(expiry, add_trading_days(today, EARNINGS_SPREAD_DAYS)))
+def spread_factor(inputs: OptionInputs, spec: SymbolSpec, day: date, sec, expiry: date):
+    """How much wider than usual option spreads are at second `sec` of `day`:
+    the stock's own spread factor, wider in the first minutes and in the
+    sessions before earnings."""
+    sec = np.asarray(sec)
+    factor = inputs.spread[np.minimum(sec // 60, len(inputs.spread) - 1).astype(int)] * (1 + OPEN_SPREAD * np.exp(-sec / 600))
+    soon = earnings_days(spec, day + timedelta(days=1), min(expiry, add_trading_days(day, EARNINGS_SPREAD_DAYS)))
     return factor * (EARNINGS_SPREAD if soon else 1.0)
 
 
@@ -463,65 +467,165 @@ def _intraday_variance_share() -> np.ndarray:
     return v / v[-1]
 
 
-def today_ratio(engine: MarketEngine, i: int, spec: SymbolSpec, ratio: float) -> float:
-    """`ratio` nudged by how much the stock has moved since the open, as 5-minute
-    returns, compared with what that volatility would have moved it: up to
-    REALIZED_WEIGHT of the log difference by the close."""
-    s = min(int(session_seconds(engine.time)), SESSION_SECONDS - 1)
-    share = float(_intraday_variance_share()[s])
-    if share < 0.02:
-        return ratio
-    closes = np.concatenate([[engine.quotes[spec.symbol].open], engine.day_closes(5)[:, i]])
-    realized = float(np.sum(np.diff(np.log(closes)) ** 2))
-    expected = (spec.vol * ratio) ** 2 / TRADING_DAYS_PER_YEAR * (1 - GAP_SHARE) * share
-    log_ratio = math.log(np.clip(realized / expected, 0.25, 4.0)) if realized > 0 else math.log(0.25)
-    return ratio * math.exp(REALIZED_WEIGHT * share * log_ratio / 2)
+def today_ratio(inputs: OptionInputs, spec: SymbolSpec, sec) -> np.ndarray:
+    """The volatility ratio at second `sec` (the regime's), nudged by how much the
+    stock moved in the 5-minute stretches finished so far, compared with what
+    that volatility would have moved it: up to REALIZED_WEIGHT of the log
+    difference by the close. Steady within each stretch."""
+    sec = np.asarray(sec).astype(int)
+    ratio = inputs.ratio[np.where(sec == 0, 0, (sec - 1) // 60 + 1)]
+    path = np.log(np.concatenate([[inputs.open], inputs.closes5]))
+    realized = np.concatenate([[0.0], np.cumsum(np.diff(path) ** 2)])
+    done = np.minimum((sec + 1) // 300, len(path) - 1)  # stretches finished
+    share = _intraday_variance_share()[np.minimum(300 * done, SESSION_SECONDS - 1)]
+    expected = (spec.vol * ratio) ** 2 / TRADING_DAYS_PER_YEAR * (1 - GAP_SHARE) * np.maximum(share, 1e-12)
+    moved = realized[done]
+    log_ratio = np.where(moved > 0, np.log(np.clip(moved / expected, 0.25, 4.0)), math.log(0.25))
+    return np.where(share < 0.02, ratio, ratio * np.exp(REALIZED_WEIGHT * share * log_ratio / 2))
 
 
-def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DEFAULT) -> dict:
-    """Every strike's call and put for one expiration, in columns."""
+MULTIPLIER = 100  # shares per contract
+
+
+@dataclass(frozen=True)
+class Contract:
+    """One option: its underlying, expiration, call or put, and strike."""
+
+    underlying: str
+    expiry: date
+    right: str  # "call" or "put"
+    strike: float
+
+    @property
+    def symbol(self) -> str:
+        """The OCC symbol, e.g. AAPL261120C00230000."""
+        return f"{self.underlying}{self.expiry:%y%m%d}{self.right[0].upper()}{round(self.strike * 1000):08d}"
+
+    @property
+    def label(self) -> str:
+        """E.g. "AAPL Nov 20 '26 230 Call"."""
+        return f"{self.underlying} {self.expiry:%b} {self.expiry.day} '{self.expiry:%y} {self.strike:g} {self.right.title()}"
+
+    def intrinsic(self, spot):
+        return np.maximum(spot - self.strike, 0) if self.right == "call" else np.maximum(self.strike - spot, 0)
+
+    @classmethod
+    def parse(cls, symbol: str) -> "Contract | None":
+        """From an OCC symbol; None if it isn't one."""
+        if len(symbol) < 16 or symbol[-9] not in "CP" or not symbol[-15:-9].isdigit() or not symbol[-8:].isdigit():
+            return None
+        try:
+            expiry = date(2000 + int(symbol[-15:-13]), int(symbol[-13:-11]), int(symbol[-11:-9]))
+        except ValueError:
+            return None
+        return cls(symbol[:-15], expiry, "call" if symbol[-9] == "C" else "put", int(symbol[-8:]) / 1000)
+
+
+@dataclass(frozen=True)
+class Priced:
+    """Model prices for strikes (columns) at moments (rows)."""
+
+    years: np.ndarray  # (n, 1)
+    atm_iv: np.ndarray  # (n, 1) at the forward
+    iv: np.ndarray  # (n, k)
+    factor: np.ndarray  # (n, 1) spread factor
+    call: dict  # price, delta, gamma, theta, vega, rho, bid, ask: (n, k)
+    put: dict
+
+
+def price(
+    engine: MarketEngine,
+    symbol: str,
+    expiry: date,
+    strikes_,
+    day: date,
+    sec,
+    spot,
+    cal: Calibration = DEFAULT,
+    inputs: OptionInputs | None = None,
+) -> Priced:
+    """Option prices on `day` at session seconds `sec` with the stock at `spot`
+    (equal-length arrays, or numbers) for `strikes_`. The chain and order
+    matching both use this, so fills happen at the prices shown."""
     i = engine.symbol_index(symbol)
     spec = engine.specs[i]
-    now = engine.time
-    found = {e.day: e.kind for e in expirations(symbol, now, cal.pattern)}
-    if expiry not in found:
-        raise ValueError(f"{symbol} has no {expiry.isoformat()} expiration")
-    quote = engine.quotes[symbol]
-    spot = quote.last
-    years = max((session_close(expiry) - now).total_seconds(), 1.0) / YEAR_SECONDS
+    inp = inputs or engine.option_inputs(day, i)
+    sec = np.atleast_1d(np.asarray(sec, dtype=float))[:, None]
+    spot = np.atleast_1d(np.asarray(spot, dtype=float))[:, None]
+    ks = np.atleast_1d(np.asarray(strikes_, dtype=float))[None, :]
+    left = (session_close(expiry) - session_open(day)).total_seconds() - sec
+    years = np.maximum(left, 1.0) / YEAR_SECONDS
     # Today's earnings move (if any) already happened at the open.
-    reports = len(earnings_days(spec, market_day(now) + timedelta(days=1), expiry))
-    ratio = today_ratio(engine, i, spec, float(engine.vol_ratio()[i]))
+    reports = len(earnings_days(spec, day + timedelta(days=1), expiry))
+    ratio = today_ratio(inp, spec, sec)
     theta = atm_variance(spec, ratio, years, reports, cal.premium_at(years))
     # The skew steepens when the stock is down more than half a day's standard deviation.
-    down = -math.log(spot / quote.prev_close) / (spec.vol * ratio / math.sqrt(TRADING_DAYS_PER_YEAR))
-    rho = max(-0.95, cal.rho_at(symbol, years) - SELLOFF_SKEW * max(0.0, down - 0.5))
+    down = -np.log(spot / inp.prev_close) / (spec.vol * ratio / math.sqrt(TRADING_DAYS_PER_YEAR))
+    rho = np.maximum(-0.95, cal.rho_at(symbol, years) - SELLOFF_SKEW * np.maximum(0.0, down - 0.5))
     # Sticky strike: the smile stays where the day opened.
-    growth = math.exp(RATE * years)
-    atm_vol = math.sqrt(smile(theta, np.array([math.log(spot / quote.open)]), symbol, cal, rho)[0] / years)
-    ks = strikes(symbol, spot, atm_vol, years, (expiry - market_day(now)).days)
-    vols = np.sqrt(smile(theta, np.log(ks / (quote.open * growth)), symbol, cal, rho) / years)
-    model = black_scholes(spot, ks, years, vols)
-    factor = spread_factor(engine, spec, expiry)
-    sd = atm_vol * math.sqrt(years)
-    act = activity(engine, spec, expiry, found[expiry], ks, cal)
+    anchor = inp.open * np.exp(RATE * years)
+    iv = np.sqrt(smile(theta, np.log(ks / anchor), symbol, cal, rho) / years)
+    atm = np.sqrt(smile(theta, np.log(spot / inp.open), symbol, cal, rho) / years)
+    model = black_scholes(spot, ks, years, iv)
+    factor = spread_factor(inp, spec, day, sec, expiry)
+    for side in ("call", "put"):
+        m = model[side]
+        m["bid"], m["ask"] = quote_prices(symbol, m["price"], m["delta"], years, factor)
+    return Priced(years, atm, iv, factor, model["call"], model["put"])
+
+
+def _now(engine: MarketEngine) -> tuple[date, int]:
+    """Today and the session second of the market's latest quote."""
+    return market_day(engine.time), min(int(session_seconds(engine.time)), SESSION_SECONDS - 1)
+
+
+def contract_quote(engine: MarketEngine, contract: Contract, cal: Calibration = DEFAULT) -> dict:
+    """One contract's quote now: bid, ask, mark and Greeks (per share)."""
+    day, sec = _now(engine)
+    p = price(engine, contract.underlying, contract.expiry, contract.strike, day, sec, engine.quotes[contract.underlying].last, cal)
+    side = getattr(p, contract.right)
+    return {k: float(v[0, 0]) for k, v in side.items()} | {"mark": float((side["bid"][0, 0] + side["ask"][0, 0]) / 2)}
+
+
+def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DEFAULT, held: set[float] | None = None) -> dict:
+    """Every strike's call and put for one expiration, in columns. `held`:
+    strikes held at this expiration (listed even if the pattern or the strike
+    range leaves them out)."""
+    day, sec = _now(engine)
+    found = {e.day: e.kind for e in expirations(symbol, engine.time, cal.pattern)}
+    if expiry not in found and not held:
+        raise ValueError(f"{symbol} has no {expiry.isoformat()} expiration")
+    if session_close(expiry) <= engine.time:
+        raise ValueError(f"{symbol}'s {expiry.isoformat()} options have expired")
+    spec = engine.specs[engine.symbol_index(symbol)]
+    spot = engine.quotes[symbol].last
+    inputs = engine.option_inputs(day, engine.symbol_index(symbol))
+    at = price(engine, symbol, expiry, spot, day, sec, spot, cal, inputs)
+    years, atm_vol = float(at.years[0, 0]), float(at.atm_iv[0, 0])
+    ks = strikes(symbol, spot, atm_vol, years, (expiry - day).days)
+    if held:
+        ks = np.union1d(ks, np.round(sorted(held), 2))
+    p = price(engine, symbol, expiry, ks, day, sec, spot, cal, inputs)
+    kind = found.get(expiry, "weekly")
+    act = activity(engine, spec, expiry, kind, ks, cal)
+    factor = float(p.factor[0, 0])
     out: dict = {
         "symbol": symbol,
         "expiration": expiry.isoformat(),
-        "kind": found[expiry],
-        "days": (expiry - market_day(now)).days,
+        "kind": kind,
+        "days": (expiry - day).days,
         "years": round(years, 6),
         "spot": round(spot, 2),
         "rate": RATE,
         "atm_iv": round(atm_vol, 4),
-        "expected_move": round(spot * sd, 2),
-        "earnings": reports > 0,
+        "expected_move": round(spot * atm_vol * math.sqrt(years), 2),
+        "earnings": bool(earnings_days(spec, day + timedelta(days=1), expiry)),
         "calibration": cal.describe(),
         "strikes": ks.tolist(),
     }
     for side in ("call", "put"):
-        m = model[side]
-        bid, ask = quote_prices(symbol, m["price"], m["delta"], years, factor)
+        m = {k: v[0] for k, v in getattr(p, side).items()}
+        bid, ask = m["bid"], m["ask"]
         bid_size, ask_size = quote_sizes(engine, spec, expiry, side, ks, m["delta"], years, factor)
         out[side] = {
             "bid": bid.tolist(),
@@ -529,7 +633,7 @@ def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DE
             "bid_size": np.where(bid > 0, bid_size, 0).tolist(),
             "ask_size": ask_size.tolist(),
             "mark": np.round((bid + ask) / 2, 3).tolist(),
-            "iv": np.round(vols, 4).tolist(),
+            "iv": np.round(p.iv[0], 4).tolist(),
             "delta": np.round(m["delta"], 4).tolist(),
             "gamma": np.round(m["gamma"], 5).tolist(),
             "theta": np.round(m["theta"], 4).tolist(),

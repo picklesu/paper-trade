@@ -98,3 +98,25 @@ describe('option trading', () => {
     expect(screen.getByRole('dialog', { name: `Exercise ${option.label}` })).toBeInTheDocument()
   })
 })
+
+describe('the ticket keeps state honest', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+
+  it('a review is dropped when the symbol changes', async () => {
+    server()
+    const { rerender } = render(<OrderTicket quote={quote} account={account} orders={[]} chain={chain} fill={{ symbol, side: 'buy', limit: 5.1, id: 1 }} />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Review buy to open/ }))
+    expect(await screen.findByLabelText('Review order')).toBeInTheDocument()
+    rerender(<OrderTicket quote={{ ...quote, symbol: 'MSFT' }} account={account} orders={[]} chain={chain} fill={null} />)
+    expect(screen.queryByLabelText('Review order')).not.toBeInTheDocument()
+  })
+
+  it('switching to Stock and back keeps the option form as it was', async () => {
+    server()
+    render(<OrderTicket quote={quote} account={account} orders={[]} chain={chain} fill={{ symbol, side: 'buy', limit: 5.1, id: 1 }} />)
+    fireEvent.change(await screen.findByLabelText('Limit price (per share)'), { target: { value: '4.5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Stock' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+    expect(screen.getByLabelText('Limit price (per share)')).toHaveValue(4.5)
+  })
+})

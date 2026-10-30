@@ -43,6 +43,15 @@ export function OrderTicket({ quote, account, orders, chain = null, fill = null 
     setMode('option')
     flow.edit()
   }
+  // The option form mounts the first time it's shown (it fetches expirations and chains).
+  const [optionsUsed, setOptionsUsed] = useState(mode === 'option')
+  if (mode === 'option' && !optionsUsed) setOptionsUsed(true)
+  // A review or error is about the symbol it was made for.
+  const [lastSymbol, setLastSymbol] = useState(quote.symbol)
+  if (quote.symbol !== lastSymbol) {
+    setLastSymbol(quote.symbol)
+    flow.edit()
+  }
 
   if (flow.review) return flow.reviewView
   return (
@@ -54,10 +63,14 @@ export function OrderTicket({ quote, account, orders, chain = null, fill = null 
           </button>
         ))}
       </div>
-      {mode === 'stock' ? (
+      {/* Each form stays mounted once used, so switching keeps what's filled in (and a used chain click isn't reapplied). */}
+      <div hidden={mode !== 'stock'}>
         <StockForm quote={quote} account={account} flow={flow} />
-      ) : (
-        <OptionForm quote={quote} account={account} flow={flow} chain={chain} fill={fill} />
+      </div>
+      {optionsUsed && (
+        <div hidden={mode !== 'option'}>
+          <OptionForm quote={quote} account={account} flow={flow} chain={chain} fill={fill} />
+        </div>
       )}
       {flow.error && (
         <p className="ticket-result error" role="alert">
@@ -179,6 +192,7 @@ function StockForm({ quote, account, flow }: { quote: Quote; account: Account; f
 
   return (
     <form
+      className="ticket-fields"
       onSubmit={(e) => {
         e.preventDefault()
         flow.reviewOrder({
@@ -303,6 +317,7 @@ function OptionForm({ quote, account, flow, chain, fill }: OptionFormProps) {
 
   return (
     <form
+      className="ticket-fields"
       onSubmit={(e) => {
         e.preventDefault()
         if (!symbol) return

@@ -220,7 +220,9 @@ class Broker:
         return out
 
     def option_quote(self, c: Contract) -> dict:
-        return options.contract_quote(self.engine, c, self.calibration(c.underlying))
+        """A contract's quote now: bid, ask, mark and Greeks (per share)."""
+        sec = min(int(session_seconds(self.engine.time)), SESSION_SECONDS - 1)
+        return self._quote_at(c, market_day(self.engine.time), sec, self.engine.quotes[c.underlying].last)
 
     def summary(self, quotes: dict[str, Quote]) -> dict:
         led = self.ledger()
@@ -294,13 +296,12 @@ class Broker:
             return float(c.intrinsic(self.engine.quotes[c.underlying].prev_close))
         if c.expiry < day:
             return float(c.intrinsic(spot))
-        q = self._quote_at(c, day, SESSION_SECONDS - 1, spot)
-        return (q["bid"] + q["ask"]) / 2
+        return self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mark"]
 
     def _quote_at(self, c: Contract, day: date, sec: int, spot: float) -> dict:
         p = options.price(self.engine, c.underlying, c.expiry, c.strike, day, sec, spot, self.calibration(c.underlying))
-        side = getattr(p, c.right)
-        return {k: float(v[0, 0]) for k, v in side.items()}
+        q = {k: float(v[0, 0]) for k, v in getattr(p, c.right).items()}
+        return q | {"mark": (q["bid"] + q["ask"]) / 2}
 
     # ----- order entry -----------------------------------------------------------
 
@@ -322,10 +323,7 @@ class Broker:
         if c:
             q = self.option_quote(c)
             last, bid, ask = q["mark"], q["bid"], q["ask"]
-            triggered = False
-            market = ask if side == "buy" else bid
-            marketable = o.type == "market" or (market <= o.limit_price if side == "buy" else market >= o.limit_price)
-            fill = market if marketable else None
+            triggered, fill = False, _option_fill(o, q)
         else:
             sq = self.engine.quotes[symbol]
             last, bid, ask = sq.last, sq.bid, sq.ask
@@ -346,7 +344,8 @@ class Broker:
         after = Ledger(led.cash, {o.symbol: replace(pos)})
         apply_fill(after, o.symbol, side, qty, est)
         pos_after = after.positions[o.symbol]
-        realized = pos_after.realized - pos.realized if o.side == "sell" or o.effect == "close" else None
+        closing = o.effect == "close" if c else o.side == "sell"
+        realized = pos_after.realized - pos.realized if closing else None
         bp = self.buying_power()
         if fill is not None:
             # Cash moves now; selling a put to open also sets the strike aside.
@@ -765,8 +764,10 @@ class Broker:
             if day == end_day:
                 yield changed
                 return
-            changed |= self._settle_options(day)
+            # Day orders (and orders on contracts expiring now) go first: the cash and
+            # shares they held are free for exercises at this close.
             changed |= self._expire_day_orders(day)
+            changed |= self._settle_options(day)
             yield changed
             if not self._busy():
                 return
@@ -879,10 +880,8 @@ class Broker:
         t = self.engine.time
         c = Contract.parse(o.symbol)
         if c:
-            q = self.option_quote(c)
-            market = q["ask"] if o.side == "buy" else q["bid"]
-            if o.type == "market" or (market <= o.limit_price if o.side == "buy" else market >= o.limit_price):
-                self._fill(o, market, t)
+            if (fill := _option_fill(o, self.option_quote(c))) is not None:
+                self._fill(o, fill, t)
             return
         self._activate(o, t, self.engine.quotes[o.symbol].last, self.engine.spread_factor(t))
 
@@ -929,6 +928,10 @@ class Broker:
         if c and o.effect == "close" and o.qty > (held if o.side == "sell" else -held):
             self._close(o, "rejected", t, "The position to close isn't there any more")
             return
+        if c and o.effect == "open" and held and (held > 0) != (o.side == "buy"):
+            # Placed to open, but the position is now the other way: it would close instead.
+            self._close(o, "rejected", t, "The position changed since this order was placed (it would now close); place it again")
+            return
         if c and o.side == "sell" and o.effect == "open" and c.right == "call":
             if o.qty * MULTIPLIER > self.free_shares(c.underlying, excluding=o):
                 self._close(o, "rejected", t, f"Not enough free shares of {c.underlying} to cover the call at fill")
@@ -965,20 +968,13 @@ class Broker:
         if not held:
             return False
         before = len(self.orders)
-        close = session_close(day)
-        # Working orders on contracts expiring now can't fill any more.
-        for o in self.working():
-            c = Contract.parse(o.symbol)
-            if c and c.expiry <= day:
-                self._close(o, "expired", close)
-                self._save(o)
         expiring = sorted((c for c in held if c.expiry <= day), key=lambda c: (self.ledger().qty(c.symbol) > 0, c.symbol))
         for c in expiring:  # shorts first: assignments use cash and shares already set aside
             self._expire(c, day)
         for c in held:
             if c.expiry > day:
                 self._maybe_assign_early(c, day)
-        return len(self.orders) != before or any(o.closed_at == close for o in self.orders.values() if o.status == "expired")
+        return len(self.orders) != before
 
     def _close_price(self, c: Contract, day: date) -> float:
         return round(self.engine.price_at(day, SESSION_SECONDS - 1, self.engine.symbol_index(c.underlying)), 2)
@@ -1017,9 +1013,9 @@ class Broker:
         intrinsic = float(c.intrinsic(spot))
         if intrinsic < IN_THE_MONEY:
             return
-        q = self._quote_at(c, day, SESSION_SECONDS - 1, spot)
-        time_value = (q["bid"] + q["ask"]) / 2 - intrinsic
-        chance = EARLY_ASSIGNMENT * max(0.0, 1 - time_value / EARLY_TIME_VALUE)
+        time_value = self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mark"] - intrinsic
+        # A mid below intrinsic value (European pricing, wide spreads) counts as no time value.
+        chance = EARLY_ASSIGNMENT * max(0.0, 1 - max(time_value, 0.0) / EARLY_TIME_VALUE)
         if chance <= 0:
             return
         seed = self.engine.option_inputs(day, self.engine.symbol_index(c.underlying)).minute_seed
@@ -1047,9 +1043,9 @@ class Broker:
             if c := Contract.parse(p.symbol):
                 if c.expiry < day or session_close(c.expiry) <= t:
                     continue
-                q_then = self._quote_at(c, day, sec, prices_then[c.underlying])
+                mark_then = self._quote_at(c, day, sec, prices_then[c.underlying])["mark"]
                 now = self.option_quote(c)["mark"] if session_close(c.expiry) > self.engine.time else float(c.intrinsic(quotes_now[c.underlying].last))
-                positions.append({"symbol": p.symbol, "qty": p.qty, "option": _contract_dict(c), "price_now": round(now, 2), "price_then": round((q_then["bid"] + q_then["ask"]) / 2, 2)})
+                positions.append({"symbol": p.symbol, "qty": p.qty, "option": _contract_dict(c), "price_now": round(now, 2), "price_then": round(mark_then, 2)})
                 continue
             positions.append(
                 {
@@ -1105,6 +1101,14 @@ class Broker:
         self.store.save_order(o)
         if o.id > self.store.get("last_order_id", 0):
             self.store.set("last_order_id", o.id)
+
+
+def _option_fill(o: Order, q: dict) -> float | None:
+    """The price an option order trades at now against quote `q`, if it does."""
+    market = q["ask"] if o.side == "buy" else q["bid"]
+    if o.type == "market" or (market <= o.limit_price if o.side == "buy" else market >= o.limit_price):
+        return market
+    return None
 
 
 def _contract_dict(c: Contract) -> dict:

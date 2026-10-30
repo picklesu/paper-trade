@@ -275,3 +275,42 @@ def test_held_contracts_stay_listed_when_the_pattern_drops_them() -> None:
     chain = svc.option_chain("AAPL", weekly)
     assert c.strike in chain["strikes"]
     svc.broker.place(c.symbol, "sell", 1, "market")  # still tradable to close
+
+
+def test_expiring_day_orders_free_their_cash_for_exercise() -> None:
+    e, b = setup(et(2026, 1, 16, 10, 0), cash=30_000)
+    c = contract(e, "call", 0.9)
+    b.place(c.symbol, "buy", 1, "market")
+    # A day order holding most of the cash expires at the same close.
+    b.place("AAPL", "buy", 100, "limit", limit_price=round(e.quotes["AAPL"].last * 0.5, 2))
+    run_to_expiration(e, b)
+    assert any(o.type == "exercise" for o in b.orders.values()) and b.ledger().qty("AAPL") == 100
+
+
+def test_early_assignment_chance_is_capped(monkeypatch) -> None:
+    e, b = setup(et(2026, 1, 13, 10, 0))
+    c = contract(e, "put", 1.25)
+    b.place(c.symbol, "sell", 1, "market")
+    # Price the put below its intrinsic value: the chance stays at most EARLY_ASSIGNMENT.
+    real = b._quote_at
+    monkeypatch.setattr(b, "_quote_at", lambda *a: real(*a) | {"mark": 0.0})
+    seen = []
+    monkeypatch.setattr(broker_module, "_unit_hash", lambda x: seen.append(1) or np.array([broker_module.EARLY_ASSIGNMENT + 1e-6]))
+    advance(e, b, et(2026, 1, 14, 10, 0))
+    assert seen and not any(o.type == "assignment" for o in b.orders.values())
+
+
+def test_an_order_placed_to_open_is_rejected_if_it_would_close() -> None:
+    e, b = setup()
+    c = contract(e, "put", 1.0)
+    working = b.place(c.symbol, "sell", 1, "limit", limit_price=999)  # to open, resting
+    assert working.effect == "open"
+    b.place(c.symbol, "buy", 1, "market")  # now long the same put
+    b._fill(working, 999, e.time)
+    assert working.status == "rejected" and "position changed" in working.reason
+
+
+def test_opening_previews_realize_nothing() -> None:
+    e, b = setup(cash=50_000)
+    c = contract(e, "put", 0.9)
+    assert b.preview(c.symbol, "sell", 1, "market")["estimated_realized"] is None

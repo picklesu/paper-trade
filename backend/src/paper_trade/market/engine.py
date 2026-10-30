@@ -490,13 +490,16 @@ class MarketEngine:
         """What a session's option prices for one symbol depend on besides its
         price and the time (see options.price)."""
         sk = self._skeleton(day)
+        cached = self._option_inputs.get((day, col))
+        if cached and cached[0] is sk:  # same session generation (a new future makes another)
+            return cached[1]
         start = self._starts[day]
         own = 1.0 if start.own_variance is None else float(start.own_variance[col])
         rho2 = float(self._rho[col] ** 2)
         by_regime = np.sqrt(rho2 * start.variance * self._market_mults**2 + (1 - rho2) * own * self._own_mults**2)
         # Second s follows the regime of minute (s-1)//60; the open, the previous session's.
         regimes = np.concatenate([[start.regime], sk.regimes])
-        return OptionInputs(
+        inputs = OptionInputs(
             open=float(np.exp(sk.open[0, col])),
             prev_close=float(start.prev_close[col]),
             ratio=by_regime[regimes],
@@ -505,6 +508,10 @@ class MarketEngine:
             volume=sk.cum_volume[:, col].copy(),
             minute_seed=int(sk.minute_seed[-1]),
         )
+        if len(self._option_inputs) > 256:
+            self._option_inputs.clear()
+        self._option_inputs[(day, col)] = (sk, inputs)
+        return inputs
 
     def spread_factor(self, t: datetime) -> float:
         """How many times wider than normal spreads are at market time `t`."""
@@ -688,6 +695,7 @@ class MarketEngine:
             prices = np.array([s.price for s in self.specs])
         self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, self._normal)}
         self._skeletons: OrderedDict[date, _Skeleton] = OrderedDict()
+        self._option_inputs: dict[tuple[date, int], tuple[_Skeleton, OptionInputs]] = {}
         self._fines: OrderedDict[tuple[date, int], tuple[np.ndarray, np.ndarray]] = OrderedDict()
         self._quotes: tuple[datetime, dict[str, Quote]] | None = None
         self.backfilled = False

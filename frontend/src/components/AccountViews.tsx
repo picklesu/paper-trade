@@ -32,10 +32,8 @@ function PositionsTable({ account, onSelect }: { account: Account | null; onSele
   const [exercising, setExercising] = useState<Position | null>(null)
   if (!account?.positions.length) return <Placeholder text="No positions. Use the order ticket to buy shares or options." />
   const hasOptions = account.positions.some((p) => p.option)
-  const totals = {
-    delta: account.positions.reduce((sum, p) => sum + (p.delta ?? 0), 0),
-    theta: account.positions.reduce((sum, p) => sum + (p.theta ?? 0), 0),
-  }
+  // Theta is dollars a day, so it adds up across symbols; delta is in each symbol's shares, so it doesn't.
+  const theta = account.positions.reduce((sum, p) => sum + (p.theta ?? 0), 0)
   return (
     <>
       <table className="grid-table clickable">
@@ -101,9 +99,8 @@ function PositionsTable({ account, onSelect }: { account: Account | null; onSele
         {hasOptions && (
           <tfoot>
             <tr>
-              <td colSpan={6}>Total{account.collateral ? ` · ${dollars(account.collateral)} set aside for short puts` : ''}</td>
-              <td className="num">{totals.delta.toFixed(0)}</td>
-              <td className={`num ${direction(totals.theta)}`}>{signedDollars(totals.theta)}</td>
+              <td colSpan={7}>Total theta{account.collateral ? ` · ${dollars(account.collateral)} set aside for short puts` : ''}</td>
+              <td className={`num ${direction(theta)}`}>{signedDollars(theta)}</td>
               <td />
             </tr>
           </tfoot>

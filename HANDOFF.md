@@ -475,7 +475,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 281 (pytest), frontend 154 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 285 (pytest), frontend 156 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

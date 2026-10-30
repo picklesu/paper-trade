@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-29, after Phase 5.9 (real prices from Alpaca)._
+_Last updated: 2026-10-30, after Phase 6 (watchlists and quotes)._
 
 ## Where things stand
 
@@ -22,22 +22,25 @@ _Last updated: 2026-10-29, after Phase 5.9 (real prices from Alpaca)._
 | 5.7. Engine redesign (performance for 40 symbols and options; user approved Claude's plan) | Merged | #25 |
 | 5.8. Sync to real prices (the user chose Alpha Vantage; Stooq now blocks scripts) | Merged | #26 |
 | 5.9. Real prices from Alpaca instead of Alpha Vantage (the user chose it over ThetaData and Yahoo) | Merged | #27 |
-| 6. Watchlists and quotes | **Next, when the user says so.** See below. | — |
+| Fix: Alpaca certificate checks on macOS (truststore) | Merged | #28 |
+| 6. Watchlists and quotes (the user approved the proposal as is) | Merged | #29 |
+| 7. Options chain with Greeks | **Next, when the user says so.** | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Waiting on the user.** Decisions so far (2026-10-29):
+**Waiting on the user** to test Phase 6 and say when to start Phase 7. Decisions so far (2026-10-30):
 - **Layout presets and "narrow screens" (one panel at a time over the chart) are dropped**
   (they were the 5.5c steps). Don't propose them again.
 - **Done in 5.7:** 40 symbols, sector factors, volume following moves, spreads widening with
   volatility, single-stock clustering (the realism items discussed after 5.6).
-- **Next performance work (discussed with the user, not started):** the browser. Send only what's
-  on screen (subscriptions and deltas) in Phase 6/7, per-row selective re-renders instead of one
-  context re-rendering everything on each tick, virtualized long tables, options priced on the
-  server (vectorized Black-Scholes; SVI smile), what-if math in a Web Worker. WASM was ruled out:
-  the costs are data and DOM, not math.
+- **Browser performance (discussed with the user):** done in 6: stream subscriptions (only
+  on-screen symbols' quotes) and per-row re-renders (`mergeQuotes` keeps unchanged quotes as the
+  same object; watchlist rows are memoized). Not done: deltas (at 1× nearly every quote changes
+  each tick, so little to gain yet), virtualized long tables, options priced on the server
+  (vectorized Black-Scholes; SVI smile) and what-if math in a Web Worker, for Phase 7+. WASM was
+  ruled out: the costs are data and DOM, not math.
 - **Real prices (5.8, 5.9):** the user asked for prices close to real ones and chose option 2 (sync
   to real closes now, keep the simulation). In 5.9 the user switched the source to Alpaca
   (free, all symbols per request; its free history back to ~2016 can serve Phase 12). Option 3, discussed and deferred to Phase 12: real
@@ -45,11 +48,10 @@ _Last updated: 2026-10-29, after Phase 5.9 (real prices from Alpaca)._
   it; real days would only replay.
 - **Later realism:** exchange holidays/half days with Phase 7; earnings volatility dynamics (IV
   crush), a VIX-like index and dividends with Phases 7–8.
-- **Phase 6 (watchlists and quotes) proposal**, given to the user and not yet approved: several
-  named lists saved in SQLite, add/remove/reorder/sort, choosable columns (incl. a day
-  sparkline), held-position marker, symbol lookup from anywhere (type a ticker + Enter), a
-  fuller quote (day-range bar, 52-week high/low and average volume from history, spread),
-  simulated bid/ask sizes.
+- **Phase 6 decisions (Claude's, within the approved proposal):** the lookup opens on any letter
+  except F (full screen's shortcut) or "/"; default lists "Main" (the original 10) and "All
+  symbols"; columns and sort are per browser (localStorage), lists are on the server; default
+  columns Last, Chg %, Today (sparkline), as the panel is narrow.
 
 **The user is not QA**: verify everything (tests, build, lint with `--deny-warnings`, a
 headless-browser check that **looks at screenshots**, green CI) before merging, and don't ask
@@ -174,6 +176,27 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     prices…" (a footer link) → confirmation with how many symbols have prices and from when.
     Alpaca's response format was checked against the official alpaca-py SDK (the docs site blocks
     scripts). Old store keys `real_prices_usage`/`_attempts`/`_pause` from 5.8 are deleted on load.
+  - `watchlists.py` (6): `Watchlists`, named lists in the store's `watchlists` key (`next_id`,
+    `lists` of {id, name, symbols in order}); ids never reused; names tidied, unique ignoring
+    case, ≤40 chars; symbols must be known, duplicates dropped; the last list can't be deleted.
+    Rewind/reset leave them alone. API (`api/watchlists.py`): `GET /api/symbols`,
+    `GET /api/quote-stats` (`MarketService.quote_stats`: `History.quote_stats` cached per
+    (market day, timeline); 52-week high/low from `bars30` before today, average volume over the
+    last 30 stored sessions; about 130ms on 5 years), `GET /api/sparklines?symbols=` (the engine's
+    `day_closes(5)`: closes every 5 minutes so far plus the latest), `GET|POST /api/watchlists`,
+    `PATCH|DELETE /api/watchlists/{id}` (PATCH sets name and/or the whole symbol list). Changes
+    are broadcast as a `watchlists` stream message (also sent on connect). Saved lists drop
+    symbols the market no longer has on load. `bars30_day` index serves the stats (40ms).
+  - **Stream subscriptions (6):** a client sends `{"type": "subscribe", "symbols": [...]}`; its
+    ticks then carry only those quotes (filtered per connection in `api/stream.py`), and it gets a
+    tick straight away (even while paused; not during a jump). `MarketService.send` makes room in
+    a full queue by dropping the oldest tick/progress message, so `orders`/`watchlists` arrive.
+    The frontend drops quotes from before a time jump (`mergeQuotes(..., fresh)`). The frontend subscribes to the active list, the
+    selected symbol and held symbols once lists arrive; until then it gets all.
+  - **Quote sizes (6):** `Quote.bid_size`/`ask_size`, round lots from `_quote_sizes`: geometric
+    with mean 1 + daily volume / 4M / spread factor, hashed (`_unit_hash`, splitmix64) from the
+    minute's seed, the second and each symbol's key, so they're steady within a second and adding
+    a symbol leaves others' unchanged. Cosmetic: fills ignore them.
   - `trading/broker.py`: `Broker`, the cash account. `_build` validates (buying power, shares,
     prices; when replacing, that order's reserved cash or shares count as free). `preview`
     (no side effects: estimated price and total, buying power, cash, position, average cost,
@@ -274,12 +297,23 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     doesn't reach an ancestor of the panels, so theme variables are overridden with
     `.workspace .dockview-theme-dark`.
   - `lib/stream.ts`: one WebSocket with auto-reconnect. `useStream()` returns the latest tick
-    (quotes, clock, account), the orders list, and any fast-forward progress (cleared by the
-    next tick).
+    (clock, account), `quotes` (a `QuoteMap` of every quote seen, merged by `mergeQuotes`), the
+    orders list, the watchlists, any fast-forward progress (cleared by the next tick), and
+    `subscribe(symbols)` (re-sent after reconnects). Panels read quotes from the map, not
+    `tick.quotes` (which only has subscribed symbols). `lib/storage.ts` `useStoredState` for
+    localStorage-backed preferences.
   - `components/`: `TopBar` (plus the Panels menu), `ClockControls` (Go to…, pause, speeds from `clock.speeds`,
     regime badge or progress), `GoToDialog` (picker with ±day/week shortcuts → preview → forward
     immediately / rewind confirmation with replay or new future / new-market warning),
-    `Watchlist` (tick flashes), `QuoteDetail`, `OrderTicket` (form → `OrderReview` from the
+    `Watchlist` (6: `ListBar` picker/+/⋯ menu with New/Rename/Delete and Columns; memoized `Row`s
+    with tick flashes, held dot, × remove, drag to reorder when unsorted; optimistic `pending`
+    order tied to the list object it was based on; pure logic in `lib/watchlist.ts`: `COLUMNS`,
+    `sortRows`, `nextSort`, `moveSymbol`), `Sparkline`/`RangeBar` (`lib/sparklines.ts`
+    `useSparklines` refetches on a new 5-minute stretch, at most every 2s), `SymbolSearch`
+    (combobox with `matchSymbols` from `lib/symbols.ts`), `SymbolLookup` (global: a letter
+    other than F or "/" outside fields and dialogs opens it; `lookup` state in AppData),
+    `QuoteDetail` (bid/ask with sizes, day range bar, volume, then minor: spread, 52W range, avg
+    vol, open, prev close), `OrderTicket` (form → `OrderReview` from the
     server preview → place; `OrderStatusLine` follows the placed order through the stream,
     including replacements), `AccountViews` (Positions with "Reset account…", Orders with filters, Modify
     (`ModifyOrderDialog`) and Cancel, and a P/L column: each order's `realized` from the server,
@@ -311,7 +345,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 199 (pytest), frontend 109 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 216 (pytest), frontend 134 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -346,7 +380,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - Within a minute, seconds are a plausible bridge through the bar's open/high/low/close, not an
   exact Brownian path; minute highs and lows are drawn independently (their joint distribution is
   approximated).
-- The watchlist shows all 40 symbols in one scrolling list until Phase 6 adds lists.
+- The watchlist panel doesn't widen when columns are added; it scrolls sideways (drag its edge).
 - Changing the symbol list (adding one) still continues the market as a new one (`continue_older`)
   and rebuilds history, although other symbols' prices would be unchanged. Remapping saved
   starts by name and backfilling only the new symbol would avoid that; do it if symbols are added.

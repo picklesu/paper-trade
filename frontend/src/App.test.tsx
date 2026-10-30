@@ -33,6 +33,8 @@ function quote(symbol: string, last: number, prev_close: number): Quote {
     change,
     change_pct: (change / prev_close) * 100,
     volume: 1_500_000,
+    bid_size: 300,
+    ask_size: 500,
   }
 }
 
@@ -80,9 +82,12 @@ function tick(overrides: Partial<TickMessage> = {}): TickMessage {
   }
 }
 
+/** Sends a tick, after the watchlists (as the server does on connect). */
 function push(msg: TickMessage) {
+  const lists = { type: 'watchlists', watchlists: [{ id: 1, name: 'Main', symbols: msg.quotes.map((q) => q.symbol) }] }
   act(() => {
     FakeWebSocket.last!.onopen?.()
+    FakeWebSocket.last!.onmessage?.({ data: JSON.stringify(lists) })
     FakeWebSocket.last!.onmessage?.({ data: JSON.stringify(msg) })
   })
 }

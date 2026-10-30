@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import type { HistoryMessage, Order, ProgressMessage, StreamMessage, TickMessage } from './types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { HistoryMessage, Order, ProgressMessage, Quote, StreamMessage, TickMessage, Watchlist } from './types'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -10,13 +10,43 @@ function streamUrl(): string {
   return `${proto}://${location.host}/ws`
 }
 
-/** Single WebSocket to the backend, reconnecting automatically when it drops. */
+/** Every quote seen so far, by symbol. A quote whose values didn't change keeps
+ *  the same object, so rows showing it can skip re-rendering. */
+export type QuoteMap = ReadonlyMap<string, Quote>
+
+function sameQuote(a: Quote, b: Quote): boolean {
+  for (const key of Object.keys(b) as (keyof Quote)[]) if (a[key] !== b[key]) return false
+  return true
+}
+
+export function mergeQuotes(prev: QuoteMap, incoming: Quote[], fresh = false): QuoteMap {
+  // `fresh`: time jumped, so quotes not in this tick are from another timeline.
+  const next = fresh ? new Map<string, Quote>() : new Map(prev)
+  for (const q of incoming) {
+    const old = prev.get(q.symbol)
+    next.set(q.symbol, old && sameQuote(old, q) ? old : q)
+  }
+  return next
+}
+
+/** Single WebSocket to the backend, reconnecting automatically when it drops.
+ *  `subscribe(symbols)` asks for only those symbols' quotes (sent again after a
+ *  reconnect); until it's called, every symbol's quotes arrive. */
 export function useStream() {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [tick, setTick] = useState<TickMessage | null>(null)
+  const [quotes, setQuotes] = useState<QuoteMap>(() => new Map())
   const [progress, setProgress] = useState<ProgressMessage | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [history, setHistory] = useState<HistoryMessage | null>(null)
+  const [watchlists, setWatchlists] = useState<Watchlist[] | null>(null)
+  const socket = useRef<WebSocket | null>(null)
+  const wanted = useRef<string[] | null>(null)
+  const timeline = useRef<number | null>(null)
+
+  const sendSubscription = (ws: WebSocket | null) => {
+    if (ws && wanted.current && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', symbols: wanted.current }))
+  }
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -26,11 +56,18 @@ export function useStream() {
     const connect = () => {
       setStatus('connecting')
       ws = new WebSocket(streamUrl())
-      ws.onopen = () => setStatus('connected')
+      socket.current = ws
+      ws.onopen = () => {
+        setStatus('connected')
+        sendSubscription(ws)
+      }
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data) as StreamMessage
         if (msg.type === 'tick') {
           setTick(msg)
+          const jumped = timeline.current !== null && timeline.current !== msg.clock.timeline
+          timeline.current = msg.clock.timeline
+          setQuotes((prev) => mergeQuotes(prev, msg.quotes, jumped))
           setProgress(null)
         } else if (msg.type === 'progress') {
           setProgress(msg)
@@ -38,6 +75,8 @@ export function useStream() {
           setOrders(msg.orders)
         } else if (msg.type === 'history') {
           setHistory(msg.done < msg.total ? msg : null)
+        } else if (msg.type === 'watchlists') {
+          setWatchlists(msg.watchlists)
         }
       }
       ws.onclose = () => {
@@ -55,5 +94,12 @@ export function useStream() {
     }
   }, [])
 
-  return { status, tick, progress, orders, history }
+  const subscribe = useCallback((symbols: string[]) => {
+    const same = wanted.current && wanted.current.length === symbols.length && wanted.current.every((s, i) => s === symbols[i])
+    if (same) return
+    wanted.current = symbols
+    sendSubscription(socket.current)
+  }, [])
+
+  return { status, tick, quotes, progress, orders, history, watchlists, subscribe }
 }

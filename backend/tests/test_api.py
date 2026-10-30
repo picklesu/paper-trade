@@ -69,12 +69,27 @@ def test_paused_clock_does_not_advance(client: TestClient) -> None:
 def test_websocket_streams_ticks(client: TestClient) -> None:
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json()["type"] == "orders"
+        lists = ws.receive_json()
+        assert lists["type"] == "watchlists" and lists["watchlists"][0]["name"] == "Main"
         first = ws.receive_json()
         assert first["type"] == "tick"
         assert first["clock"]["speed"] == 1
         assert {q["symbol"] for q in first["quotes"]} >= {"SPY", "AAPL"}
+        assert first["quotes"][0]["bid_size"] % 100 == 0 and first["quotes"][0]["bid_size"] > 0
         second = next_message(ws, "tick")
         assert second["clock"]["time"] >= first["clock"]["time"]
+
+
+def test_websocket_subscriptions_send_only_those_quotes(client: TestClient) -> None:
+    client.post("/api/clock", json={"paused": True})  # no ticks flowing: the reply comes anyway
+    with client.websocket_connect("/ws") as ws:
+        assert len(next_message(ws, "tick")["quotes"]) == 40
+        ws.send_json({"type": "subscribe", "symbols": ["AAPL", "SPY", "NOPE"]})
+        tick = next_message(ws, "tick")
+        assert sorted(q["symbol"] for q in tick["quotes"]) == ["AAPL", "SPY"]
+        ws.send_text("not json")  # ignored
+        ws.send_json({"type": "subscribe", "symbols": []})
+        assert next_message(ws, "tick")["quotes"] == []
 
 
 def test_websocket_sees_clock_changes(client: TestClient) -> None:
@@ -295,3 +310,27 @@ def test_real_prices_status_and_sync(client: TestClient) -> None:
     resp = client.post("/api/real-prices/sync")
     assert resp.status_code == 200 and resp.json()["available"] == 1
     assert client.get("/api/quotes").json()[0]["last"] == 772.31
+
+
+def test_watchlist_endpoints_and_stream(client: TestClient) -> None:
+    with client.websocket_connect("/ws") as ws:
+        assert next_message(ws, "watchlists")["watchlists"][0]["name"] == "Main"
+        created = client.post("/api/watchlists", json={"name": "Energy", "symbols": ["XOM", "CVX"]})
+        assert created.status_code == 200 and created.json()["symbols"] == ["XOM", "CVX"]
+        list_id = created.json()["id"]
+        assert [w["name"] for w in next_message(ws, "watchlists")["watchlists"]] == ["Main", "All symbols", "Energy"]
+
+        resp = client.patch(f"/api/watchlists/{list_id}", json={"symbols": ["CVX", "XOM", "COP"]})
+        assert resp.json()["symbols"] == ["CVX", "XOM", "COP"]
+        assert client.patch(f"/api/watchlists/{list_id}", json={"symbols": ["NOPE"]}).status_code == 422
+        assert client.patch("/api/watchlists/99", json={"name": "x"}).status_code == 404
+        assert client.delete(f"/api/watchlists/{list_id}").status_code == 200
+        assert [w["name"] for w in client.get("/api/watchlists").json()] == ["Main", "All symbols"]
+        client.delete("/api/watchlists/2")
+        resp = client.delete("/api/watchlists/1")
+        assert resp.status_code == 422 and "last watchlist" in resp.json()["detail"]
+
+
+def test_symbols_endpoint(client: TestClient) -> None:
+    symbols = client.get("/api/symbols").json()
+    assert len(symbols) == 40 and symbols[0] == {"symbol": "SPY", "name": "S&P 500 ETF", "sector": None}

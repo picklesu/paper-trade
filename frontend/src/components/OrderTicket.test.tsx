@@ -16,6 +16,8 @@ const quote: Quote = {
   change: 1,
   change_pct: 0.44,
   volume: 1000,
+  bid_size: 100,
+  ask_size: 100,
 }
 
 const account: Account = {

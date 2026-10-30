@@ -1,5 +1,5 @@
 import type { Bar, Interval } from './bars'
-import type { Account, ClockState, GotoAction, Order, OrderPreview, OrderType, Side, TimeInForce } from './types'
+import type { Account, ClockState, GotoAction, Order, OrderPreview, OrderType, QuoteStats, Side, SymbolInfo, TimeInForce, Watchlist } from './types'
 
 export async function updateClock(update: { speed?: number; paused?: boolean }): Promise<ClockState> {
   const resp = await fetch('/api/clock', {
@@ -149,4 +149,43 @@ export async function fetchBars(symbol: string, interval: Interval, end?: number
   // Never hand the chart something it can't draw.
   if (!Array.isArray(page?.bars)) throw new Error('unexpected response from the server')
   return { bars: page.bars, more: Boolean(page.more) }
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+export async function fetchSymbols(): Promise<SymbolInfo[]> {
+  const list = await send<unknown>('/api/symbols', 'GET')
+  return Array.isArray(list) ? list.filter((s): s is SymbolInfo => isObject(s) && typeof s.symbol === 'string') : []
+}
+
+export async function fetchQuoteStats(): Promise<Record<string, QuoteStats>> {
+  const stats = await send<unknown>('/api/quote-stats', 'GET')
+  return isObject(stats) ? (stats as Record<string, QuoteStats>) : {}
+}
+
+export interface Sparklines {
+  step_minutes: number
+  /** The session's 9:30 open (ISO). */
+  session_open: string
+  /** Today's prices every `step_minutes` so far, ending with the latest. */
+  series: Record<string, number[]>
+}
+
+export async function fetchSparklines(symbols: string[]): Promise<Sparklines> {
+  const data = await send<Partial<Sparklines>>(`/api/sparklines?symbols=${encodeURIComponent(symbols.join(','))}`, 'GET')
+  if (!isObject(data?.series)) throw new Error('unexpected response from the server')
+  return data as Sparklines
+}
+
+export function createWatchlist(name: string, symbols: string[] = []): Promise<Watchlist> {
+  return send('/api/watchlists', 'POST', { name, symbols })
+}
+
+/** Rename and/or set the symbols (the whole list in order: add, remove and reorder). */
+export function updateWatchlist(id: number, change: { name?: string; symbols?: string[] }): Promise<Watchlist> {
+  return send(`/api/watchlists/${id}`, 'PATCH', change)
+}
+
+export function deleteWatchlist(id: number): Promise<{ deleted: number }> {
+  return send(`/api/watchlists/${id}`, 'DELETE')
 }

@@ -16,11 +16,14 @@ from paper_trade.market.history import History
 from paper_trade.realprices import STATUS_REFRESH_AFTER, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
+from paper_trade.watchlists import Watchlists
 
 TICK_SECONDS = 0.5
 SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it runs
 MAX_JUMP_DAYS = 252 * 5
 PROGRESS_EVERY_DAYS = 5
+SPARKLINE_MINUTES = 5
+SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
 REAL_PRICES_CHECK_SECONDS = 60  # the refresher's longest wait before checking the schedule
 STATUS_FETCH_WAIT_SECONDS = 5  # the Sync dialog's status waits this long for a fetch
 
@@ -65,6 +68,8 @@ class MarketService:
         self.history_days = history_days
         self.real = real
         self._real_task: asyncio.Task | None = None
+        self.watchlists = Watchlists(store, self.symbols)
+        self._stats: tuple[tuple, dict] | None = None
         self._real_lock = asyncio.Lock()
 
     @property
@@ -87,6 +92,26 @@ class MarketService:
             "account": self.broker.summary(quotes),
         }
 
+    def quote_stats(self) -> dict[str, dict]:
+        """52-week ranges and average volumes (cached until the day or the history changes)."""
+        key = (market_day(self.engine.time), self.timeline)
+        if self._stats is None or self._stats[0] != key:
+            self._stats = (key, self.history.quote_stats())
+        return self._stats[1]
+
+    def sparklines(self, symbols: list[str]) -> dict:
+        """Today's prices every SPARKLINE_MINUTES so far, ending with the latest."""
+        closes = self.engine.day_closes(SPARKLINE_MINUTES)
+        cols = {s: i for i, s in enumerate(self.symbols)}
+        return {
+            "step_minutes": SPARKLINE_MINUTES,
+            "session_open": session_open(market_day(self.engine.time)).isoformat(),
+            "series": {s: [round(float(p), 2) for p in closes[:, cols[s]]] for s in symbols if s in cols},
+        }
+
+    def watchlists_changed(self) -> None:
+        self.publish(self.watchlists.message(), force=True)
+
     def orders_message(self) -> dict:
         orders = sorted(self.broker.orders.values(), key=lambda o: o.id, reverse=True)
         return {"type": "orders", "orders": [self.broker.order_dict(o) for o in orders]}
@@ -105,13 +130,24 @@ class MarketService:
 
     def publish(self, msg: dict, force: bool = False) -> None:
         """Send to every subscriber. A slow client just misses messages, since the
-        next tick carries full state; with `force`, its oldest message is dropped
+        next tick carries full state; with `force`, a queued tick makes room
         instead, for messages that must arrive."""
         for q in self._subscribers:
-            if force and q.full():
-                q.get_nowait()
-            with contextlib.suppress(asyncio.QueueFull):
-                q.put_nowait(msg)
+            self.send(q, msg, force)
+
+    @staticmethod
+    def send(q: asyncio.Queue[dict], msg: dict, force: bool = True) -> None:
+        """Queue `msg` for one subscriber. When the queue is full and `force` is
+        set, the oldest message a later one supersedes (a tick or progress) makes
+        room, so `orders` and `watchlists` messages already queued still arrive."""
+        if q.full() and force:
+            held = [q.get_nowait() for _ in range(q.qsize())]
+            stale = next((i for i, m in enumerate(held) if m["type"] in SUPERSEDED), 0)
+            del held[stale]
+            for m in held:
+                q.put_nowait(m)
+        with contextlib.suppress(asyncio.QueueFull):
+            q.put_nowait(msg)
 
     def publish_all(self) -> None:
         """Full state that must reach every client: after orders or time change."""

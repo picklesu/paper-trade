@@ -33,6 +33,14 @@ A paper trading simulator that runs 24/7 on simulated market data.
 - The chart: the quote on one line with **Indicators ▾** and **Latest ⇥** at its right, and the range and bar size along the bottom (as drop-downs when the chart is narrow). There's no date axis: the line above the candles shows the hovered (or latest) bar's date and time.
 - **⛶ Full screen** (top bar, or press **F**) hides the OS and browser bars so the chart gets the whole screen; Esc leaves. Another option: in Chrome, ⋮ → Cast, save, and share → Install page as app (or Create shortcut → Open as window) gives the app its own window without tabs or bookmarks.
 
+## Watchlists and quotes
+
+- **Several named watchlists**, saved with the market: pick one in the Watchlist panel; **+** adds a symbol (type a ticker or part of a name); hover a row and click **×** to remove it; **drag rows** to reorder. **⋯** creates, renames and deletes lists.
+- **Sort** by clicking a column header (high to low, low to high, then back to your own order). **Choose columns** in **⋯ → Columns**: last, change, change %, today's chart (a sparkline against the previous close), day range, bid, ask, bid/ask sizes, spread, volume, average volume (30 days), 52-week high/low and shares held. A dot next to a symbol means you hold it.
+- **Look up a symbol from anywhere:** just start typing a ticker (or press **/**), then **Enter** shows it in the chart and order entry. Clicking the symbol in the quote line does the same. (F stays full screen.)
+- **The quote line** shows bid and ask with their sizes, the day's range as a bar, volume, spread, the 52-week range and average volume (from the history), open and previous close. What doesn't fit a narrow chart is dropped from the right.
+- The browser only receives quotes for what's on screen (the watchlist, the selected symbol and your positions), and only rows whose quote changed are redrawn.
+
 ## Charts
 
 - Interactive candlestick chart with volume: **drag** to pan, **scroll or pinch** to zoom, hover for the bar's open/high/low/close/volume. Older history loads automatically as you scroll or zoom out.
@@ -98,7 +106,7 @@ cd frontend && npm test
 | 5.7 | Engine redesign: minute-resolution sessions with seconds on demand (16× faster, 20× less memory), 40 symbols with sectors, volume and spreads that follow volatility, single-stock clustering | Done |
 | 5.8 | Sync to real prices | Done |
 | 5.9 | Real prices from Alpaca: all symbols in one request, refreshed every 15 minutes (replaces Alpha Vantage's 25 requests a day) | Done |
-| 6 | Watchlists and quotes | |
+| 6 | Watchlists and quotes: named lists, columns, sorting, sparklines, symbol lookup, fuller quote | Done |
 | 7 | Options chain with Greeks | |
 | 8 | Option expiration, exercise, assignment | |
 | 9 | Multi-leg strategies and risk graph | |

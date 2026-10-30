@@ -223,3 +223,16 @@ def test_market_from_an_older_model_continues_and_rebuilds_history(tmp_path) -> 
     days = new.history.stored_days()
     assert len(days) == 5 and max(days) < continued.date() and days != old_days
     assert engine.backfilled and engine.time == continued
+
+
+def test_a_full_queue_keeps_orders_and_watchlists_messages() -> None:
+    svc, _ = make_service()
+    q = svc.subscribe()
+    for kind in ["orders", "tick", "watchlists"] + ["tick"] * (q.maxsize - 3):
+        svc.send(q, {"type": kind}, force=False)
+    assert q.full()
+    svc.send(q, {"type": "orders", "n": 2})
+    svc.send(q, {"type": "watchlists", "n": 2})
+    kinds = [m["type"] for m in drain(q)]
+    assert kinds.count("orders") == 2 and kinds.count("watchlists") == 2
+    assert kinds.count("tick") == q.maxsize - 4

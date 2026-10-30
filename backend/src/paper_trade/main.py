@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from paper_trade import __version__, realprices
-from paper_trade.api import health, market, stream, trading
+from paper_trade.api import health, market, stream, trading, watchlists
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
 from paper_trade.market.service import MarketService
@@ -61,6 +61,7 @@ def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: 
     app.include_router(health.router, prefix="/api")
     app.include_router(market.router, prefix="/api")
     app.include_router(trading.router, prefix="/api")
+    app.include_router(watchlists.router, prefix="/api")
     app.include_router(stream.router)
     return app
 

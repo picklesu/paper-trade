@@ -138,7 +138,8 @@ LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "
 
 _S = SESSION_SECONDS
 _M = SESSION_MINUTES
-_SKELETON, _FINE = 1, 2  # random stream kinds
+_SKELETON, _FINE, _QUOTE_SIZES = 1, 2, 3  # random stream kinds
+VOLUME_PER_QUOTE_LOT = 4_000_000  # a symbol trading this much a day shows about 2 lots a side
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,8 @@ class Quote:
     low: float
     prev_close: float
     volume: int
+    bid_size: int = 0
+    ask_size: int = 0
 
     def to_dict(self) -> dict:
         # Change is computed from the rounded prices so the numbers the UI
@@ -173,6 +176,8 @@ class Quote:
             "change": change,
             "change_pct": round(change / prev_close * 100, 2),
             "volume": self.volume,
+            "bid_size": self.bid_size,
+            "ask_size": self.ask_size,
         }
 
 
@@ -403,6 +408,7 @@ class MarketEngine:
         open_ = np.exp(sk.open[0])
         prev_close = self._starts[day].prev_close
         factor = float(sk.spread[m])
+        bid_size, ask_size = self._quote_sizes(sk, m, sec, factor)
         quotes = {}
         for i, spec in enumerate(self.specs):
             last = float(seconds[-1, i])
@@ -418,8 +424,34 @@ class MarketEngine:
                 low=float(low[i]),
                 prev_close=float(prev_close[i]),
                 volume=int(volume[i]),
+                bid_size=int(bid_size[i]),
+                ask_size=int(ask_size[i]),
             )
         return quotes
+
+    def _quote_sizes(self, sk: _Skeleton, m: int, sec: int, factor: float) -> tuple[np.ndarray, np.ndarray]:
+        """Shares shown at the bid and ask: round lots, deeper for heavily traded
+        symbols and thinner when spreads are wide. For show only (fills ignore
+        them). Hashed from the minute's seed, the second and each symbol's key, so
+        the same moment always shows the same sizes and adding a symbol leaves
+        the others' alone."""
+        keys = np.array(self._keys[1 + len(self.sectors) :], dtype=np.uint64)
+        base = np.uint64((int(sk.minute_seed[m]) * 1_000_003 + sec * 7919 + _QUOTE_SIZES) % 2**64)
+        u = np.stack([_unit_hash(keys * np.uint64(2) + np.uint64(side) + base) for side in (0, 1)])
+        mean_lots = 1 + self._daily_volume / VOLUME_PER_QUOTE_LOT / factor
+        lots = 1 + np.floor(np.log(u) / np.log1p(-1 / mean_lots))  # geometric with that mean
+        lots = np.nan_to_num(lots, nan=1.0, posinf=1.0)  # mean_lots of 1: always one lot
+        return 100 * lots[0].astype(int), 100 * lots[1].astype(int)
+
+    def day_closes(self, step: int = 5) -> np.ndarray:
+        """(K, N) today's price at the end of each `step`-minute stretch so far,
+        the last being the latest price (for sparklines)."""
+        day = market_day(self._time)
+        s = min(int(session_seconds(self._time)), _S - 1)
+        m = s // 60
+        closes = np.exp(self._skeleton(day).close[step - 1 : m : step])
+        last = np.array([[q.last for q in self.quotes.values()]])
+        return np.concatenate([closes, last]) if s else last
 
     @property
     def regime(self) -> str:
@@ -938,6 +970,16 @@ class MarketEngine:
 
 def _key(name: str) -> int:
     return zlib.crc32(name.encode())
+
+
+def _unit_hash(x: np.ndarray) -> np.ndarray:
+    """Uniform numbers in (0, 1) from uint64s (splitmix64's mixer)."""
+    with np.errstate(over="ignore"):
+        x = x + np.uint64(0x9E3779B97F4A7C15)
+        x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        x = x ^ (x >> np.uint64(31))
+    return ((x >> np.uint64(11)).astype(float) + 0.5) / 2.0**53
 
 
 def _start_from(saved: list) -> _DayStart:

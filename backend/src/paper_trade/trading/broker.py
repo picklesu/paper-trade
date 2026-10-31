@@ -51,7 +51,7 @@ from paper_trade.market.calendar import (
     session_open,
     session_seconds,
 )
-from paper_trade.market.engine import MarketEngine, Quote, dividend_days, _key, _unit_hash, bid_ask, bid_ask_arrays
+from paper_trade.market.engine import MarketEngine, Quote, _key, _unit_hash, bid_ask, bid_ask_arrays
 from paper_trade.market.options import MULTIPLIER, Calibration, Contract
 from paper_trade.store import Store
 from paper_trade.trading.orders import EVENT_TYPES, Order, OrderType, Side, TimeInForce
@@ -1066,7 +1066,7 @@ class Broker:
         """At `day`'s close: dividends that went ex DIVIDEND_LAG sessions ago are paid
         on the shares held when that session opened."""
         ex = add_trading_days(day, -DIVIDEND_LAG)
-        if not any(dividend_days(spec, ex, ex) for spec in self.engine.specs):
+        if not any(self.engine.dividend_schedule(i, ex, ex, 1.0) for i in range(len(self.engine.specs))):
             return False
         held = self.ledger(before=session_open(ex))
         paid = session_close(day)
@@ -1134,10 +1134,9 @@ class Broker:
     def _dividend_next_session(self, c: Contract, day: date, spot: float) -> float:
         """The dividend per share the underlying pays at the next session's open (0 if none).
         The next session opens at today's close, so it is a fraction of that price."""
-        spec = self.engine.specs[self.engine.symbol_index(c.underlying)]
-        if next_trading_day(day) not in dividend_days(spec, next_trading_day(day), next_trading_day(day)):
-            return 0.0
-        return round(spec.dividend_fraction * spot, 2)
+        nxt = next_trading_day(day)
+        schedule = self.engine.dividend_schedule(self.engine.symbol_index(c.underlying), nxt, nxt, spot)
+        return round(sum(f for _, f in schedule) * spot, 2)
 
     # ----- time travel -----------------------------------------------------------
 

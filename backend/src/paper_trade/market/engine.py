@@ -51,7 +51,7 @@ import zlib
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 
@@ -68,6 +68,7 @@ from paper_trade.market.calendar import (
     session_seconds,
     snap,
 )
+from paper_trade.market.realbars import RealBars, RealDay
 from paper_trade.market.symbols import SYMBOLS, SymbolSpec
 
 TRADING_DAYS_PER_YEAR = 252
@@ -154,7 +155,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 5  # 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 6  # 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -294,9 +295,12 @@ class MarketEngine:
         seed: int = 42,
         specs: tuple[SymbolSpec, ...] = SYMBOLS,
         prices: np.ndarray | None = None,
+        real: RealBars | None = None,
     ) -> None:
-        """A new market at `start`, its previous closes at `prices` (default: the specs')."""
+        """A new market at `start`, its previous closes at `prices` (default: the specs').
+        With `real` bars, every session up to the newest real day follows them (8e)."""
         self.specs = specs
+        self._real = real
         vol = np.array([s.vol for s in specs])
         self._rho = np.array([s.market_corr for s in specs])
         self._beta = self._rho * vol / MARKET_VOL
@@ -452,6 +456,11 @@ class MarketEngine:
         # moves so far took them from the targets.
         now = np.array([q.last for q in self.quotes.values()])
         self._reset(self._time, seed, prices * prices / now)
+
+    def use_real(self, real: RealBars | None) -> None:
+        """Newly fetched bars. Only markets started from now on replay up to their newest
+        day; this market keeps `real_through` (the sessions it already played stay)."""
+        self._real = real
 
     # ----- current state -----------------------------------------------------
 
@@ -696,7 +705,14 @@ class MarketEngine:
         """
         origin_day = market_day(self.origin)
         day = add_trading_days(origin_day, -days)
-        start = _DayStart(np.ones(len(self.specs)), self._normal)
+        # Real prices start where the real history says; the rest from 1.0, scaled at the end.
+        prices = np.ones(len(self.specs))
+        if self._real is not None and self._real_through is not None and day <= self._real_through:
+            for i in range(len(self.specs)):
+                close = self._real.close_before(i, day)
+                if close is not None:
+                    prices[i] = close
+        start = _DayStart(prices, self._normal)
         unit: dict[date, _DayStart] = {}
         try:
             while day < origin_day:
@@ -821,11 +837,16 @@ class MarketEngine:
             "model": MODEL_VERSION,
             "shocks": {d.isoformat(): [e, at.isoformat()] for d, (e, at) in self._shocks.items()},
             "symbols": [s.symbol for s in self.specs],
+            "real_through": self._real_through.isoformat() if self._real_through else None,
         }
 
     @classmethod
-    def from_state(cls, state: dict, specs: tuple[SymbolSpec, ...] = SYMBOLS) -> "MarketEngine":
-        engine = cls(datetime.fromisoformat(state["origin"]), seed=state["seed"], specs=specs)
+    def from_state(cls, state: dict, specs: tuple[SymbolSpec, ...] = SYMBOLS, real: RealBars | None = None) -> "MarketEngine":
+        engine = cls(datetime.fromisoformat(state["origin"]), seed=state["seed"], specs=specs, real=real)
+        through = state.get("real_through")
+        engine._real_through = date.fromisoformat(through) if through else None
+        if engine._real_through and (real is None or real.last_day is None or real.last_day < engine._real_through):
+            raise ValueError("the saved market replays real bars that are no longer available")
         engine._seeds_used = state["seeds_used"]
         engine.backfilled = state.get("backfilled", False)
         engine._time = datetime.fromisoformat(state["time"])
@@ -835,7 +856,7 @@ class MarketEngine:
         return engine
 
     @classmethod
-    def continue_older(cls, state: dict, specs: tuple[SymbolSpec, ...] = SYMBOLS) -> "MarketEngine":
+    def continue_older(cls, state: dict, specs: tuple[SymbolSpec, ...] = SYMBOLS, real: RealBars | None = None) -> "MarketEngine":
         """A market saved by another price model (or with other symbols) can't be
         regenerated, so start a new one at its time, from that session's previous
         closes (new symbols start at their spec prices). Its history is then
@@ -844,7 +865,7 @@ class MarketEngine:
         saved = state.get("symbols", LEGACY_SYMBOLS)
         prev = dict(zip(saved, state["starts"][market_day(t).isoformat()][0]))
         prices = np.array([prev.get(s.symbol, s.price) for s in specs])
-        engine = cls(t, seed=state["seed"], specs=specs, prices=prices)
+        engine = cls(t, seed=state["seed"], specs=specs, prices=prices, real=real)
         engine._seeds_used = state["seeds_used"]
         return engine
 
@@ -853,6 +874,8 @@ class MarketEngine:
     def _reset(self, start: datetime, seed: int, prices: np.ndarray | None = None) -> None:
         self.origin = snap(start)
         self._time = self.origin
+        # Sessions up to this day replay the real bars (a market keeps the data it began with).
+        self._real_through: date | None = self._real.last_day if self._real else None
         self._epochs: list[tuple[datetime, int]] = [(self.origin, seed)]
         if prices is None:
             prices = np.array([s.price for s in self.specs])
@@ -1055,6 +1078,10 @@ class MarketEngine:
         # Within half a second's move of the open or close, the extreme is that price.
         high = np.where(high - top < 0.5 * one_second, top, high)
         low = np.where(bottom - low < 0.5 * one_second, bottom, low)
+        real_day = self._real_day(day)
+        if real_day is not None:  # the real open, high, low and close
+            open_, high, low, close = _pin(open_, high, low, close, real_day)
+            move = np.abs(close - open_)
 
         # Volume: U-shaped through the day, busier in volatile regimes, on big moves,
         # after news and on earnings days.
@@ -1068,6 +1095,8 @@ class MarketEngine:
         level = self._daily_volume * math.sqrt(h) * scale * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
         shape = self._volume_shape * self._volume_mults[regimes]
         volume = np.floor(level / _M * shape[:, None] * activity * noise)
+        if real_day is not None:  # the real day's volume, spread over the minutes
+            volume = _pin_volume(volume, real_day)
         cum_volume = np.zeros((_M + 1, n))
         cum_volume[1:] = np.cumsum(volume, axis=0)
 
@@ -1199,16 +1228,53 @@ class MarketEngine:
         for key in [key for key in self._fines if which(key[0])]:
             del self._fines[key]
 
+    def _real_day(self, day: date) -> RealDay | None:
+        """The real bars `day` replays (None after the newest real day or with none)."""
+        if self._real is None or self._real_through is None or day > self._real_through:
+            return None
+        return self._real.day(day)
+
     def _dividend_on(self, day: date) -> np.ndarray:
         """(N,) whether each symbol goes ex-dividend at this session's open."""
         return np.array([day in dividend_days(s, day, day) for s in self.specs], dtype=bool)
 
     def dividend(self, day: date, col: int) -> float:
-        """The dividend per share (cents) going ex at `day`'s open, 0 if none."""
+        """The dividend per share going ex at `day`'s open, 0 if none (the real one on
+        a replayed day)."""
+        if self._replays(col, day):
+            return round(sum(a for _, a in self._real.dividends(col, day, day)), 4)  # type: ignore[union-attr]
         if day not in dividend_days(self.specs[col], day, day):
             return 0.0
         self._skeleton(day)  # the day's start exists once the session is generated
         return round(float(self._div_fraction[col] * self._starts[day].prev_close[col]), 2)
+
+    def dividend_schedule(self, col: int, start: date, end: date, spot: float) -> list[tuple[date, float]]:
+        """Ex-dividend dates in [start, end] with each payment as a fraction of `spot`:
+        the real ones on replayed days, the symbol's model after them."""
+        spec = self.specs[col]
+        through = self._real_through
+        if self._real is None or through is None:
+            return [(d, spec.dividend_fraction) for d in dividend_days(spec, start, end)]
+        first = self._real.first_day(col)
+        out = []
+        if first is not None and start <= through and end >= first:
+            real_end = min(end, through)
+            out += [(d, a / spot) for d, a in self._real.dividends(col, max(start, first), real_end)]
+            if start < first:
+                out += [(d, spec.dividend_fraction) for d in dividend_days(spec, start, first - timedelta(days=1))]
+        elif start <= through:
+            out += [(d, spec.dividend_fraction) for d in dividend_days(spec, start, min(end, through))]
+        if end > through:
+            out += [(d, spec.dividend_fraction) for d in dividend_days(spec, max(start, through + timedelta(days=1)), end)]
+        return sorted(out)
+
+    def _replays(self, col: int, day: date) -> bool:
+        return (
+            self._real is not None
+            and self._real_through is not None
+            and day <= self._real_through
+            and self._real.covers(col, day)
+        )
 
     def _earnings_on(self, day: date) -> np.ndarray:
         """(N,) whether each symbol reports earnings before this session."""
@@ -1221,6 +1287,76 @@ class MarketEngine:
                 continue
             on[i] = day == _earnings_session(day.year, day.month, dom)
         return on
+
+
+def _pin(open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, real: RealDay) -> tuple[np.ndarray, ...]:
+    """Bend each symbol's generated minute path (log prices; (M, N) arrays) so the day
+    opens, peaks, bottoms and closes at the real bar. A linear correction through
+    anchors (the open, the generated high's and low's knots, the close) keeps the
+    generated noise in between; anything left outside the real range is folded in, and
+    the minutes holding the extremes are set to them exactly. Symbols without a real
+    bar keep their generated path."""
+    m, n = open_.shape
+    cols = np.flatnonzero(real.has)
+    if len(cols) == 0:
+        return open_, high, low, close
+    o, c = np.log(real.open[cols]), np.log(real.close[cols])
+    hi = np.maximum(np.log(real.high[cols]), np.maximum(o, c))
+    lo = np.minimum(np.log(real.low[cols]), np.minimum(o, c))
+    k = 2 * m
+    y = np.empty((k, len(cols)))
+    y[0::2], y[1::2] = open_[:, cols], close[:, cols]
+    gh, gl = high[:, cols], low[:, cols]
+    mh, ml = np.argmax(gh, axis=0), np.argmin(gl, axis=0)
+    # The anchors sit on the knots (minute open or close) nearest each generated extreme.
+    ah = np.clip(2 * mh + (y[2 * mh + 1, np.arange(len(cols))] > y[2 * mh, np.arange(len(cols))]), 1, k - 2)
+    al = np.clip(2 * ml + (y[2 * ml + 1, np.arange(len(cols))] < y[2 * ml, np.arange(len(cols))]), 1, k - 2)
+    al = np.where(al == ah, np.where(ah > 1, ah - 1, ah + 1), al)
+    rows = np.arange(len(cols))
+    th = hi - np.maximum(gh[mh, rows] - y[ah, rows], 0.0)  # the knot's target: the real high less the minute's own excursion
+    tl = lo + np.maximum(y[al, rows] - gl[ml, rows], 0.0)
+    xs = np.stack([np.zeros_like(ah), np.minimum(ah, al), np.maximum(ah, al), np.full_like(ah, k - 1)])  # (4, C)
+    first_is_high = ah < al
+    offs = np.stack(
+        [
+            o - y[0, rows],
+            np.where(first_is_high, th - y[ah, rows], tl - y[al, rows]),
+            np.where(first_is_high, tl - y[al, rows], th - y[ah, rows]),
+            c - y[k - 1, rows],
+        ]
+    )
+    t = np.arange(k)[:, None]
+    correction = offs[0] + sum(
+        (offs[s + 1] - offs[s]) * np.clip((t - xs[s]) / np.maximum(xs[s + 1] - xs[s], 1), 0.0, 1.0) for s in range(3)
+    )
+    y = np.clip(y + correction, lo, hi)
+    new_open, new_close = y[0::2], y[1::2]
+    mid = (correction[0::2] + correction[1::2]) / 2
+    new_high = np.clip(np.maximum(gh + mid, np.maximum(new_open, new_close)), lo, hi)
+    new_low = np.clip(np.minimum(gl + mid, np.minimum(new_open, new_close)), lo, hi)
+    new_high[mh, rows], new_low[ml, rows] = hi, lo
+    new_high[mh, rows] = np.maximum(new_high[mh, rows], np.maximum(new_open[mh, rows], new_close[mh, rows]))
+    new_low[ml, rows] = np.minimum(new_low[ml, rows], np.minimum(new_open[ml, rows], new_close[ml, rows]))
+    out = []
+    for source, new in ((open_, new_open), (high, new_high), (low, new_low), (close, new_close)):
+        arr = source.copy()
+        arr[:, cols] = new
+        out.append(arr)
+    return tuple(out)
+
+
+def _pin_volume(volume: np.ndarray, real: RealDay) -> np.ndarray:
+    """Scale each symbol's minute volumes so the day totals the real volume exactly."""
+    out = volume.copy()
+    for i in np.flatnonzero(real.has & (real.volume > 0)):
+        total = volume[:, i].sum()
+        target = round(float(real.volume[i]))
+        if total <= 0 or target <= 0:
+            continue
+        scaled = np.floor(volume[:, i] * (target / total))
+        scaled[np.argmax(scaled)] += target - scaled.sum()
+        out[:, i] = scaled
+    return out
 
 
 def earnings_days(spec: SymbolSpec, start: date, end: date) -> list[date]:

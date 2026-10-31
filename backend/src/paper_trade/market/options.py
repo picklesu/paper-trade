@@ -58,7 +58,6 @@ from paper_trade.market.engine import (
     _intraday_shape,
     _key,
     _unit_hash,
-    dividend_days,
     earnings_days,
 )
 from paper_trade.market.symbols import SymbolSpec
@@ -634,11 +633,9 @@ def price(
     down = -np.log(spot / inp.prev_close) / (spec.vol * ratio / math.sqrt(TRADING_DAYS_PER_YEAR))
     rho = np.maximum(-0.95, cal.rho_at(symbol, years) - SELLOFF_SKEW * np.maximum(0.0, down - 0.5))
     # Ex-dividend dates ahead (years from now; each dividend is a share of the price).
-    ex_times = [
-        ((session_open(ex) - session_open(day)).total_seconds() - sec) / YEAR_SECONDS
-        for ex in dividend_days(spec, day + timedelta(days=1), expiry)
-    ]
-    fraction = spec.dividend_fraction
+    schedule = engine.dividend_schedule(i, day + timedelta(days=1), expiry, float(inp.prev_close))
+    ex_times = [((session_open(ex) - session_open(day)).total_seconds() - sec) / YEAR_SECONDS for ex, _ in schedule]
+    fraction = sum(f for _, f in schedule) / len(schedule) if schedule else spec.dividend_fraction
     keep = (1 - fraction) ** len(ex_times)
     # Sticky strike: the smile stays where the day opened.
     anchor = inp.open * keep * np.exp(cal.rate * years)

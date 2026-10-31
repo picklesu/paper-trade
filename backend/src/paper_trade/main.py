@@ -50,14 +50,14 @@ def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: 
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         store = Store(db_path or os.environ.get("PAPER_TRADE_DB") or DEFAULT_DB)
         history = pricehistory.PriceHistory(store, pricehistory.tiingo_key())
+        economy = macro.Macro(store, macro.fred_key())
         # The real bars (saved at an earlier start) set the calendar's one-off closures and are replayed.
-        bars = RealBars.from_history(history, [s.symbol for s in SYMBOLS])
+        bars = RealBars.from_history(history, [s.symbol for s in SYMBOLS], economy)
         calendar.set_overrides(*(bars.closures() if bars else (set(), set())))
         clock, engine = load_market(store, seed, bars)
         creds = realprices.credentials()
         real = realprices.RealPrices(store, creds)
         option_data = optiondata.OptionData(store, creds, optiondata.av_key())
-        economy = macro.Macro(store, macro.fred_key())
         svc = MarketService(clock, engine, store, history_days, real, option_data, history, economy)
         app.state.market = svc
         svc.start()

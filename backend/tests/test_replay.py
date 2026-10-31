@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from paper_trade.market import calendar
+from paper_trade.market import engine as engine_mod
 from paper_trade.market.calendar import MARKET_TZ, market_day, next_trading_day, session_open
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.realbars import RealBars, RealBarsGone
@@ -228,6 +229,79 @@ def test_volume_totals_match_even_when_the_generated_total_is_tiny() -> None:
     from paper_trade.market.engine import _pin_volume
     from paper_trade.market.realbars import RealDay
 
-    real = RealDay(np.array([True, True]), *(np.array([1.0, 1.0]),) * 4, np.array([1_000_003.0, 7.0]))
+    real = RealDay(np.array([True, True]), *(np.array([1.0, 1.0]),) * 4, np.array([1_000_003.0, 7.0]), np.zeros(2))
     out = _pin_volume(np.zeros((390, 2)), real)
     assert out[:, 0].sum() == 1_000_003 and out[:, 1].sum() == 7 and (out >= 0).all()
+
+
+def vix_rows(bars, level=lambda k: 20.0):
+    return [(b.day, level(k)) for k, b in enumerate(bars["SPY"])]
+
+
+def engine_vix(bars, vix, seed=42) -> MarketEngine:
+    engine = MarketEngine(START, seed=seed, real=RealBars(NAMES, bars, vix))
+    engine.advance(session_open(next_trading_day(bars["SPY"][-1].day)))
+    return engine
+
+
+def test_the_variance_follows_the_real_vix_of_the_previous_close() -> None:
+    bars = real_bars()
+    vix = vix_rows(bars, lambda k: 15.0 + 10 * k)
+    engine = engine_vix(bars, vix)
+    for k, b in enumerate(bars["SPY"][1:], start=1):
+        expected = float(np.clip(((vix[k - 1][1] / engine_mod.VIX_BIAS) ** 2 - engine_mod.VIX_BASE2) / engine_mod.VIX_SLOPE, *engine_mod.VARIANCE_RANGE))
+        assert engine._starts[b.day].variance == pytest.approx(expected)
+    # the first session's start comes from the VIX before it
+    assert engine._starts[START.date()].variance == 1.0  # no real VIX before the first bar
+
+
+def test_the_sim_vix_tracks_the_real_vix_it_is_set_from() -> None:
+    bars = real_bars(days=6)
+    means = []
+    for level in (20.0, 35.0, 60.0):  # (checked on 2007-2012: correlation 0.92, bias +2%; synthetic bars add noise)
+        engine = engine_vix(bars, vix_rows(bars, lambda k, v=level: v))
+        sim = [engine.vix_bars(b.day)[-1][3] for b in bars["SPY"][1:]]
+        means.append(np.mean(sim))
+        assert np.mean(sim) == pytest.approx(level, rel=0.25), level
+    assert means == sorted(means)
+
+
+def test_real_days_carry_no_shock_or_sim_crash() -> None:
+    bars = real_bars()
+    engine = engine_vix(bars, vix_rows(bars))
+    for b in bars["SPY"]:
+        sk = engine._skeleton(b.day)
+        assert sk.shock == 0.0 and not sk.shock_onset
+    engine.trigger_shock()  # a user shock still works on the simulated future
+    assert engine.shock == 0.0
+
+
+def test_own_variance_rises_after_a_big_real_move() -> None:
+    bars = real_bars()
+    calm = engine_vix(bars, vix_rows(bars))
+    bars["AAPL"][3] = bars["AAPL"][3]._replace(close=bars["AAPL"][3].open * 1.25, high=bars["AAPL"][3].open * 1.26)
+    wild = engine_vix(bars, vix_rows(bars))
+    i = NAMES.index("AAPL")
+    day = bars["SPY"][4].day
+    assert wild._starts[day].own_variance[i] > calm._starts[day].own_variance[i]
+    assert wild._starts[day].own_variance[i] == engine_mod.VARIANCE_RANGE[1]
+
+
+def test_earnings_days_come_from_real_volume_spikes() -> None:
+    spec = next(s for s in SYMBOLS if s.symbol == "AAPL")
+    nominal = engine_mod.earnings_days(spec, date(2006, 1, 1), date(2006, 3, 31))[0]
+    spike = nominal + timedelta(days=6)
+    days, d = [], date(2005, 10, 3)
+    while d <= date(2006, 3, 31):
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+    rows = [Bar(x, 10.0, 10.5, 9.5, 10.0, 1000.0 * (6 if x == spike else 1)) for x in days]
+    engine = MarketEngine(START, real=RealBars(NAMES, {"AAPL": rows}))
+    i = NAMES.index("AAPL")
+    assert spike in engine.earnings_dates(i, date(2006, 1, 1), date(2006, 3, 31)) and nominal not in engine.earnings_dates(i, date(2006, 1, 1), date(2006, 3, 31))
+    quiet = [Bar(x, 10.0, 10.5, 9.5, 10.0, 1000.0) for x in days]
+    engine = MarketEngine(START, real=RealBars(NAMES, {"AAPL": quiet}))
+    assert nominal in engine.earnings_dates(i, date(2006, 1, 1), date(2006, 3, 31))  # no spike: the model's date stands
+    msft = NAMES.index("MSFT")  # no bars: the model's dates
+    assert engine.earnings_dates(msft, date(2006, 1, 1), date(2006, 6, 30)) == engine_mod.earnings_days(SYMBOLS[msft], date(2006, 1, 1), date(2006, 6, 30))

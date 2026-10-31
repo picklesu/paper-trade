@@ -669,7 +669,7 @@ class MarketService:
                         economy[series] = n
                     await asyncio.sleep(MACRO_PAUSE_SECONDS)
             if added and hist:  # markets started from now on replay the new days too
-                self.engine.use_real(RealBars.from_history(hist, self.symbols))
+                self.engine.use_real(RealBars.from_history(hist, self.symbols, macro))
             if not (hist and hist.fetched) and not (macro and macro.fetched):
                 problems.append("nothing is downloaded yet, so there is nothing to update; the first download runs in the background")
             self.store.set("real_history_updated", {"at": datetime.now(UTC).isoformat(), "problems": problems})

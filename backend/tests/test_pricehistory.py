@@ -8,7 +8,7 @@ from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.market.symbols import SYMBOLS
 from paper_trade.pricehistory import PriceHistory, back_cast, parse_closes
-from paper_trade.realprices import Credentials, FetchError, RealPrices
+from paper_trade.realprices import Credentials, FetchError, FetchStop, RealPrices
 from paper_trade.store import Store
 
 START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
@@ -93,7 +93,7 @@ def test_the_background_fetch_saves_each_symbol_and_stops_on_a_failure(monkeypat
     def fetch(symbol, key):
         calls.append(symbol)
         if symbol == "QQQ":
-            raise FetchError("Tiingo says too many requests")
+            raise FetchStop("Tiingo says too many requests")
         return SPY
 
     hist = PriceHistory(Store(":memory:"), "k", fetch=fetch)
@@ -140,3 +140,33 @@ def test_charts_have_no_bars_from_before_the_listing() -> None:
     svc.history.bars = lambda *a, **k: {"bars": [[start - 86400, 1, 1, 1, 1, 1], [start, 1, 1, 1, 1, 1]], "more": True}
     out = svc.bars("SPY", "1D", None, 10)
     assert [b[0] for b in out["bars"]] == [start] and out["more"] is False
+
+
+def test_a_symbol_tiingo_doesn_t_know_is_skipped_but_a_rate_limit_stops(monkeypatch) -> None:
+    def fetch(symbol, key):
+        if symbol == "SPY":
+            raise FetchError("Tiingo answered 404 Not found")
+        if symbol == "IWM":
+            raise FetchStop("Tiingo says too many requests")
+        return SPY
+
+    hist = PriceHistory(Store(":memory:"), "k", fetch=fetch)
+    svc = make_service(hist)
+    monkeypatch.setattr("paper_trade.market.service.PRICE_HISTORY_PAUSE_SECONDS", 0)
+    monkeypatch.setattr("paper_trade.market.service.PRICE_HISTORY_CHECK_SECONDS", 3600)
+
+    async def run() -> None:
+        task = asyncio.create_task(svc._refresh_price_history())
+        await asyncio.sleep(0.2)
+        task.cancel()
+
+    asyncio.run(run())
+    assert "QQQ" in hist.fetched and "SPY" not in hist.fetched and "SPY" not in hist.due(svc.symbols)
+    assert "IWM" not in hist.fetched and hist.due(svc.symbols) == []  # stopped at the rate limit: wait an hour
+
+
+def test_a_newer_saved_real_price_beats_an_older_close() -> None:
+    svc = make_service(history({"SPY": SPY}), real=RealPrices(Store(":memory:"), Credentials("a", "b"), fetch=lambda s, c: {}))
+    svc.real.saved["SPY"] = type("P", (), {"price": 700.0, "as_of": date(2026, 1, 2)})()
+    prices = dict(zip(svc.symbols, svc.real_start_prices(date(2026, 1, 5)), strict=True))
+    assert prices["SPY"] == 700.0

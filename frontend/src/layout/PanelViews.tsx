@@ -32,7 +32,8 @@ const waiting = <Placeholder text="Waiting for market data…" />
 function useUnlisted(): string | null {
   const { tick, symbols, selected } = useAppData()
   const from = symbols.find((s) => s.symbol === selected)?.listed_from
-  const today = tick?.clock.time.slice(0, 10)
+  // The market's date (New York), whatever offset the clock string carries.
+  const today = tick ? new Date(tick.clock.time).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : undefined
   return from && today && from > today ? `${selected} wasn't trading yet on ${today}. Its first trading day was ${from}.` : null
 }
 

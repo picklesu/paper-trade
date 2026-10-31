@@ -27,7 +27,7 @@ from paper_trade.market.history import History
 from paper_trade.market import options
 from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
 from paper_trade.pricehistory import PriceHistory, back_cast
-from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, RealPrices
+from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, FetchStop, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 from paper_trade.watchlists import Watchlists
@@ -430,7 +430,10 @@ class MarketService:
         prices = []
         for spec in self.engine.specs:
             price = hist.price_on(spec.symbol, before, spec.drift) if hist and before else None
-            if price is None and (real := saved.get(spec.symbol)):
+            real = saved.get(spec.symbol)
+            if real and before is not None and before >= real.as_of:
+                price = real.price  # the saved real price is newer than any close fetched
+            if price is None and real:
                 price = real.price if before is None else back_cast(real.price, real.as_of, min(before, real.as_of), spec.drift)
             prices.append(spec.price if price is None else price)
         return np.array(prices)
@@ -577,10 +580,14 @@ class MarketService:
             for symbol in hist.due(self.symbols):
                 try:
                     closes = await asyncio.to_thread(hist.fetch, symbol)
-                except FetchError as e:
+                except FetchStop as e:
                     hist.failed(str(e))
                     log.warning("fetching %s's price history failed: %s", symbol, e)
                     break
+                except FetchError as e:
+                    hist.skip(symbol, str(e))
+                    log.warning("no price history for %s: %s", symbol, e)
+                    continue
                 except Exception as e:
                     hist.failed(f"fetching price history failed ({e})")
                     log.exception("fetching price history failed")

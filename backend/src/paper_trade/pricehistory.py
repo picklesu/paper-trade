@@ -86,7 +86,7 @@ class PriceHistory:
         retry = self.store.get("close_history_retry")
         if retry and self._now() < datetime.fromisoformat(retry):
             return []
-        have = self.fetched
+        have = self.fetched | set(self.store.get("close_history_skipped", {}))
         return [s for s in symbols if s not in have]
 
     def fetch(self, symbol: str) -> list[tuple[date, float]]:
@@ -105,6 +105,12 @@ class PriceHistory:
         self.store.set("close_history", fetched)
         self.store.set("close_history_error", None)
         self._first_days.pop(symbol, None)
+
+    def skip(self, symbol: str, message: str) -> None:
+        """This symbol alone can't be fetched (Tiingo doesn't know it): don't ask again."""
+        skipped = self.store.get("close_history_skipped", {})
+        skipped[symbol] = message
+        self.store.set("close_history_skipped", skipped)
 
     def failed(self, message: str) -> None:
         self.store.set("close_history_error", {"message": message, "at": self._now().isoformat()})

@@ -522,6 +522,16 @@ class MarketEngine:
         """The regime that drove the latest price move (the gap's at the open)."""
         return REGIMES[self._regime_index()][0]
 
+    @property
+    def shock(self) -> float:
+        """The extra volatility an uncertainty shock adds today (0: none)."""
+        return self._skeleton(market_day(self._time)).shock
+
+    @property
+    def shock_pending(self) -> bool:
+        """A triggered shock waiting for the next open."""
+        return next_trading_day(market_day(self._time)) in self._shocks
+
     def _regime_index(self) -> int:
         day = market_day(self._time)
         s = min(int(session_seconds(self._time)), _S - 1)

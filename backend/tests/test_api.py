@@ -378,3 +378,13 @@ def test_trade_and_exercise_options(client: TestClient) -> None:
     assert client.post("/api/options/exercise", json={"symbol": symbol, "qty": 1}).status_code == 422
     held = {p["symbol"]: p["qty"] for p in client.get("/api/account").json()["positions"]}
     assert held == {"AAPL": 100}
+
+
+def test_triggering_a_shock_is_pending_until_the_next_open(client: TestClient) -> None:
+    client.post("/api/clock", json={"paused": True})
+    reply = client.post("/api/shock")
+    assert reply.status_code == 200 and reply.json()["day"] > client.get("/api/clock").json()["time"][:10]
+    with client.websocket_connect("/ws") as ws:
+        tick = next_message(ws, "tick")
+    assert tick["shock_pending"] is True and tick["shock"] == 0
+    assert client.post("/api/shock").json()["day"] == reply.json()["day"]  # a second one changes nothing

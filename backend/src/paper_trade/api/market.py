@@ -92,6 +92,17 @@ async def goto(body: Goto, request: Request) -> dict:
     return {"action": action, "target": target.isoformat(), "clock": svc.clock_state()}
 
 
+@router.post("/shock")
+async def trigger_shock(request: Request) -> dict:
+    """Start an uncertainty shock at the next open (for practice)."""
+    svc = market(request)
+    try:
+        day = svc.trigger_shock()
+    except BusyError as e:
+        raise HTTPException(409, str(e)) from None
+    return {"day": day.isoformat(), "clock": svc.clock_state()}
+
+
 @router.get("/real-prices")
 async def real_prices(request: Request) -> dict:
     """How many symbols have a saved real price, and from when (fetching first if

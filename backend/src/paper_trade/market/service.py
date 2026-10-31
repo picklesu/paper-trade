@@ -102,6 +102,8 @@ class MarketService:
             "type": "tick",
             "clock": self.clock_state(),
             "regime": self.engine.regime,
+            "shock": round(self.engine.shock, 2),
+            "shock_pending": self.engine.shock_pending,
             "quotes": [q.to_dict() for q in quotes.values()],
             "account": self.broker.summary(quotes),
         }
@@ -288,8 +290,9 @@ class MarketService:
                 self.broker.reset()
                 self.history.clear()
             elif action == "rewind":
+                shocks = set(self.engine._shocks)
                 self.engine.rewind(target, new_future)
-                if new_future:
+                if new_future or set(self.engine._shocks) != shocks:
                     self.history.delete_from(market_day(target))
                 self.broker.rewind(target)
             elif action == "forward":
@@ -305,6 +308,20 @@ class MarketService:
             # fast-forward state; never drop it for a full queue.
             self.publish_all()
         return action, target
+
+    def trigger_shock(self) -> date:
+        """Start an uncertainty shock at the next open. Later sessions that a replay
+        had already generated are generated again, and what was recorded of them goes."""
+        if self._jumping:
+            raise BusyError
+        if self.building_history:
+            raise BusyError("price history is still being built; try again in a moment")
+        self.sync()
+        day = self.engine.trigger_shock()
+        self.history.delete_from(day)
+        self.save()
+        self.publish_all()
+        return day
 
     async def _fast_forward(self, target: datetime) -> None:
         # Sessions still to generate (fewer than the distance if a replay already generated some).

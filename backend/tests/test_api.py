@@ -333,7 +333,7 @@ def test_watchlist_endpoints_and_stream(client: TestClient) -> None:
 
 def test_symbols_endpoint(client: TestClient) -> None:
     symbols = client.get("/api/symbols").json()
-    assert len(symbols) == 41 and symbols[0] == {"symbol": "SPY", "name": "S&P 500 ETF", "sector": None, "tradable": True}
+    assert len(symbols) == 41 and symbols[0] == {"symbol": "SPY", "name": "S&P 500 ETF", "sector": None, "tradable": True, "listed_from": None}
 
 
 def test_option_endpoints_and_streamed_chain(client: TestClient) -> None:

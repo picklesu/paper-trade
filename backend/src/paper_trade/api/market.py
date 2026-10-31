@@ -29,7 +29,7 @@ class ClockUpdate(BaseModel):
 @router.get("/quotes")
 async def get_quotes(request: Request) -> list[dict]:
     svc = market(request)
-    return [q.to_dict() for q in svc.engine.quotes.values()] + svc.index_quotes()
+    return svc.listed_quotes()
 
 
 @router.get("/clock")
@@ -135,6 +135,6 @@ async def get_bars(request: Request, symbol: str, interval: str = "5m", end: str
     if symbol not in svc.engine.quotes and symbol not in svc.indexes:
         raise HTTPException(422, f"Unknown symbol {symbol}")
     try:
-        return svc.history.bars(symbol, interval, parse_market_time(end) if end else None, count)
+        return svc.bars(symbol, interval, parse_market_time(end) if end else None, count)
     except ValueError as e:
         raise HTTPException(422, str(e)) from None

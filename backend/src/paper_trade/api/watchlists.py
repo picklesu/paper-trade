@@ -15,8 +15,8 @@ router = APIRouter()
 @router.get("/symbols")
 async def get_symbols(request: Request) -> list[dict]:
     svc = market(request)
-    stocks = [{"symbol": s.symbol, "name": s.name, "sector": s.sector, "tradable": True} for s in svc.engine.specs]
-    return stocks + [{"symbol": q["symbol"], "name": q["name"], "sector": None, "tradable": False} for q in svc.index_quotes()]
+    stocks = [{"symbol": s.symbol, "name": s.name, "sector": s.sector, "tradable": True, "listed_from": d.isoformat() if (d := svc.listed_from(s.symbol)) else None} for s in svc.engine.specs]
+    return stocks + [{"symbol": q["symbol"], "name": q["name"], "sector": None, "tradable": False, "listed_from": None} for q in svc.index_quotes()]
 
 
 @router.get("/quote-stats")

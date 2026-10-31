@@ -103,8 +103,8 @@ CRASH_EXTRA = 0.015
 # (waiting and seeing) and rebounds a little as the uncertainty clears.
 VIX_STEP_MINUTES = 30  # the volatility index is sampled every half hour (the stored bar size)
 SHOCKS_PER_YEAR = 0.3
-SHOCK_EXCESS_MIN = 0.6  # the extra volatility at onset (0.9: nearly double), between this
-SHOCK_EXCESS_RANGE = 0.7  # and this much more
+SHOCK_EXCESS_MIN = 0.4  # the extra volatility at onset (0.65: about 1.65 times normal), between this
+SHOCK_EXCESS_RANGE = 0.5  # and this much more (it stacks with the regime and GARCH, so the index can reach 100)
 SHOCK_HALF_LIFE_DAYS = 60.0
 SHOCK_DROP = 0.025  # the market's log drop at the open, per unit of excess
 SHOCK_REBOUND = 0.06  # annual drift per unit of excess, while it lasts

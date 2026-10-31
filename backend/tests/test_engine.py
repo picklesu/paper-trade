@@ -615,7 +615,7 @@ def test_a_triggered_shock_drops_the_market_at_the_open_then_volatility_fades(mo
     assert day == next_trading_day(market_day(engine.time))
     after = _daily_moves(engine, 120)
     excess = engine._shocks[day][0]
-    assert 0.6 <= excess <= 1.3
+    assert 0.4 <= excess <= 0.9
     assert engine._skeleton(day).shock_onset and engine._skeleton(day).shock == pytest.approx(excess)
     assert after[0] < -0.01  # the market drops at the onset (about 2.5% per unit of excess)
     assert np.abs(after[1:31]).mean() > 1.3 * np.abs(before).mean()

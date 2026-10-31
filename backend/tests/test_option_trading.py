@@ -48,7 +48,7 @@ def test_buying_a_call_fills_at_the_chains_ask_and_shows_as_a_position() -> None
     assert b.ledger().cash == pytest.approx(100_000 - ask * 200)
     (row,) = b.summary(e.quotes)["positions"]
     assert row["option"]["label"] == c.label and row["qty"] == 2
-    assert row["market_value"] == pytest.approx(row["last"] * 200, abs=0.01)
+    assert row["market_value"] == pytest.approx(row["last"] * 200, abs=1.0)  # `last` is the mid rounded to a cent
     assert 50 < row["delta"] < 150  # two contracts near the money: about 100 shares' worth
     assert row["theta"] < 0
     # Sell to close: realized against the average price.

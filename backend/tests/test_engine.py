@@ -8,7 +8,15 @@ import numpy as np
 import pytest
 
 from paper_trade.market import engine as engine_mod
-from paper_trade.market.calendar import MARKET_TZ, add_trading_days, add_trading_seconds, market_day, next_trading_day, session_close
+from paper_trade.market.calendar import (
+    MARKET_TZ,
+    add_trading_days,
+    add_trading_seconds,
+    market_day,
+    next_trading_day,
+    session_close,
+    session_seconds,
+)
 from paper_trade.market.engine import MarketEngine, bid_ask
 from paper_trade.market.symbols import SymbolSpec
 
@@ -633,3 +641,34 @@ def test_shocks_are_saved_and_a_rewind_before_the_trigger_undoes_them(monkeypatc
     engine.advance(et(2026, 1, 20, 11, 0))
     assert engine.quotes["SPY"].last != shocked  # the replay has no shock in it
     assert engine._skeleton(day).shock == 0.0
+
+
+# ----- the volatility index ----------------------------------------------------------
+
+
+def test_the_volatility_index_is_a_sensible_level_and_follows_volatility() -> None:
+    engine = MarketEngine(START, seed=7)
+    engine.advance(et(2026, 1, 12, 11, 0))
+    quote = engine.vix_quote()
+    assert 10 < quote["last"] < 40 and quote["bid"] == quote["ask"] == quote["last"]
+    assert quote["low"] <= quote["last"] <= quote["high"] and quote["prev_close"] > 0
+    day = market_day(engine.time)
+    sk = engine._skeleton(day)
+    assert len(sk.vix) == 14
+    bars = engine.vix_bars(day)
+    assert bars.shape == (13, 5) and (bars[:, 1] >= np.maximum(bars[:, 0], bars[:, 3])).all()
+    assert bars[0, 0] == sk.vix[0] and bars[-1, 3] == sk.vix[-1]
+    live = engine.vix_bars(day, through=int(session_seconds(engine.time)))
+    assert live.shape[0] == int(session_seconds(engine.time)) // 1800 + 1
+
+
+def test_the_index_rises_in_a_shock(monkeypatch) -> None:
+    monkeypatch.setattr(engine_mod, "SHOCKS_PER_YEAR", 0.0)
+    engine = MarketEngine(START, seed=7)
+    engine.advance(et(2026, 1, 12, 15, 0))
+    day = engine.trigger_shock()
+    calm = engine.vix_quote()["last"]
+    engine.advance(session_close(day) - timedelta(minutes=1))
+    shocked = engine.vix_quote()["last"]
+    assert shocked > 1.4 * calm
+    assert shocked == pytest.approx(engine._skeleton(day).vix[-1], rel=0.01)

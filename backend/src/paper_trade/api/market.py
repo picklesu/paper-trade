@@ -28,7 +28,8 @@ class ClockUpdate(BaseModel):
 
 @router.get("/quotes")
 async def get_quotes(request: Request) -> list[dict]:
-    return [q.to_dict() for q in market(request).engine.quotes.values()]
+    svc = market(request)
+    return [q.to_dict() for q in svc.engine.quotes.values()] + svc.index_quotes()
 
 
 @router.get("/clock")
@@ -131,7 +132,7 @@ async def sync_real_prices(request: Request) -> dict:
 async def get_bars(request: Request, symbol: str, interval: str = "5m", end: str | None = None, count: int = 500) -> dict:
     """Chart bars: up to `count` before `end` (default now, including the live bar), oldest first."""
     svc = market(request)
-    if symbol not in svc.engine.quotes:
+    if symbol not in svc.engine.quotes and symbol not in svc.indexes:
         raise HTTPException(422, f"Unknown symbol {symbol}")
     try:
         return svc.history.bars(symbol, interval, parse_market_time(end) if end else None, count)

@@ -45,7 +45,7 @@ def test_quotes(client: TestClient) -> None:
     quotes = client.get("/api/quotes").json()
     symbols = [q["symbol"] for q in quotes]
     assert "SPY" in symbols
-    assert all(q["bid"] < q["ask"] for q in quotes)
+    assert all(q["bid"] < q["ask"] for q in quotes if q["symbol"] != "VIX")  # the index has one level
 
 
 def test_clock_speed_and_pause(client: TestClient) -> None:
@@ -83,7 +83,7 @@ def test_websocket_streams_ticks(client: TestClient) -> None:
 def test_websocket_subscriptions_send_only_those_quotes(client: TestClient) -> None:
     client.post("/api/clock", json={"paused": True})  # no ticks flowing: the reply comes anyway
     with client.websocket_connect("/ws") as ws:
-        assert len(next_message(ws, "tick")["quotes"]) == 40
+        assert len(next_message(ws, "tick")["quotes"]) == 41  # 40 symbols and the VIX
         ws.send_json({"type": "subscribe", "symbols": ["AAPL", "SPY", "NOPE"]})
         tick = next_message(ws, "tick")
         assert sorted(q["symbol"] for q in tick["quotes"]) == ["AAPL", "SPY"]
@@ -333,7 +333,7 @@ def test_watchlist_endpoints_and_stream(client: TestClient) -> None:
 
 def test_symbols_endpoint(client: TestClient) -> None:
     symbols = client.get("/api/symbols").json()
-    assert len(symbols) == 40 and symbols[0] == {"symbol": "SPY", "name": "S&P 500 ETF", "sector": None}
+    assert len(symbols) == 41 and symbols[0] == {"symbol": "SPY", "name": "S&P 500 ETF", "sector": None, "tradable": True}
 
 
 def test_option_endpoints_and_streamed_chain(client: TestClient) -> None:
@@ -388,3 +388,19 @@ def test_triggering_a_shock_is_pending_until_the_next_open(client: TestClient) -
         tick = next_message(ws, "tick")
     assert tick["shock_pending"] is True and tick["shock"] == 0
     assert client.post("/api/shock").json()["day"] == reply.json()["day"]  # a second one changes nothing
+
+
+def test_the_volatility_index_is_quoted_charted_and_untradable(client: TestClient) -> None:
+    client.post("/api/clock", json={"paused": True})
+    vix = next(q for q in client.get("/api/quotes").json() if q["symbol"] == "VIX")
+    assert 8 < vix["last"] < 60 and vix["volume"] == 0
+    symbols = {s["symbol"]: s for s in client.get("/api/symbols").json()}
+    assert symbols["VIX"]["tradable"] is False and symbols["SPY"]["tradable"] is True
+    bars = client.get("/api/bars", params={"symbol": "VIX", "interval": "1D", "count": 50}).json()["bars"]
+    assert len(bars) > 5 and all(b[5] == 0 and b[2] >= b[3] for b in bars)
+    assert client.get("/api/bars", params={"symbol": "VIX", "interval": "5m"}).status_code == 200  # served as 30m
+    assert len(client.get("/api/sparklines", params={"symbols": "VIX"}).json()["series"]["VIX"]) >= 1
+    reply = client.post("/api/orders", json={"symbol": "VIX", "side": "buy", "qty": 1, "type": "market"})
+    assert reply.status_code == 422 and "index" in reply.json()["detail"]
+    lists = client.get("/api/watchlists").json()
+    assert "VIX" in next(w for w in lists if w["name"] == "All symbols")["symbols"]

@@ -515,6 +515,8 @@ class Broker:
         """Validate an order request and return the order, not yet placed. When
         `replacing`, that order's reserved cash or shares count as available."""
         c = Contract.parse(symbol)
+        if symbol == options.VIX_SYMBOL:
+            raise OrderError("VIX is an index: it can't be traded")
         if c is None and symbol not in self.engine.quotes:
             raise OrderError(f"Unknown symbol {symbol}")
         if c and c.underlying not in self.engine.quotes:

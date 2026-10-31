@@ -517,6 +517,40 @@ def today_ratio(inputs: OptionInputs, spec: SymbolSpec, sec) -> np.ndarray:
     return np.where(share < 0.02, ratio, ratio * np.exp(REALIZED_WEIGHT * share * log_ratio / 2))
 
 
+VIX_SYMBOL = "VIX"
+VIX_DAYS = 30
+# Strikes for the index, as log(K / forward): a dense strip well past where options trade.
+VIX_STRIKES = np.union1d(np.linspace(-0.6, 0.35, 380), [0.0])
+VIX_MIN_PRICE = 4e-5  # of the forward: cheaper options are left out, as the real index leaves out zero bids
+
+
+def vix(spec: SymbolSpec, inputs: OptionInputs, sec, spot, cal: Calibration = DEFAULT) -> np.ndarray:
+    """A VIX-like index at session seconds `sec` with the stock at `spot` (equal-length
+    arrays, or numbers): the 30-day expected volatility of `spec` in percent, from the
+    out-of-the-money options of a 30-day expiration by the real index's method
+    (Cboe's variance formula over a strip of strikes, puts below the forward and
+    calls above). Prices come from the same smile the chain uses, European and
+    without quote spreads, so it is quick to compute for a whole session."""
+    sec = np.atleast_1d(np.asarray(sec, dtype=float))[:, None]
+    spot = np.atleast_1d(np.asarray(spot, dtype=float))[:, None]
+    years = VIX_DAYS / 365
+    ratio = today_ratio(inputs, spec, sec)
+    theta = atm_variance(spec, ratio, years, 0, cal.premium_at(years))
+    down = -np.log(spot / inputs.prev_close) / (spec.vol * ratio / math.sqrt(TRADING_DAYS_PER_YEAR))
+    rho = np.maximum(-0.95, cal.rho_at(spec.symbol, years) - SELLOFF_SKEW * np.maximum(0.0, down - 0.5))
+    forward = spot * np.exp(cal.rate * years)
+    ks = forward * np.exp(VIX_STRIKES)[None, :]
+    iv = np.sqrt(smile(theta, np.log(ks / (inputs.open * np.exp(cal.rate * years))), spec.symbol, cal, rho) / years)
+    model = black_scholes(spot, ks, years, iv, cal.rate)
+    at_forward = VIX_STRIKES == 0.0
+    q = np.where(VIX_STRIKES < 0, model["put"]["price"], model["call"]["price"])
+    q = np.where(at_forward, (model["put"]["price"] + model["call"]["price"]) / 2, q)
+    q = np.where(q / forward >= VIX_MIN_PRICE, q, 0.0)
+    width = np.gradient(ks, axis=1)
+    variance = 2 / years * np.exp(cal.rate * years) * np.sum(width / ks**2 * q, axis=1, keepdims=True)
+    return 100 * np.sqrt(np.maximum(variance, 0.0))[:, 0]
+
+
 MULTIPLIER = 100  # shares per contract
 
 

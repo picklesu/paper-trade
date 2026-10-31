@@ -62,6 +62,7 @@ from paper_trade.market.calendar import (
     is_trading_day,
     market_day,
     next_trading_day,
+    previous_trading_day,
     session_close,
     session_open,
     session_seconds,
@@ -100,6 +101,7 @@ CRASH_EXTRA = 0.015
 # Uncertainty shocks (Bloom 2009): volatility jumps by a multiple of its normal level
 # and fades with a half-life of about three months; the market drops at the onset
 # (waiting and seeing) and rebounds a little as the uncertainty clears.
+VIX_STEP_MINUTES = 30  # the volatility index is sampled every half hour (the stored bar size)
 SHOCKS_PER_YEAR = 0.3
 SHOCK_EXCESS_MIN = 0.6  # the extra volatility at onset (0.9: nearly double), between this
 SHOCK_EXCESS_RANGE = 0.7  # and this much more
@@ -268,6 +270,7 @@ class _Skeleton:
     next_start: _DayStart  # the following session's starting state
     shock: float = 0.0  # the uncertainty shock in force this session (extra volatility)
     shock_onset: bool = False  # it began at this session's open
+    vix: np.ndarray | None = None  # (14,) the volatility index at each half hour and the close (None: no SPY)
 
 
 @dataclass(frozen=True)
@@ -557,13 +560,19 @@ class MarketEngine:
         cached = self._option_inputs.get((day, col))
         if cached and cached[0] is sk:  # same session generation (a new future makes another)
             return cached[1]
-        start = self._starts[day]
+        inputs = self._option_inputs_of(sk, self._starts[day], col)
+        if len(self._option_inputs) > 256:
+            self._option_inputs.clear()
+        self._option_inputs[(day, col)] = (sk, inputs)
+        return inputs
+
+    def _option_inputs_of(self, sk: _Skeleton, start: _DayStart, col: int) -> "OptionInputs":
         own = 1.0 if start.own_variance is None else float(start.own_variance[col])
         rho2 = float(self._rho[col] ** 2)
         by_regime = np.sqrt(rho2 * start.variance * self._market_mults**2 + (1 - rho2) * own * self._own_mults**2) * (1 + sk.shock)
         # Second s follows the regime of minute (s-1)//60; the open, the previous session's.
         regimes = np.concatenate([[start.regime], sk.regimes])
-        inputs = OptionInputs(
+        return OptionInputs(
             open=float(np.exp(sk.open[0, col])),
             prev_close=float(start.prev_close[col]),
             ratio=by_regime[regimes],
@@ -574,10 +583,77 @@ class MarketEngine:
             minute_seeds=sk.minute_seed.copy(),
             opens=np.exp(sk.open[:, col]),
         )
-        if len(self._option_inputs) > 256:
-            self._option_inputs.clear()
-        self._option_inputs[(day, col)] = (sk, inputs)
-        return inputs
+
+    # ----- the volatility index ------------------------------------------------
+
+    def _vix_samples(self, sk: _Skeleton, start: _DayStart) -> np.ndarray | None:
+        """The index at the open, every half hour and the last second (14 values),
+        from SPY's options (the model's own smile, unscaled: it needs no prices)."""
+        from paper_trade.market import options  # options imports this module
+
+        col = next((i for i, s in enumerate(self.specs) if s.symbol == "SPY"), None)
+        if col is None:
+            return None
+        minutes = np.arange(0, _M, VIX_STEP_MINUTES)
+        secs = np.append(minutes * 60, _S - 1)
+        spots = np.append(np.exp(sk.open[minutes, col]), np.exp(sk.close[-1, col]))
+        return options.vix(self.specs[col], self._option_inputs_of(sk, start, col), secs, spots)
+
+    def vix_at(self, day: date, secs) -> np.ndarray:
+        """The index at session seconds `secs` of a generated session."""
+        from paper_trade.market import options
+
+        col = self.symbol_index("SPY")
+        secs = np.atleast_1d(np.asarray(secs))
+        spots = np.array([self.price_at(day, int(s), col) for s in secs])
+        return options.vix(self.specs[col], self.option_inputs(day, col), secs, spots)
+
+    def vix_bars(self, day: date, through: int | None = None) -> np.ndarray | None:
+        """(bars, 5) half-hour bars of the index [open, high, low, close, volume 0]:
+        each runs from one sample to the next. With `through` (a session second, for
+        today): only bars begun by then, the last one closing at that second."""
+        sk = self._skeleton(day)
+        if sk.vix is None:
+            return None
+        values = sk.vix
+        if through is not None:
+            begun = min(int(through) // (VIX_STEP_MINUTES * 60) + 1, len(values) - 1)
+            values = np.append(values[:begun], self.vix_at(day, min(int(through), _S - 1))[0])
+        bars = np.zeros((len(values) - 1, 5))
+        bars[:, 0], bars[:, 3] = values[:-1], values[1:]
+        bars[:, 1], bars[:, 2] = np.maximum(values[:-1], values[1:]), np.minimum(values[:-1], values[1:])
+        return bars
+
+    def vix_quote(self) -> dict | None:
+        """The index now as a quote (a dict like Quote.to_dict), None without SPY."""
+        day = market_day(self._time)
+        sk = self._skeleton(day)
+        if sk.vix is None:
+            return None
+        sec = min(int(session_seconds(self._time)), _S - 1)
+        last = float(self.vix_at(day, sec)[0])
+        so_far = np.append(sk.vix[: sec // (VIX_STEP_MINUTES * 60) + 1], last)
+        previous = previous_trading_day(day)
+        prev = self._skeleton(previous).vix if previous in self._starts else None
+        prev_close = float(prev[-1]) if prev is not None else float(sk.vix[0])
+        last, prev_close = round(last, 2), round(prev_close, 2)
+        change = round(last - prev_close, 2)
+        return {
+            "symbol": "VIX",
+            "name": "Volatility Index",
+            "last": last,
+            "bid": last,
+            "ask": last,
+            "open": round(float(sk.vix[0]), 2),
+            "high": round(float(so_far.max()), 2),
+            "low": round(float(so_far.min()), 2),
+            "prev_close": prev_close,
+            "change": change,
+            "change_pct": round(change / prev_close * 100, 2),
+            "volume": 0,
+            "bid_size": 0,
+            "ask_size": 0,
+        }
 
     def spread_factor(self, t: datetime) -> float:
         """How many times wider than normal spreads are at market time `t`."""
@@ -996,7 +1072,7 @@ class MarketEngine:
 
         shock_next = excess * _SHOCK_DECAY
         shock_next = shock_next if shock_next > 0.01 else 0.0
-        return _Skeleton(
+        sk = _Skeleton(
             regimes=regimes,
             open=open_,
             high=high,
@@ -1014,6 +1090,8 @@ class MarketEngine:
             shock=excess,
             shock_onset=began,
         )
+        sk.vix = self._vix_samples(sk, start)
+        return sk
 
     def _fine(self, day: date, m: int, cols: int | np.ndarray | None = None) -> np.ndarray:
         """(60, N) prices for each second of minute `m`, generated for `cols`

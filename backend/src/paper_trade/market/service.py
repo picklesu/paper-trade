@@ -10,7 +10,16 @@ from typing import Literal
 
 import numpy as np
 
-from paper_trade.market.calendar import MARKET_TZ, market_day, session_close, session_open, snap, trading_days_between
+from paper_trade.market.calendar import (
+    MARKET_TZ,
+    SESSION_SECONDS,
+    market_day,
+    session_close,
+    session_open,
+    session_seconds,
+    snap,
+    trading_days_between,
+)
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
@@ -74,7 +83,7 @@ class MarketService:
         self.history_days = history_days
         self.real = real
         self._real_task: asyncio.Task | None = None
-        self.watchlists = Watchlists(store, self.symbols)
+        self.watchlists = Watchlists(store, self.symbols + list(self.indexes))
         self._stats: tuple[tuple, dict] | None = None
         self._chains: dict[tuple[str, date], tuple[tuple, dict]] = {}
         self._real_lock = asyncio.Lock()
@@ -104,9 +113,18 @@ class MarketService:
             "regime": self.engine.regime,
             "shock": round(self.engine.shock, 2),
             "shock_pending": self.engine.shock_pending,
-            "quotes": [q.to_dict() for q in quotes.values()],
+            "quotes": [q.to_dict() for q in quotes.values()] + self.index_quotes(),
             "account": self.broker.summary(quotes),
         }
+
+    @property
+    def indexes(self) -> tuple[str, ...]:
+        """Symbols that are quoted and charted but can't be traded."""
+        return (options.VIX_SYMBOL,) if any(s == "SPY" for s in self.symbols) else ()
+
+    def index_quotes(self) -> list[dict]:
+        quote = self.engine.vix_quote() if self.indexes else None
+        return [quote] if quote else []
 
     def quote_stats(self) -> dict[str, dict]:
         """52-week ranges and average volumes (cached until the day or the history changes)."""
@@ -119,10 +137,15 @@ class MarketService:
         """Today's prices every SPARKLINE_MINUTES so far, ending with the latest."""
         closes = self.engine.day_closes(SPARKLINE_MINUTES)
         cols = {s: i for i, s in enumerate(self.symbols)}
+        series = {s: [round(float(p), 2) for p in closes[:, cols[s]]] for s in symbols if s in cols}
+        if options.VIX_SYMBOL in symbols and self.indexes:
+            day, now = market_day(self.engine.time), int(session_seconds(self.engine.time))
+            secs = np.append(np.arange(0, now, SPARKLINE_MINUTES * 60), now)
+            series[options.VIX_SYMBOL] = [round(float(v), 2) for v in self.engine.vix_at(day, np.minimum(secs, SESSION_SECONDS - 1))]
         return {
             "step_minutes": SPARKLINE_MINUTES,
             "session_open": session_open(market_day(self.engine.time)).isoformat(),
-            "series": {s: [round(float(p), 2) for p in closes[:, cols[s]]] for s in symbols if s in cols},
+            "series": series,
         }
 
     def calibration(self, symbol: str) -> options.Calibration:

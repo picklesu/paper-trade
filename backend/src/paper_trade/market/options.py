@@ -134,6 +134,7 @@ class Calibration:
     open_interest: dict | None = None
     earnings: dict | None = None  # the real next report: day, timing, implied move
     fit_error: float | None = None  # median, in vol points
+    rate: float = RATE  # the risk-free rate in use (the real 3-month yield when known)
 
     @property
     def calibrated(self) -> bool:
@@ -161,7 +162,7 @@ class Calibration:
 DEFAULT = Calibration()
 
 
-def calibrations(summaries: dict[str, dict]) -> dict[str, Calibration]:
+def calibrations(summaries: dict[str, dict], rate: float = RATE) -> dict[str, Calibration]:
     """Pricing calibrations from saved summaries (calibration.calibrate), each
     symbol's premium pulled toward the median of all symbols' at each tenor and
     held to PREMIUM_RANGE."""
@@ -188,6 +189,7 @@ def calibrations(summaries: dict[str, dict]) -> dict[str, Calibration]:
             open_interest=s.get("open_interest"),
             earnings=s.get("earnings"),
             fit_error=s.get("fit_error"),
+            rate=rate,
         )
     return out
 
@@ -592,10 +594,10 @@ def price(
     down = -np.log(spot / inp.prev_close) / (spec.vol * ratio / math.sqrt(TRADING_DAYS_PER_YEAR))
     rho = np.maximum(-0.95, cal.rho_at(symbol, years) - SELLOFF_SKEW * np.maximum(0.0, down - 0.5))
     # Sticky strike: the smile stays where the day opened.
-    anchor = inp.open * np.exp(RATE * years)
+    anchor = inp.open * np.exp(cal.rate * years)
     iv = np.sqrt(smile(theta, np.log(ks / anchor), symbol, cal, rho) / years)
     atm = np.sqrt(smile(theta, np.log(spot / inp.open), symbol, cal, rho) / years)
-    model = black_scholes(spot, ks, years, iv)
+    model = black_scholes(spot, ks, years, iv, cal.rate)
     factor = spread_factor(inp, spec, day, sec, expiry)
     for side in ("call", "put"):
         m = model[side]
@@ -645,7 +647,7 @@ def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DE
         "days": (expiry - day).days,
         "years": round(years, 6),
         "spot": round(spot, 2),
-        "rate": RATE,
+        "rate": cal.rate,
         "atm_iv": round(atm_vol, 4),
         "expected_move": round(spot * atm_vol * math.sqrt(years), 2),
         "earnings": bool(earnings_days(spec, day + timedelta(days=1), expiry)),

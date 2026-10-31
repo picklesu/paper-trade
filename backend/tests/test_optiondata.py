@@ -1,4 +1,5 @@
 import asyncio
+import math
 from datetime import UTC, date, datetime
 
 import numpy as np
@@ -236,3 +237,23 @@ def test_an_unexpected_error_keeps_the_schedule(monkeypatch) -> None:
 
     asyncio.run(run())
     assert "the option sync failed" in svc.option_data_status()["last_error"]
+
+
+def test_treasury_rate_is_the_latest_value_made_continuous() -> None:
+    body = '{"data": [{"date": "2026-10-29", "value": "."}, {"date": "2026-10-28", "value": "4.18"}]}'
+    day, rate = od.parse_treasury_rate(body)
+    assert day == date(2026, 10, 28)
+    assert rate == pytest.approx(2 * math.log(1 + 0.0418 / 2), abs=1e-6)
+
+
+def test_treasury_rate_rejects_a_note() -> None:
+    with pytest.raises(FetchError):
+        od.parse_treasury_rate('{"Information": "rate limit"}')
+
+
+def test_calibrations_carry_the_rate() -> None:
+    from paper_trade.market import options
+
+    cals = options.calibrations({"SPY": {"symbol": "SPY", "fetched": "2026-10-28T00:00:00+00:00", "shape": None}}, 0.0415)
+    assert cals["SPY"].rate == 0.0415
+    assert options.DEFAULT.rate == options.RATE

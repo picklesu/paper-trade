@@ -17,7 +17,9 @@ around earnings, and no implied earnings move is measured.
 import csv
 import http.client
 import io
+import json
 import logging
+import math
 import threading
 import time
 import urllib.parse
@@ -210,6 +212,32 @@ def fetch_earnings(key: str, symbols: list[str], today: date) -> dict[str, Earni
     return parse_earnings(text, symbols, today)
 
 
+def parse_treasury_rate(body: str) -> tuple[date, float]:
+    """The latest daily 3-month Treasury yield from Alpha Vantage's JSON, as a
+    continuously compounded rate (the yield is a bond-equivalent, semiannual one)."""
+    try:
+        rows = json.loads(body)["data"]
+    except (ValueError, KeyError, TypeError):
+        raise FetchError(f"Alpha Vantage didn't send the Treasury yield: {body[:160]}") from None
+    for row in rows:  # newest first; holidays have "." for a value
+        try:
+            percent = float(row["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        return date.fromisoformat(row["date"]), round(2 * math.log1p(percent / 200), 6)
+    raise FetchError("Alpha Vantage's Treasury yield had no values")
+
+
+def fetch_treasury_rate(key: str) -> tuple[date, float]:
+    query = urllib.parse.urlencode({"function": "TREASURY_YIELD", "interval": "daily", "maturity": "3month", "apikey": key})
+    try:
+        with urllib.request.urlopen(f"{EARNINGS_URL}?{query}", timeout=30, context=tls_context()) as response:
+            body = response.read().decode()
+    except (OSError, http.client.HTTPException, UnicodeDecodeError) as e:
+        raise FetchError(f"couldn't read Alpha Vantage's answer ({getattr(e, 'reason', e)})") from None
+    return parse_treasury_rate(body)
+
+
 @dataclass(frozen=True)
 class Context:
     """What every symbol's calibration in one sync shares."""
@@ -291,6 +319,20 @@ class OptionData:
     @property
     def saved(self) -> dict[str, dict]:
         return self.store.get("option_calibration", {})
+
+    @property
+    def rate(self) -> float | None:
+        """The saved risk-free rate, if one was ever fetched."""
+        return self.store.get("risk_free_rate", {}).get("rate")
+
+    def rate_due(self) -> bool:
+        saved = self.store.get("risk_free_rate", {})
+        return bool(self.earnings_key) and (
+            not saved or self._now() - datetime.fromisoformat(saved["fetched"]) >= REFRESH_AFTER
+        )
+
+    def record_rate(self, day: date, rate: float) -> None:
+        self.store.set("risk_free_rate", {"rate": rate, "as_of": day.isoformat(), "fetched": self._now().isoformat()})
 
     def _sync_state(self) -> dict:
         return self.store.get("option_sync", {})

@@ -4,6 +4,7 @@ subscribers. Everything here runs on the event loop's thread."""
 import asyncio
 import contextlib
 import logging
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
@@ -14,7 +15,7 @@ from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
 from paper_trade.market import options
-from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, summarize
+from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
 from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
@@ -78,7 +79,7 @@ class MarketService:
         self._chains: dict[tuple[str, date], tuple[tuple, dict]] = {}
         self._real_lock = asyncio.Lock()
         self.option_data = option_data
-        self.calibrations = options.calibrations(option_data.saved) if option_data else {}
+        self.calibrations = options.calibrations(option_data.saved, option_data.rate or options.RATE) if option_data else {}
         self._calibration_version = 0
         self._option_task: asyncio.Task | None = None
         self._option_lock = asyncio.Lock()
@@ -123,7 +124,11 @@ class MarketService:
         }
 
     def calibration(self, symbol: str) -> options.Calibration:
-        return self.calibrations.get(symbol, options.DEFAULT)
+        found = self.calibrations.get(symbol)
+        if found is not None:
+            return found
+        rate = self.option_data.rate if self.option_data else None
+        return replace(options.DEFAULT, rate=rate) if rate else options.DEFAULT
 
     def option_expirations(self, symbol: str) -> list[dict]:
         today = market_day(self.engine.time)
@@ -409,7 +414,7 @@ class MarketService:
 
     def _calibrations_changed(self) -> None:
         assert self.option_data
-        self.calibrations = options.calibrations(self.option_data.saved)
+        self.calibrations = options.calibrations(self.option_data.saved, self.option_data.rate or options.RATE)
         self._calibration_version += 1
 
     async def refresh_option_data(self) -> None:
@@ -462,6 +467,20 @@ class MarketService:
                 od.finished()
                 self._calibrations_changed()
 
+    async def refresh_rate(self) -> None:
+        """Fetch the real 3-month Treasury yield about daily; without it (or a key)
+        the fixed rate stays."""
+        od = self.option_data
+        if not (od and od.rate_due() and od.earnings_key):
+            return
+        try:
+            day, rate = await asyncio.to_thread(fetch_treasury_rate, od.earnings_key)
+        except FetchError as e:
+            od.note(f"interest rate: {e}")
+            return
+        od.record_rate(day, rate)
+        self._calibrations_changed()
+
     async def _refresh_option_data(self) -> None:
         """Keep calibrations about a day old, in the background, after the first
         price fetch (they share Alpaca's rate limit)."""
@@ -469,6 +488,7 @@ class MarketService:
         await self._prices_tried.wait()
         while True:
             try:
+                await self.refresh_rate()
                 await self.refresh_option_data()
             except Exception as e:
                 # Keep the schedule going: try again after RETRY_AFTER.

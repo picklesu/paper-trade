@@ -29,6 +29,8 @@ export interface SymbolInfo {
   sector: string | null
   /** False for an index such as the VIX: quoted and charted, never traded. */
   tradable?: boolean
+  /** The day of the symbol's first real close, when known: it doesn't exist before it. */
+  listed_from?: string | null
 }
 
 export interface Watchlist {

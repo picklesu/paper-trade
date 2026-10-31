@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import ssl
 import urllib.error
 from datetime import UTC, date, datetime, timedelta
@@ -209,7 +210,10 @@ def test_new_markets_start_from_saved_real_prices() -> None:
     svc = make_service(real)
     real.record({"SPY": (772.31, date(2026, 10, 28))}, ["SPY"])
     asyncio.run(svc.goto(datetime(2020, 3, 2, 15, 0, tzinfo=UTC)))  # before the history: a new market
-    assert svc.engine.quotes["SPY"].prev_close == 772.31
+    # Today's real price, brought back to the day before by SPY's expected return.
+    spy = next(s for s in svc.engine.specs if s.symbol == "SPY")
+    years = (date(2026, 10, 28) - date(2020, 2, 28)).days / 365.25
+    assert svc.engine.quotes["SPY"].prev_close == pytest.approx(772.31 * math.exp(-spy.drift * years))
     assert svc.engine.quotes["XOM"].prev_close == next(s.price for s in svc.engine.specs if s.symbol == "XOM")
 
 

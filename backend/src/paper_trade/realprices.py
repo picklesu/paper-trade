@@ -72,6 +72,10 @@ class FetchError(Exception):
     """The service refused or sent something unusable; the message is for the user."""
 
 
+class FetchStop(FetchError):
+    """Refused for every symbol (rejected keys, rate limit): trying the next one is pointless."""
+
+
 def _env_value(name: str, env_file: Path) -> str | None:
     if value := os.environ.get(name, "").strip():
         return value
@@ -115,9 +119,9 @@ def _refusal(code: int, body: bytes, service: str = "Alpaca") -> FetchError:
     detail = f"{code} {message}".strip()
     if code in (401, 403):
         names = f"{KEY_ID_NAME} and {SECRET_NAME}" if service == "Alpaca" else "the key"
-        return FetchError(f"{service} rejected the API keys ({detail}). Check {names}.")
+        return FetchStop(f"{service} rejected the API keys ({detail}). Check {names}.")
     if code == 429:
-        return FetchError(f"{service} says too many requests; the next refresh will try again.")
+        return FetchStop(f"{service} says too many requests; the next refresh will try again.")
     return FetchError(f"{service} answered {detail}")
 
 

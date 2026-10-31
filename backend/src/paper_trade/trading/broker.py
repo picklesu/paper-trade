@@ -140,6 +140,8 @@ class Broker:
         self.starting_cash: float = store.get("starting_cash", STARTING_CASH)
         # Each underlying's option calibration (the service sets it).
         self.calibration: Callable[[str], Calibration] = lambda symbol: options.DEFAULT
+        # Whether a symbol existed on a day (the service sets it).
+        self.listed: Callable[[str, date | None], bool] = lambda symbol, day=None: True
         self._ledger: Ledger | None = None
         self._day_start: tuple[date, Ledger, dict[str, float]] | None = None
         self._volumes: dict[tuple, float] = {}  # contracts expected to trade a session
@@ -521,6 +523,9 @@ class Broker:
             raise OrderError(f"Unknown symbol {symbol}")
         if c and c.underlying not in self.engine.quotes:
             raise OrderError(f"Unknown symbol {c.underlying}")
+        underlying = c.underlying if c else symbol
+        if not self.listed(underlying, None):
+            raise OrderError(f"{underlying} wasn't trading yet")
         if type not in ("market", "limit", "stop", "stop_limit"):
             raise OrderError(f"Unknown order type {type}")
         if c and type not in ("market", "limit"):

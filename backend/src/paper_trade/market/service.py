@@ -14,6 +14,7 @@ from paper_trade.market.calendar import (
     MARKET_TZ,
     SESSION_SECONDS,
     market_day,
+    previous_trading_day,
     session_close,
     session_open,
     session_seconds,
@@ -25,7 +26,8 @@ from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
 from paper_trade.market import options
 from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
-from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, RealPrices
+from paper_trade.pricehistory import PriceHistory, back_cast
+from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, FetchStop, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 from paper_trade.watchlists import Watchlists
@@ -33,6 +35,8 @@ from paper_trade.watchlists import Watchlists
 TICK_SECONDS = 0.5
 SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it runs
 MAX_JUMP_DAYS = 252 * 5
+PRICE_HISTORY_PAUSE_SECONDS = 2  # between a symbol's price history requests
+PRICE_HISTORY_CHECK_SECONDS = 600  # between looks for symbols still to fetch
 PROGRESS_EVERY_DAYS = 5
 SPARKLINE_MINUTES = 5
 SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
@@ -62,6 +66,7 @@ class MarketService:
         history_days: int = HISTORY_DAYS,
         real: RealPrices | None = None,
         option_data: OptionData | None = None,
+        price_history: PriceHistory | None = None,
     ) -> None:
         self.clock = clock
         self.engine = engine
@@ -88,12 +93,15 @@ class MarketService:
         self._chains: dict[tuple[str, date], tuple[tuple, dict]] = {}
         self._real_lock = asyncio.Lock()
         self.option_data = option_data
+        self.price_history = price_history
+        self._history_prices_task: asyncio.Task | None = None
         self.calibrations = options.calibrations(option_data.saved, options.RATE if option_data.rate is None else option_data.rate) if option_data else {}
         self._calibration_version = 0
         self._option_task: asyncio.Task | None = None
         self._option_lock = asyncio.Lock()
         self._prices_tried = asyncio.Event()  # the option sync starts after the first price fetch
         self.broker.calibration = self.calibration
+        self.broker.listed = self.is_listed
 
     @property
     def jumping(self) -> bool:
@@ -105,6 +113,31 @@ class MarketService:
 
     # ----- messages ----------------------------------------------------------------
 
+    def listed_from(self, symbol: str) -> date | None:
+        """The first day the symbol traded for real (None: unknown, always listed)."""
+        return self.price_history.listed_from(symbol) if self.price_history else None
+
+    def is_listed(self, symbol: str, day: date | None = None) -> bool:
+        """Whether the symbol existed on `day` (default: the market's day)."""
+        first = self.listed_from(symbol)
+        return first is None or first <= (day or market_day(self.engine.time))
+
+    def listed_quotes(self) -> list[dict]:
+        """Quotes of symbols that exist now, then the indexes."""
+        return [q.to_dict() for s, q in self.engine.quotes.items() if self.is_listed(s)] + self.index_quotes()
+
+    def bars(self, symbol: str, interval: str, end: datetime | None, count: int) -> dict:
+        """Chart bars, none from before the symbol was listed."""
+        out = self.history.bars(symbol, interval, end, count)
+        first = self.listed_from(symbol)
+        if first is not None:
+            start = session_open(first).timestamp()
+            span = 7 * 86400 if interval == "1W" else 0  # a week's bar counts if the listing is in it
+            kept = [b for b in out["bars"] if b[0] + span > start or b[0] == start]
+            if len(kept) < len(out["bars"]):
+                out = {"bars": kept, "more": False}
+        return out
+
     def snapshot(self) -> dict:
         quotes = self.engine.quotes
         return {
@@ -113,7 +146,7 @@ class MarketService:
             "regime": self.engine.regime,
             "shock": round(self.engine.shock, 2),
             "shock_pending": self.engine.shock_pending,
-            "quotes": [q.to_dict() for q in quotes.values()] + self.index_quotes(),
+            "quotes": self.listed_quotes(),
             "account": self.broker.summary(quotes),
         }
 
@@ -173,6 +206,8 @@ class MarketService:
         for an unknown symbol or expiration."""
         if symbol not in self.symbols:
             raise ValueError(f"unknown symbol: {symbol}")
+        if not self.is_listed(symbol):
+            raise ValueError(f"{symbol} wasn't trading yet")
         held = frozenset(c.strike for c in self.broker.held_contracts(symbol) if c.expiry == expiration)
         key, now = (symbol, expiration), (self.engine.time, self.timeline, self._calibration_version, held)
         cached = self._chains.get(key)
@@ -311,7 +346,7 @@ class MarketService:
         self._jumping = True
         try:
             if action == "reset":
-                self.engine.reset(target, self.real_start_prices())
+                self.engine.reset(target, self.real_start_prices(market_day(target)))
                 self.broker.reset()
                 self.history.clear()
             elif action == "rewind":
@@ -374,20 +409,34 @@ class MarketService:
             status = {"configured": False, "available": 0, "total": len(self.symbols)}
         else:
             status = self.real.status(self.symbols)
-        return status | {"options": self.option_data_status()}
+        history = self.price_history.status(self.symbols) if self.price_history else {"configured": False, "available": 0, "total": len(self.symbols)}
+        return status | {"options": self.option_data_status(), "history": history}
 
     def option_data_status(self) -> dict:
         if self.option_data is None:
             return {"configured": False, "calibrated": 0, "total": len(self.symbols)}
         return self.option_data.status(self.symbols)
 
-    def real_start_prices(self) -> np.ndarray | None:
-        """Previous closes for a new market: saved real prices where there are
-        any, the specs' elsewhere (None if there are none at all)."""
+    def real_start_prices(self, day: date | None = None) -> np.ndarray | None:
+        """Previous closes for a new market starting on `day`: the real closes of the
+        day before where they're saved, otherwise today's real price brought back by
+        the symbol's expected return, otherwise the spec's price (None if there is
+        nothing real at all)."""
         saved = self.real.saved if self.real else {}
-        if not saved:
+        hist = self.price_history
+        if not saved and not (hist and hist.fetched):
             return None
-        return np.array([saved[s.symbol].price if s.symbol in saved else s.price for s in self.engine.specs])
+        before = previous_trading_day(day) if day else None
+        prices = []
+        for spec in self.engine.specs:
+            price = hist.price_on(spec.symbol, before, spec.drift) if hist and before else None
+            real = saved.get(spec.symbol)
+            if real and before is not None and before >= real.as_of:
+                price = real.price  # the saved real price is newer than any close fetched
+            if price is None and real:
+                price = real.price if before is None else back_cast(real.price, real.as_of, min(before, real.as_of), spec.drift)
+            prices.append(spec.price if price is None else price)
+        return np.array(prices)
 
     async def sync_real_prices(self) -> dict:
         """Continue the market from now as a new one whose prices are the saved
@@ -523,6 +572,30 @@ class MarketService:
         od.record_rate(day, rate)
         self._calibrations_changed()
 
+    async def _refresh_price_history(self) -> None:
+        """Fetch each symbol's daily closes once, slowly, in the background."""
+        hist = self.price_history
+        assert hist
+        while True:
+            for symbol in hist.due(self.symbols):
+                try:
+                    closes = await asyncio.to_thread(hist.fetch, symbol)
+                except FetchStop as e:
+                    hist.failed(str(e))
+                    log.warning("fetching %s's price history failed: %s", symbol, e)
+                    break
+                except FetchError as e:
+                    hist.skip(symbol, str(e))
+                    log.warning("no price history for %s: %s", symbol, e)
+                    continue
+                except Exception as e:
+                    hist.failed(f"fetching price history failed ({e})")
+                    log.exception("fetching price history failed")
+                    break
+                hist.record(symbol, closes)
+                await asyncio.sleep(PRICE_HISTORY_PAUSE_SECONDS)
+            await asyncio.sleep(PRICE_HISTORY_CHECK_SECONDS)
+
     async def _refresh_option_data(self) -> None:
         """Keep calibrations about a day old, in the background, after the first
         price fetch (they share Alpaca's rate limit)."""
@@ -610,8 +683,14 @@ class MarketService:
             self._real_task = asyncio.create_task(self._refresh_real_prices())
         if self.option_data and self.option_data.configured:
             self._option_task = asyncio.create_task(self._refresh_option_data())
+        if self.price_history and self.price_history.configured:
+            self._history_prices_task = asyncio.create_task(self._refresh_price_history())
 
     async def stop(self) -> None:
+        if self._history_prices_task:
+            self._history_prices_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._history_prices_task
         if self._option_task:
             self._option_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

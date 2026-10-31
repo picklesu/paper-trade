@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31, after Phase 8b (dividends, American pricing, the real rate, the VIX, uncertainty shocks)._
+_Last updated: 2026-10-31. Phase 8c (real historical start prices) is merged._
 
 ## Where things stand
 
@@ -28,11 +28,41 @@ _Last updated: 2026-10-31, after Phase 8b (dividends, American pricing, the real
 | 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
 | 7.5. Option prices calibrated to real markets (the user approved the proposal as is) | Merged | #33 |
 | 8a. Option trading, expiration, exercise, assignment (the user approved the proposal) | Merged | #35 |
-| 8b. Dividends, American-style pricing, the real rate, a VIX-like index, uncertainty shocks (the user approved the proposal and added the shocks and a trigger button) | PR open | — |
+| 8b. Dividends, American-style pricing, the real rate, a VIX-like index, uncertainty shocks (the user approved the proposal and added the shocks and a trigger button) | Merged | #39 |
+| Fix: the 1,260-day jump cap counted the whole distance, so after a rewind you couldn't jump forward again; it now counts only sessions not yet generated | Merged | #40 |
+| 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | Merged | #41 |
 
-`main` is clean and up to date with GitHub. No open branches or PRs.
+`main` is clean and up to date with GitHub.
 
 ## Pick up here
+
+**Phase 8c (merged, #41):** going before the
+history used to reset the market at *today's* real prices (SPY at $757 in 2006). Now:
+- `backend/src/paper_trade/pricehistory.py` (new): `PriceHistory` fetches each symbol's whole daily history
+  once from Tiingo (`TIINGO_API_KEY` in `backend/.env`, already added by the user; one request per symbol,
+  `columns=date,close`, about 160 KB) into a `closes` table (symbol, day, close; unadjusted for later splits).
+  `price_on(symbol, day, drift)` gives the close on or before `day`, or, before the symbol's first close,
+  that close brought back by the symbol's drift (`back_cast`). After a failure it waits an hour (`close_history_retry`).
+- `MarketService._refresh_price_history` is the background task (2 s between symbols, stops on any error);
+  `real_start_prices(day)` builds the previous closes for a reset: real close, else today's real price
+  brought back by drift, else the spec price (None if nothing real at all). `/api/real-prices` has
+  `history: {configured, available, total, last_error}`; no frontend uses it yet.
+- Tests: `tests/test_pricehistory.py` (10); `test_realprices.py` updated (a reset now back-casts the saved price). Backend 326 pass.
+- **Not listed yet (the user's request):** a symbol doesn't exist before its first real close
+  (`PriceHistory.listed_from`, `MarketService.is_listed/listed_from`; unknown while its history isn't
+  fetched = always listed). Hidden from quotes (`listed_quotes`: ticks, `/api/quotes`), chart bars
+  (`MarketService.bars` cuts everything before the listing; a week's bar stays if the listing is in it),
+  orders and options (`Broker.listed`, `option_chain`: "X wasn't trading yet"). `/api/symbols` has
+  `listed_from`; the chart, ticket and options panels say "X wasn't trading yet on <date>"; watchlist
+  rows show dashes. The engine still generates all 40, so other prices are unchanged. After listing the
+  price follows the sim's path (not snapped to the real first close).
+- **Live check (2026-10-31):** one run fetched 34 of 40 symbols, then Tiingo returned 429 at JNJ (the
+  allowance was shared with earlier probes). SPY 2006-01-03 close is 126.70 as expected; a market at
+  2006-01-03 quotes 37 symbols (AVGO, META, TSLA, V hidden). **Left:** the 6 symbols from JNJ on fetch in
+  the app's background after the hourly retry (a symbol Tiingo doesn't know is skipped for good; only a rate limit or rejected key stops the loop for an hour).
+- **Don't waste Tiingo/Alpha Vantage requests** (see the user's feedback): no probes or polling; make the
+  one real fetch count and keep the data. If full-history requests turn out to count for more than one,
+  switch to fetching only the date range a jump needs and cache it.
 
 **Phase 8b (built as approved; the user added the shocks and the trigger button):**
 - *Interest rate:* `optiondata.fetch_treasury_rate` (Alpha Vantage `TREASURY_YIELD`, daily 3-month, made continuous)
@@ -567,8 +597,9 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - No early closes (half days); one-off closures (e.g. national days of mourning) aren't modeled.
 - Options: model spreads and sizes; the American put price is an approximation (about 1% low at the money); the chain streams to the browser in
   full each tick for one expiration (fine at ~150 strikes).
-- Reset (going before the history) starts at the spec prices. A new market always begins at
-  the same prices whatever the date.
+- Reset (going before the history) starts at the real closes of that date where Tiingo's history is
+  saved (8c, in progress), otherwise today's real price brought back by drift, otherwise the spec
+  prices. The path from there is the sim's own, not the real one.
 - Five-year samples vary around the spec vol (persistent volatility); the average over many runs
   matches it.
 - Within a minute, seconds are a plausible bridge through the bar's open/high/low/close, not an

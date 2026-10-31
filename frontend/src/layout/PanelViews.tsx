@@ -28,8 +28,23 @@ function Frame({ label, children }: { label: string; children: ReactNode }) {
 
 const waiting = <Placeholder text="Waiting for market data…" />
 
+/** Why the selected symbol has no price: it may not have been listed yet at the market's date. */
+function useUnlisted(): string | null {
+  const { tick, symbols, selected } = useAppData()
+  const from = symbols.find((s) => s.symbol === selected)?.listed_from
+  // The market's date (New York), whatever offset the clock string carries.
+  const today = tick ? new Date(tick.clock.time).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : undefined
+  return from && today && from > today ? `${selected} wasn't trading yet on ${today}. Its first trading day was ${from}.` : null
+}
+
+function useWaiting(): ReactNode {
+  const unlisted = useUnlisted()
+  return unlisted ? <Placeholder text={unlisted} /> : waiting
+}
+
 export function ChartView() {
   const { tick, quotes, orders, history, selected, setLookup } = useAppData()
+  const waiting = useWaiting()
   const quote = quotes.get(selected)
   return (
     <Frame label="Chart">
@@ -78,6 +93,7 @@ export function WatchlistView() {
 
 export function TicketView() {
   const { tick, quotes, orders, selected, chain, ticketRequest } = useAppData()
+  const waiting = useWaiting()
   const quote = quotes.get(selected)
   // A chain click is for the selected symbol; one for another symbol (stale) is ignored.
   const fill = ticketRequest && parseOcc(ticketRequest.symbol)?.underlying === selected ? ticketRequest : null
@@ -93,6 +109,7 @@ export function TicketView() {
 export function OptionsView({ api }: IDockviewPanelProps) {
   const { tick, selected, chain, setChainRequest, requestTicket } = useAppData()
   const layout = useLayout()
+  const unlisted = useUnlisted()
   const shown = usePanelShown(api)
   const [wanted, setWanted] = useState<string | null>(null)
   const expirations = useExpirations(selected, tick?.clock.session_open, tick?.clock.timeline, tick?.clock.calibration)
@@ -109,6 +126,8 @@ export function OptionsView({ api }: IDockviewPanelProps) {
     <Frame label="Options">
       {isIndex(selected) ? (
         <Placeholder text={`${selected} is an index: it has no options.`} />
+      ) : unlisted ? (
+        <Placeholder text={unlisted} />
       ) : tick ? (
         <OptionChain
           symbol={selected}

@@ -121,6 +121,8 @@ def _refusal(code: int, body: bytes, service: str = "Alpaca") -> FetchError:
     firewall = body.decode(errors="replace").strip().splitlines()[0] if body.startswith((b"Approval required", b"Blocked by")) else ""
     if code == 403 and firewall:
         return FetchStop(f"the network blocked {service}: {firewall} (ask for it to be approved)")
+    if code == 400 and "api_key" in message.lower():  # FRED answers a bad key with 400
+        return FetchStop(f"{service} rejected the API key ({detail}). Check FRED_API_KEY.")
     if code in (401, 403):
         names = f"{KEY_ID_NAME} and {SECRET_NAME}" if service == "Alpaca" else "the key"
         return FetchStop(f"{service} rejected the API keys ({detail}). Check {names}.")

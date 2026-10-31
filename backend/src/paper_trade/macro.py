@@ -35,6 +35,12 @@ SERIES = {
 }
 
 
+# Days after its date that a value was known. Market series are known that day; the
+# monthly ones are published weeks later, and NBER names a recession a year or more after.
+# (Revisions are ignored: the values are today's.)
+LAG_DAYS = {"UNRATE": 35, "CPIAUCSL": 45, "USREC": 365}
+
+
 def fred_key(env_file: Path = ENV_FILE) -> str | None:
     return _env_value(KEY_NAME, env_file)
 
@@ -104,6 +110,10 @@ class Macro:
         self.store.set("macro_fetched", fetched)
         self.store.set("macro_error", None)
 
+    def note(self, message: str) -> None:
+        """A problem with one series: shown in the status; the others carry on."""
+        self.store.set("macro_error", {"message": message, "at": self._now().isoformat()})
+
     def failed(self, message: str) -> None:
         self.store.set("macro_error", {"message": message, "at": self._now().isoformat()})
         self.store.set("macro_retry", (self._now() + RETRY_AFTER).isoformat())
@@ -116,8 +126,9 @@ class Macro:
         return [(date.fromisoformat(d), v) for d, v in rows]
 
     def latest(self, name: str, day: date) -> tuple[date, float] | None:
-        """The last value on or before `day` (what was known then), with its date."""
-        row = self._db.execute("SELECT day, value FROM macro WHERE series = ? AND day <= ? ORDER BY day DESC LIMIT 1", (name, day.isoformat())).fetchone()
+        """The last value known on `day` (published by then), with its date."""
+        known = day - timedelta(days=LAG_DAYS.get(name, 0))
+        row = self._db.execute("SELECT day, value FROM macro WHERE series = ? AND day <= ? ORDER BY day DESC LIMIT 1", (name, known.isoformat())).fetchone()
         return (date.fromisoformat(row[0]), row[1]) if row else None
 
     def status(self) -> dict:

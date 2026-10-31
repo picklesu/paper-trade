@@ -613,6 +613,7 @@ class MarketService:
         macro = self.macro
         assert macro
         while True:
+            problems = []
             for series in macro.due():
                 try:
                     rows = await asyncio.to_thread(macro.fetch, series)
@@ -620,16 +621,18 @@ class MarketService:
                     macro.failed(str(e))
                     log.warning("fetching FRED's %s failed: %s", series, e)
                     break
-                except FetchError as e:
-                    macro.failed(f"{series}: {e}")
+                except FetchError as e:  # this series only: carry on with the others
+                    problems.append(f"{series}: {e}")
                     log.warning("fetching FRED's %s failed: %s", series, e)
-                    break
+                    continue
                 except Exception as e:
-                    macro.failed(f"fetching {series} failed ({e})")
+                    problems.append(f"{series}: fetching failed ({e})")
                     log.exception("fetching FRED data failed")
-                    break
+                    continue
                 macro.record(series, rows)
                 await asyncio.sleep(MACRO_PAUSE_SECONDS)
+            if problems:  # recorded after the loop: a success clears the status's error
+                macro.note("; ".join(problems))
             await asyncio.sleep(MACRO_CHECK_SECONDS)
 
     async def _refresh_option_data(self) -> None:

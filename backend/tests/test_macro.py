@@ -29,6 +29,16 @@ def test_series_and_what_was_known_on_a_day() -> None:
     assert macro.latest("DFF", date(2019, 12, 31)) is None and macro.latest("DGS2", date(2020, 1, 4)) is None
 
 
+def test_monthly_values_count_only_once_published() -> None:
+    macro = Macro(Store(":memory:"), "k")
+    macro.record("UNRATE", [(date(2008, 9, 1), 6.1), (date(2008, 10, 1), 6.5)])
+    assert macro.latest("UNRATE", date(2008, 10, 15)) is None or macro.latest("UNRATE", date(2008, 10, 15)) == (date(2008, 9, 1), 6.1)
+    assert macro.latest("UNRATE", date(2008, 10, 15)) == (date(2008, 9, 1), 6.1)  # October's reading came out in November
+    assert macro.latest("UNRATE", date(2008, 11, 7)) == (date(2008, 10, 1), 6.5)
+    macro.record("USREC", [(date(2020, 4, 1), 1.0)])
+    assert macro.latest("USREC", date(2020, 6, 1)) is None  # named a recession months later
+
+
 def test_series_are_due_again_after_a_day_and_wait_after_a_failure() -> None:
     now = [datetime(2026, 1, 5, tzinfo=UTC)]
     macro = Macro(Store(":memory:"), "k", now=lambda: now[0])
@@ -72,3 +82,30 @@ def test_a_network_block_is_not_reported_as_a_rejected_key() -> None:
     e = _refusal(403, b"Approval required for api.stlouisfed.org:443.\n\nReview and respond with:\n  sbx policy approval ls", "FRED")
     assert isinstance(e, FetchStop) and "network blocked FRED" in str(e) and "rejected" not in str(e)
     assert "rejected the API keys" in str(_refusal(403, b'{"message": "forbidden"}', "FRED"))
+
+
+def test_one_failing_series_does_not_block_the_others(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.MACRO_PAUSE_SECONDS", 0)
+
+    def fetch(series, key):
+        if series == "DGS3MO":
+            raise FetchError("FRED answered 500")
+        return ROWS
+
+    macro = Macro(Store(":memory:"), "k", fetch=fetch)
+    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5, macro=macro)
+
+    async def run() -> None:
+        task = asyncio.create_task(svc._refresh_macro())
+        await asyncio.sleep(0.2)
+        task.cancel()
+
+    asyncio.run(run())
+    assert set(macro.fetched) == set(SERIES) - {"DGS3MO"} and "DGS3MO" in macro.status()["last_error"]
+
+
+def test_a_bad_fred_key_is_a_stop_with_a_hint() -> None:
+    from paper_trade.realprices import _refusal
+
+    e = _refusal(400, b'{"error_code": 400, "error_message": "Bad Request. The value for variable api_key is not registered."}', "FRED")
+    assert isinstance(e, FetchStop) and "Check FRED_API_KEY" in str(e)

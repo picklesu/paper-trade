@@ -8,9 +8,11 @@ market state. There is always at least one list.
 from paper_trade.store import Store
 
 MAX_NAME = 40
+ALL_SYMBOLS = "All symbols"
+INDEXES = frozenset({"VIX"})
 DEFAULT_LISTS = (
     ("Main", ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")),
-    ("All symbols", None),  # None: every symbol
+    (ALL_SYMBOLS, None),  # None: every symbol
 )
 
 
@@ -24,12 +26,21 @@ class Watchlists:
                 {"id": i + 1, "name": name, "symbols": [s for s in (members or symbols) if s in symbols]}
                 for i, (name, members) in enumerate(DEFAULT_LISTS)
             ]
-            saved = {"next_id": len(lists) + 1, "lists": lists}
+            saved = {"next_id": len(lists) + 1, "lists": lists, "seen": list(symbols)}
             store.set("watchlists", saved)
         else:
             # Symbols the market no longer has (the symbol list changed) would make every edit fail.
             for wl in saved["lists"]:
                 wl["symbols"] = [s for s in wl["symbols"] if s in symbols]
+            # Symbols added to the market since the lists were made join "All symbols" once
+            # (earlier saves had every symbol but the indexes).
+            seen = set(saved.get("seen") or (s for s in symbols if s not in INDEXES))
+            fresh = [s for s in symbols if s not in seen]
+            everything = next((wl for wl in saved["lists"] if wl["name"] == ALL_SYMBOLS), None)
+            if everything and fresh:
+                everything["symbols"] += [s for s in fresh if s not in everything["symbols"]]
+            saved["seen"] = list(symbols)
+            store.set("watchlists", saved)
         self._data = saved
 
     @property

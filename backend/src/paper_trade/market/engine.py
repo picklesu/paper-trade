@@ -101,6 +101,7 @@ CRASH_EXTRA = 0.015
 # Uncertainty shocks (Bloom 2009): volatility jumps by a multiple of its normal level
 # and fades with a half-life of about three months; the market drops at the onset
 # (waiting and seeing) and rebounds a little as the uncertainty clears.
+VIX_REGIME_WEIGHT = 0.25  # how much of the volatility regime in force shows in the index (it lasts hours)
 VIX_STEP_MINUTES = 30  # the volatility index is sampled every half hour (the stored bar size)
 SHOCKS_PER_YEAR = 0.3
 SHOCK_EXCESS_MIN = 0.4  # the extra volatility at onset (0.65: about 1.65 times normal), between this
@@ -566,10 +567,13 @@ class MarketEngine:
         self._option_inputs[(day, col)] = (sk, inputs)
         return inputs
 
-    def _option_inputs_of(self, sk: _Skeleton, start: _DayStart, col: int) -> "OptionInputs":
+    def _option_inputs_of(self, sk: _Skeleton, start: _DayStart, col: int, regime_weight: float = 1.0) -> "OptionInputs":
+        """`regime_weight` below 1 lets the regime in force count for less (the index
+        looks 30 days ahead; a regime lasts hours)."""
         own = 1.0 if start.own_variance is None else float(start.own_variance[col])
         rho2 = float(self._rho[col] ** 2)
-        by_regime = np.sqrt(rho2 * start.variance * self._market_mults**2 + (1 - rho2) * own * self._own_mults**2) * (1 + sk.shock)
+        market_mults, own_mults = self._market_mults**regime_weight, self._own_mults**regime_weight
+        by_regime = np.sqrt(rho2 * start.variance * market_mults**2 + (1 - rho2) * own * own_mults**2) * (1 + sk.shock)
         # Second s follows the regime of minute (s-1)//60; the open, the previous session's.
         regimes = np.concatenate([[start.regime], sk.regimes])
         return OptionInputs(
@@ -597,7 +601,7 @@ class MarketEngine:
         minutes = np.arange(0, _M, VIX_STEP_MINUTES)
         secs = np.append(minutes * 60, _S - 1)
         spots = np.append(np.exp(sk.open[minutes, col]), np.exp(sk.close[-1, col]))
-        return options.vix(self.specs[col], self._option_inputs_of(sk, start, col), secs, spots)
+        return options.vix(self.specs[col], self._option_inputs_of(sk, start, col, VIX_REGIME_WEIGHT), secs, spots)
 
     def vix_at(self, day: date, secs) -> np.ndarray:
         """The index at session seconds `secs` of a generated session."""
@@ -606,7 +610,8 @@ class MarketEngine:
         col = self.symbol_index("SPY")
         secs = np.atleast_1d(np.asarray(secs))
         spots = np.array([self.price_at(day, int(s), col) for s in secs])
-        return options.vix(self.specs[col], self.option_inputs(day, col), secs, spots)
+        sk = self._skeleton(day)
+        return options.vix(self.specs[col], self._option_inputs_of(sk, self._starts[day], col, VIX_REGIME_WEIGHT), secs, spots)
 
     def vix_bars(self, day: date, through: int | None = None) -> np.ndarray | None:
         """(bars, 5) half-hour bars of the index [open, high, low, close, volume 0]:

@@ -133,8 +133,10 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   const intervalRef = useRef(interval)
   const sessionOpenRef = useRef(sessionOpen)
   const presetRef = useRef(preset)
+  const indexRef = useRef(index)
   useEffect(() => {
     intervalRef.current = interval
+    indexRef.current = index
     sessionOpenRef.current = sessionOpen
     presetRef.current = preset
   })
@@ -143,7 +145,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     barsRef.current = next
     setBars(next)
     candles.current?.setData(next.map(candle))
-    volumes.current?.setData(next.map(volumeBar))
+    volumes.current?.setData(indexRef.current ? [] : next.map(volumeBar)) // an index has no volume
     indicators.current?.setData(next)
   }
 
@@ -362,7 +364,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     barsRef.current = next
     const bar = next[next.length - 1]
     candles.current.update(candle(bar))
-    volumes.current?.update(volumeBar(bar))
+    if (!indexRef.current) volumes.current?.update(volumeBar(bar))
     indicators.current?.updateLast(next)
     setBars(next) // the legend shows the latest bar and its indicator values
   }, [quote.last, now, sessionOpen, interval, viewKey])
@@ -531,7 +533,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             <span>L {price(legend[3])}</span>
             <span className={direction(legend[4] - legend[1])}>C {price(legend[4])}</span>
             <span className={direction(legend[4] - legend[1])}>{percent(((legend[4] - legend[1]) / legend[1]) * 100)}</span>
-            <span className="muted">Vol {volume(legend[5])}</span>
+            {!index && <span className="muted">Vol {volume(legend[5])}</span>}
             {indicatorValues.some((iv) => !iv.ownPane) && (
               <span className="legend-indicators">
                 {indicatorValues

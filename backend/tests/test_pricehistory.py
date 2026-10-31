@@ -7,12 +7,18 @@ from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.market.symbols import SYMBOLS
-from paper_trade.pricehistory import PriceHistory, back_cast, parse_closes
+from paper_trade.pricehistory import Bar, PriceHistory, back_cast, parse_bars
 from paper_trade.realprices import Credentials, FetchError, FetchStop, RealPrices
 from paper_trade.store import Store
 
 START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
-SPY = [(date(2006, 1, 3), 126.7), (date(2006, 1, 4), 127.3), (date(2006, 1, 5), 127.38)]
+
+
+def bars(rows: list[tuple[date, float]]) -> list[Bar]:
+    return [Bar(day, close, close, close, close, 1000.0) for day, close in rows]
+
+
+SPY = bars([(date(2006, 1, 3), 126.7), (date(2006, 1, 4), 127.3), (date(2006, 1, 5), 127.38)])
 
 
 def history(closes=None, key="k") -> PriceHistory:
@@ -22,11 +28,22 @@ def history(closes=None, key="k") -> PriceHistory:
     return hist
 
 
-def test_parse_closes() -> None:
-    body = [{"date": "2006-01-03T00:00:00.000Z", "close": 126.699997}, {"date": "2006-01-04T00:00:00.000Z", "close": 0}]
-    assert parse_closes(body) == [(date(2006, 1, 3), 126.699997)]
+def test_parse_bars_skips_rows_without_a_close() -> None:
+    body = [{"date": "2006-01-03T00:00:00.000Z", "close": 126.699997, "open": 126, "high": 127, "low": 125, "volume": 5}, {"date": "2006-01-04T00:00:00.000Z", "close": 0}]
+    assert parse_bars(body) == [Bar(date(2006, 1, 3), 126.0, 127.0, 125.0, 126.699997, 5.0)]
     with pytest.raises(FetchError):
-        parse_closes({"detail": "Error"})
+        parse_bars({"detail": "Error"})
+
+
+def test_bars_are_adjusted_for_later_splits() -> None:
+    raw = [
+        {"date": "2020-08-28", "open": 500, "high": 510, "low": 490, "close": 499.0, "volume": 100, "divCash": 0.82, "splitFactor": 1},
+        {"date": "2020-08-31", "open": 127, "high": 131, "low": 126, "close": 129.0, "volume": 400, "divCash": 0, "splitFactor": 4},
+        {"date": "2020-09-01", "open": 130, "high": 134, "low": 128, "close": 134.0, "volume": 300, "divCash": 0, "splitFactor": 1},
+    ]
+    got = parse_bars(raw[::-1])  # any order in
+    assert got[0] == Bar(date(2020, 8, 28), 125.0, 127.5, 122.5, 124.75, 400.0, 0.205, 1.0)  # a quarter of the price, four times the shares
+    assert got[1].close == 129.0 and got[1].split == 4.0 and got[2].close == 134.0  # the split day and after are as traded
 
 
 def test_a_close_on_or_before_a_day() -> None:
@@ -58,7 +75,7 @@ def test_history_is_kept_between_runs(tmp_path) -> None:
     PriceHistory(Store(path), "k").record("SPY", SPY)
     again = PriceHistory(Store(path), "k")
     assert again.fetched == {"SPY"}
-    assert again.first_close("SPY") == SPY[0]
+    assert again.first_close("SPY") == (SPY[0].day, SPY[0].close)
 
 
 def make_service(hist: PriceHistory | None, real: RealPrices | None = None) -> MarketService:
@@ -110,7 +127,7 @@ def test_the_background_fetch_saves_each_symbol_and_stops_on_a_failure(monkeypat
     assert "too many" in hist.status(svc.symbols)["last_error"]
 
 
-LATER = [(date(2026, 1, 6), 100.0), (date(2026, 1, 7), 101.0)]  # AAPL's first close is after START's day
+LATER = bars([(date(2026, 1, 6), 100.0), (date(2026, 1, 7), 101.0)])  # AAPL's first close is after START's day
 
 
 def test_a_symbol_is_hidden_until_its_first_real_close() -> None:
@@ -179,3 +196,17 @@ def test_a_reset_waits_until_some_history_is_downloaded() -> None:
         asyncio.run(svc.goto(past))
     svc.price_history.record("SPY", SPY)
     assert asyncio.run(svc.goto(past))[0] == "reset"
+
+
+def test_bars_and_the_last_day_come_back_from_the_store() -> None:
+    hist = history({"SPY": SPY})
+    assert [b.day for b in hist.bars("SPY", date(2006, 1, 4))] == [date(2006, 1, 4), date(2006, 1, 5)]
+    assert hist.bars("SPY", end=date(2006, 1, 3))[0].close == 126.7 and hist.bars("QQQ") == []
+    assert hist.last_day("SPY") == date(2006, 1, 5) and hist.last_day("QQQ") is None
+
+
+def test_the_old_closes_table_is_dropped() -> None:
+    store = Store(":memory:")
+    store.connection.execute("CREATE TABLE closes (symbol TEXT, day TEXT, close REAL)")
+    PriceHistory(store, "k")
+    assert not store.connection.execute("SELECT name FROM sqlite_master WHERE name = 'closes'").fetchone()

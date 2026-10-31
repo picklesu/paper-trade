@@ -1,11 +1,13 @@
-"""Real daily closes, so a market started in the past opens near the real prices of
-that time (Phase 8c).
+"""Real daily bars, so a market started in the past opens near the real prices of
+that time (8c) and, from 9, replays the real days.
 
 With a Tiingo key (TIINGO_API_KEY in the environment or `backend/.env`), each
-symbol's whole daily history is fetched once (about 160 KB; the free plan allows
-50 requests an hour) and saved. The closes are the prices of the day, not adjusted
-for later splits. Where a symbol has no close that early, its first real close is
-brought back by the symbol's expected return instead.
+symbol's whole daily history (open, high, low, close, volume, dividend, split
+factor) is fetched once (about 0.5 MB; the free plan allows 50 requests an hour)
+and saved. Prices and volumes are **adjusted for splits** (not for dividends), so
+they continue into today's prices and share counts: a stock that split 10-for-1
+shows its old prices a tenth as high. Where a symbol has no bar that early, its
+first real close is brought back by the symbol's expected return instead.
 """
 
 import math
@@ -13,6 +15,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 from paper_trade.realprices import ENV_FILE, FetchError, _env_value, request_json
 from paper_trade.store import Store
@@ -28,27 +31,63 @@ def tiingo_key(env_file: Path = ENV_FILE) -> str | None:
     return _env_value(KEY_NAME, env_file)
 
 
-def parse_closes(body: object) -> list[tuple[date, float]]:
-    """(day, close) pairs, oldest first, from Tiingo's daily prices."""
+class Bar(NamedTuple):
+    """One real trading day, split-adjusted. `dividend` is cash a share (also adjusted);
+    `split` is that day's split factor (2 for a 2-for-1), 1 if none."""
+
+    day: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    dividend: float = 0.0
+    split: float = 1.0
+
+
+def parse_bars(body: object) -> list[Bar]:
+    """Bars oldest first, split-adjusted, from Tiingo's raw (as-traded) daily prices.
+    A bar before a split is divided by the factor (its volume multiplied), so every
+    price is in today's shares. Rows without a close are left out."""
     if not isinstance(body, list):
         raise FetchError("Tiingo's answer wasn't a list of prices")
-    closes = []
+    rows = []
     for row in body:
         if isinstance(row, dict) and row.get("date") and row.get("close"):
-            closes.append((date.fromisoformat(row["date"][:10]), float(row["close"])))
-    return closes
+            rows.append(row)
+    rows.sort(key=lambda r: r["date"])
+    bars: list[Bar] = []
+    factor = 1.0  # the product of the splits after the bar
+    for row in reversed(rows):
+        split = float(row.get("splitFactor") or 1.0) or 1.0
+        close = float(row["close"])
+        bars.append(
+            Bar(
+                date.fromisoformat(row["date"][:10]),
+                float(row.get("open") or close) / factor,
+                float(row.get("high") or close) / factor,
+                float(row.get("low") or close) / factor,
+                close / factor,
+                float(row.get("volume") or 0) * factor,
+                float(row.get("divCash") or 0) / factor,
+                split,
+            )
+        )
+        factor *= split
+    bars.reverse()
+    return bars
 
 
-def fetch_closes(symbol: str, key: str) -> list[tuple[date, float]]:
+def fetch_bars(symbol: str, key: str) -> list[Bar]:
     """One symbol's whole daily history (safe to run in a worker thread)."""
-    query = f"?startDate={FIRST_DAY}&columns=date,close"
+    query = f"?startDate={FIRST_DAY}&columns=date,open,high,low,close,volume,divCash,splitFactor"
     body, _ = request_json(
         URL.format(symbol=symbol.replace(".", "-").lower()) + query,
         {"Authorization": f"Token {key}"},
         timeout=60,
         service="Tiingo",
     )
-    return parse_closes(body)
+    return parse_bars(body)
 
 
 def back_cast(price: float, from_day: date, to_day: date, drift: float) -> float:
@@ -62,7 +101,7 @@ class PriceHistory:
         self,
         store: Store,
         key: str | None,
-        fetch: Callable[[str, str], list[tuple[date, float]]] | None = None,
+        fetch: Callable[[str, str], list[Bar]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.store = store
@@ -71,7 +110,13 @@ class PriceHistory:
         self._now = now
         self._db: sqlite3.Connection = store.connection
         self._first_days: dict[str, date | None] = {}
-        self._db.execute("CREATE TABLE IF NOT EXISTS closes (symbol TEXT NOT NULL, day TEXT NOT NULL, close REAL NOT NULL, PRIMARY KEY (symbol, day))")
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS daily (symbol TEXT NOT NULL, day TEXT NOT NULL, open REAL NOT NULL, high REAL NOT NULL, "
+            "low REAL NOT NULL, close REAL NOT NULL, volume REAL NOT NULL, dividend REAL NOT NULL, split REAL NOT NULL, "
+            "PRIMARY KEY (symbol, day))"
+        )
+        # 8c saved unadjusted closes only; the bars replace them (and are fetched again).
+        self._db.execute("DROP TABLE IF EXISTS closes")
 
     @property
     def configured(self) -> bool:
@@ -79,51 +124,51 @@ class PriceHistory:
 
     @property
     def fetched(self) -> set[str]:
-        return set(self.store.get("close_history", {}))
+        return set(self.store.get("daily_history", {}))
 
     def due(self, symbols: list[str]) -> list[str]:
         """Symbols whose history hasn't been fetched yet (nothing, a while after a failure)."""
-        retry = self.store.get("close_history_retry")
+        retry = self.store.get("daily_history_retry")
         if retry and self._now() < datetime.fromisoformat(retry):
             return []
-        have = self.fetched | set(self.store.get("close_history_skipped", {}))
+        have = self.fetched | set(self.store.get("daily_history_skipped", {}))
         return [s for s in symbols if s not in have]
 
-    def fetch(self, symbol: str) -> list[tuple[date, float]]:
+    def fetch(self, symbol: str) -> list[Bar]:
         """One request (safe in a worker thread: it doesn't touch the store)."""
         assert self.key
-        return (self._fetch or fetch_closes)(symbol, self.key)
+        return (self._fetch or fetch_bars)(symbol, self.key)
 
-    def record(self, symbol: str, closes: list[tuple[date, float]]) -> None:
+    def record(self, symbol: str, bars: list[Bar]) -> None:
         with self._db:
             self._db.executemany(
-                "INSERT OR REPLACE INTO closes (symbol, day, close) VALUES (?, ?, ?)",
-                [(symbol, day.isoformat(), close) for day, close in closes],
+                "INSERT OR REPLACE INTO daily (symbol, day, open, high, low, close, volume, dividend, split) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(symbol, b.day.isoformat(), b.open, b.high, b.low, b.close, b.volume, b.dividend, b.split) for b in bars],
             )
-        fetched = self.store.get("close_history", {})
+        fetched = self.store.get("daily_history", {})
         fetched[symbol] = self._now().isoformat()
-        self.store.set("close_history", fetched)
-        self.store.set("close_history_error", None)
+        self.store.set("daily_history", fetched)
+        self.store.set("daily_history_error", None)
         self._first_days.pop(symbol, None)
 
     def skip(self, symbol: str, message: str) -> None:
         """This symbol alone can't be fetched (Tiingo doesn't know it): don't ask again."""
-        skipped = self.store.get("close_history_skipped", {})
+        skipped = self.store.get("daily_history_skipped", {})
         skipped[symbol] = message
-        self.store.set("close_history_skipped", skipped)
+        self.store.set("daily_history_skipped", skipped)
 
     def failed(self, message: str) -> None:
-        self.store.set("close_history_error", {"message": message, "at": self._now().isoformat()})
-        self.store.set("close_history_retry", (self._now() + RETRY_AFTER).isoformat())
+        self.store.set("daily_history_error", {"message": message, "at": self._now().isoformat()})
+        self.store.set("daily_history_retry", (self._now() + RETRY_AFTER).isoformat())
 
     def close_on_or_before(self, symbol: str, day: date) -> tuple[date, float] | None:
         row = self._db.execute(
-            "SELECT day, close FROM closes WHERE symbol = ? AND day <= ? ORDER BY day DESC LIMIT 1", (symbol, day.isoformat())
+            "SELECT day, close FROM daily WHERE symbol = ? AND day <= ? ORDER BY day DESC LIMIT 1", (symbol, day.isoformat())
         ).fetchone()
         return (date.fromisoformat(row[0]), row[1]) if row else None
 
     def first_close(self, symbol: str) -> tuple[date, float] | None:
-        row = self._db.execute("SELECT day, close FROM closes WHERE symbol = ? ORDER BY day LIMIT 1", (symbol,)).fetchone()
+        row = self._db.execute("SELECT day, close FROM daily WHERE symbol = ? ORDER BY day LIMIT 1", (symbol,)).fetchone()
         return (date.fromisoformat(row[0]), row[1]) if row else None
 
     def listed_from(self, symbol: str) -> date | None:
@@ -133,6 +178,18 @@ class PriceHistory:
             first = self.first_close(symbol) if symbol in self.fetched else None
             self._first_days[symbol] = first[0] if first else None
         return self._first_days[symbol]
+
+    def bars(self, symbol: str, start: date | None = None, end: date | None = None) -> list[Bar]:
+        """The symbol's real bars from `start` through `end` (inclusive), oldest first."""
+        rows = self._db.execute(
+            "SELECT day, open, high, low, close, volume, dividend, split FROM daily WHERE symbol = ? AND day >= ? AND day <= ? ORDER BY day",
+            (symbol, (start or date.min).isoformat(), (end or date.max).isoformat()),
+        ).fetchall()
+        return [Bar(date.fromisoformat(r[0]), *r[1:]) for r in rows]
+
+    def last_day(self, symbol: str) -> date | None:
+        row = self._db.execute("SELECT MAX(day) FROM daily WHERE symbol = ?", (symbol,)).fetchone()
+        return date.fromisoformat(row[0]) if row and row[0] else None
 
     def price_on(self, symbol: str, day: date, drift: float) -> float | None:
         """The close on `day` (or the last one before it); before the symbol's first
@@ -144,7 +201,7 @@ class PriceHistory:
         return None
 
     def status(self, symbols: list[str]) -> dict:
-        error = self.store.get("close_history_error")
+        error = self.store.get("daily_history_error")
         return {
             "configured": self.configured,
             "available": len(self.fetched & set(symbols)),

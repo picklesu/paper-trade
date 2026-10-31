@@ -244,6 +244,8 @@ class MarketService:
             # Bumped when an option calibration changes (expirations may change too).
             "calibration": self._calibration_version,
             "building_history": self.building_history,
+            # Sessions up to this day replay the real daily bars (None: all simulated).
+            "real_through": self.engine.real_through.isoformat() if self.engine.real_through else None,
         }
 
     def publish(self, msg: dict, force: bool = False) -> None:

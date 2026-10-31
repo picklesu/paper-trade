@@ -381,6 +381,11 @@ class MarketEngine:
         return self._time
 
     @property
+    def real_through(self) -> date | None:
+        """The newest day this market replays the real bars of (None: none)."""
+        return self._real_through if self._real is not None else None
+
+    @property
     def generated_through(self) -> date:
         """The latest session whose starting state is known."""
         return max(self._starts)
@@ -735,13 +740,27 @@ class MarketEngine:
             self._forget(lambda d: d < origin_day)
         scale = self._starts[origin_day].prev_close / start.prev_close
         self._starts.update(
-            {d: _DayStart(s.prev_close * scale, s.regime, s.variance, s.own_variance, s.shock) for d, s in unit.items()}
+            {
+                d: _DayStart(s.prev_close * self.backfill_scale_on(d, scale), s.regime, s.variance, s.own_variance, s.shock)
+                for d, s in unit.items()
+            }
         )
         self.backfill_scale = scale
         if unit:
             self.origin = session_open(min(unit))
             self.starts_version += 1
         self.backfilled = True
+
+    def backfill_scale_on(self, day: date, scale: np.ndarray | None = None) -> np.ndarray:
+        """What a backfilled session's unit prices are multiplied by: `backfill_scale`,
+        except for a symbol whose real bars the session replays (those are already
+        real prices; the scale bridges to the origin's prices only after them)."""
+        scale = self.backfill_scale if scale is None else scale
+        assert scale is not None
+        if self._real is None or self._real_through is None or day > self._real_through:
+            return scale
+        real = np.array([self._real.covers(i, day) for i in range(len(self.specs))])
+        return np.where(real, 1.0, scale)
 
     def minute_bars(self, day: date, through: int | None = None) -> np.ndarray:
         """(minutes, N, 5) one-minute [open, high, low, close, volume] bars for a

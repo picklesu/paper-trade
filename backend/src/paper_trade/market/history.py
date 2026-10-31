@@ -91,9 +91,8 @@ class History:
         for day in self.engine.backfill_iter(days):
             held.append((day, aggregate(self.engine.minute_bars(day), STORED_MINUTES), self.engine.vix_bars(day)))
             yield day
-        scale = self.engine.backfill_scale
         for day, bars, vix in held:
-            bars[..., :4] *= scale[:, None]
+            bars[..., :4] *= self.engine.backfill_scale_on(day)[:, None]
             self._record_bars(day, bars, vix)  # the index needs no scale
 
     def _record_bars(self, day: date, bars: np.ndarray, vix: np.ndarray | None = None) -> None:

@@ -53,6 +53,8 @@ export interface ClockState {
   timeline: number
   /** Changes when an option calibration changes: expirations load again. */
   calibration?: number
+  /** Sessions up to this day ("YYYY-MM-DD") replay the real daily bars; null: all simulated. */
+  real_through?: string | null
   /** The years of history before the market's start are still being generated. */
   building_history: boolean
 }

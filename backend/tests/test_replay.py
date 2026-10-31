@@ -319,3 +319,21 @@ def test_the_real_past_cannot_be_shocked_but_the_future_can() -> None:
 def test_a_bad_vix_value_is_ignored() -> None:
     real = RealBars(NAMES, real_bars(), [(date(2006, 1, 4), float("nan")), (date(2006, 1, 5), 20.0), (date(2006, 1, 6), -1.0)])
     assert real.vix_on_or_before(date(2006, 1, 10)) == 20.0
+
+
+def test_a_backfill_ending_off_the_real_close_rescales_only_the_simulated_days() -> None:
+    first = date(2005, 12, 1)
+    bars = real_bars(days=30, first=first)
+    last = bars["SPY"][-1].day
+    origin_day = next_trading_day(next_trading_day(next_trading_day(last)))  # three simulated sessions after the real ones
+    target = np.array([bars[n][-1].close * 1.05 if n in bars else s.price for n, s in zip(NAMES, SYMBOLS)])
+    engine = MarketEngine(session_open(origin_day), real=RealBars(NAMES, bars), prices=target)
+    for _ in engine.backfill_iter(35):
+        pass
+    i = NAMES.index("SPY")
+    check_day(engine, bars, bars["SPY"][10].day)  # the real days are untouched
+    assert engine.backfill_scale_on(bars["SPY"][10].day)[i] == 1.0 and engine.backfill_scale_on(origin_day)[i] == pytest.approx(engine.backfill_scale[i])
+    sim = next_trading_day(last)
+    assert engine._starts[sim].prev_close[i] == pytest.approx(bars["SPY"][-1].close * engine.backfill_scale[i], rel=1e-9)
+    assert engine._starts[origin_day].prev_close[i] == pytest.approx(target[i], rel=1e-9)
+    assert engine.real_through == last

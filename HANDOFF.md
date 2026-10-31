@@ -33,6 +33,7 @@ _Last updated: 2026-10-31. Phase 8d (real daily data) is merged; 8e (replay the 
 | 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | Merged | #41, #42 |
 | Fix: the clock's date shows the year | Merged | #43 |
 | 8d. Real daily data (Tiingo bars split-adjusted, FRED series) | Merged; the user restarts to download it | #44 |
+| Update real history on request (fetch only new days; no automatic FRED refresh) | In review | — |
 | 8e. Replay the real past (next: ask the user to confirm before starting; it changes the engine's core) | **Not started** | — |
 
 `main` is clean and up to date with GitHub.
@@ -84,6 +85,14 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   After merging, the user restarts; the app then downloads 40 symbols (Tiingo's allowance is 50 an
   hour: if it stops, it retries in an hour and keeps what it has) and the FRED series. A reset to the
   past is refused until the first symbol is saved.
+- **Update on request (after 8d, the user's request):** nothing fetches new days by itself. Go to… → Sync to
+  real prices… → **Update real history** (`POST /api/real-history/update`, `MarketService.update_real_history`)
+  asks Tiingo only for the days from each saved symbol's last bar (that bar included, since it may have been
+  saved before its close) and FRED only from each series' last value; symbols/series not yet downloaded are
+  left to the background fetch. A split among the new days makes it fetch that symbol's whole history again
+  (earlier bars need re-adjusting). The old automatic daily FRED refresh is gone (`Macro.due` = never fetched).
+  Store workers never touch SQLite: `last_day` is read on the loop thread and passed to `fetch_new`.
+  Status: `/api/real-prices` `history` has `newest` and `updated`. Backend 349, frontend 165.
 - **Next, 8e (not started; confirm with the user first):** the engine's `_skeleton` for a session before the
   last real day should be conditioned on the real daily bars: each symbol's open (gap), high, low, close and
   volume match the real bar, and only the minute/second path inside is drawn (a bridge through open, high,

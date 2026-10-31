@@ -39,14 +39,14 @@ def test_monthly_values_count_only_once_published() -> None:
     assert macro.latest("USREC", date(2020, 6, 1)) is None  # named a recession months later
 
 
-def test_series_are_due_again_after_a_day_and_wait_after_a_failure() -> None:
+def test_series_are_fetched_once_and_wait_after_a_failure() -> None:
     now = [datetime(2026, 1, 5, tzinfo=UTC)]
     macro = Macro(Store(":memory:"), "k", now=lambda: now[0])
     assert macro.due() == list(SERIES)
     macro.record("DFF", ROWS)
     assert "DFF" not in macro.due()
-    now[0] += timedelta(hours=21)
-    assert "DFF" in macro.due()
+    now[0] += timedelta(days=3)
+    assert "DFF" not in macro.due()  # later days come only on request
     macro.failed("down")
     assert macro.due() == [] and macro.status()["last_error"] == "down"
     now[0] += timedelta(hours=2)
@@ -109,3 +109,34 @@ def test_a_bad_fred_key_is_a_stop_with_a_hint() -> None:
 
     e = _refusal(400, b'{"error_code": 400, "error_message": "Bad Request. The value for variable api_key is not registered."}', "FRED")
     assert isinstance(e, FetchStop) and "Check FRED_API_KEY" in str(e)
+
+
+def test_fetch_new_asks_only_for_days_from_the_last_saved_one() -> None:
+    asked = []
+    macro = Macro(Store(":memory:"), "k", fetch_since=lambda series, key, since: asked.append(since) or [(date(2020, 1, 6), 1.57), (date(2020, 1, 7), 1.58)])
+    macro.record("DFF", ROWS)
+    rows = macro.fetch_new("DFF", macro.last_day("DFF"))
+    assert asked == [date(2020, 1, 6)] and [d for d, _ in rows] == [date(2020, 1, 6), date(2020, 1, 7)]
+    macro.record("DFF", rows)
+    assert macro.series("DFF")[-2:] == rows and len(macro.series("DFF")) == 4  # the last day was replaced, not doubled
+
+
+def test_update_fetches_only_new_days_and_leaves_unfetched_series_alone() -> None:
+    asked = []
+
+    def since(series, key, day):
+        asked.append((series, day))
+        return [(date(2020, 1, 7), 1.58)]
+
+    macro = Macro(Store(":memory:"), "k", fetch_since=since)
+    macro.record("DFF", ROWS)
+    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5, macro=macro)
+    result = asyncio.run(svc.update_real_history())
+    assert asked == [("DFF", date(2020, 1, 6))] and result["macro"] == {"DFF": 1} and result["problems"] == []
+    assert result["prices"] == {} and svc.real_prices_status()["history"]["updated"]["problems"] == []
+
+
+def test_update_without_keys_says_what_to_add() -> None:
+    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5)
+    with pytest.raises(ValueError, match="TIINGO_API_KEY"):
+        asyncio.run(svc.update_real_history())

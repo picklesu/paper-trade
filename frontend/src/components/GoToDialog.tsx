@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Modal } from './Modal'
-import { fetchRealPrices, goto, previewGoto, syncRealPrices, triggerShock, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
+import { fetchRealPrices, goto, previewGoto, syncRealPrices, triggerShock, updateRealHistory, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
 import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
@@ -263,6 +263,48 @@ function OptionSync({ status }: { status: OptionDataStatus | undefined }) {
   )
 }
 
+/** Real daily history is fetched once; this fetches only the days since, when asked. */
+function RealHistory({ status }: { status: RealPricesStatus }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const history = status.history
+  const macro = status.macro
+  if (!history?.configured && !macro?.configured) return null
+
+  const update = async () => {
+    setBusy(true)
+    setFailed(false)
+    setResult(null)
+    try {
+      const r = await updateRealHistory()
+      const days = Object.values(r.prices).reduce((a, b) => a + b, 0)
+      const points = Object.values(r.macro).reduce((a, b) => a + b, 0)
+      const added = days + points === 0 ? 'Already up to date.' : `Added ${days} days of prices (${Object.keys(r.prices).length} symbols) and ${points} economic readings.`
+      setResult(r.problems.length ? `${added} Problems: ${r.problems.join('; ')}` : added)
+      setFailed(r.problems.length > 0)
+    } catch (err) {
+      setResult(err instanceof Error ? err.message : String(err))
+      setFailed(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="option-sync">
+      <p className="muted">
+        Real history: {history?.available ?? 0} of {history?.total ?? 0} symbols{history?.newest && `, through ${calendarDate(history.newest)}`}
+        {macro?.configured && `; ${macro.available} of ${macro.total} economic series`}. It's fetched once; this adds only the days since.
+      </p>
+      <button className="btn" disabled={busy} onClick={update}>
+        {busy ? 'Updating…' : 'Update real history'}
+      </button>
+      {result && <p className={failed ? 'warn-text' : 'muted'}>{result}</p>}
+    </div>
+  )
+}
+
 /** Offer to continue the market from now at the saved real prices. */
 function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
   const back = (
@@ -307,6 +349,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
         </p>
         {problem}
         <OptionSync status={status.options} />
+        <RealHistory status={status} />
         <div className="dialog-actions">{back}</div>
       </>
     )
@@ -332,6 +375,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
       </p>
       {problem}
       <OptionSync status={status.options} />
+      <RealHistory status={status} />
       <div className="dialog-actions">
         <button className="btn primary" disabled={busy} onClick={onSync}>
           Sync prices

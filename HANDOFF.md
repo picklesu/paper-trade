@@ -29,7 +29,7 @@ _Last updated: 2026-10-31. Phase 8c (real historical start prices) is merged._
 | 7.5. Option prices calibrated to real markets (the user approved the proposal as is) | Merged | #33 |
 | 8a. Option trading, expiration, exercise, assignment (the user approved the proposal) | Merged | #35 |
 | 8b. Dividends, American-style pricing, the real rate, a VIX-like index, uncertainty shocks (the user approved the proposal and added the shocks and a trigger button) | Merged | #39 |
-| Fix: the 1,260-day jump cap counted the whole distance, so after a rewind you couldn't jump forward again; it now counts only sessions not yet generated | Merged | #40 |
+| Fix: the jump cap counted the whole distance, so after a rewind you couldn't jump forward again; it now counts only sessions not yet generated | Merged | #40 |
 | 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | Merged | #41 |
 
 `main` is clean and up to date with GitHub.
@@ -437,8 +437,8 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
   - `api/`: `GET /api/health`, `GET /api/quotes`, `GET|POST /api/clock` (409 during a jump),
     `GET /api/clock/goto?time=` (preview: forward / rewind / reset / none, plus the snapped
     target), `POST /api/clock/goto {time, future: replay|new}`, WebSocket `/ws`. Times without a
-    UTC offset are New York wall-clock time; years 1900–2999; forward jumps are capped at 5
-    years. `api/deps.py`: `market` (read-only) and `idle_market` (409 during a jump) for
+    UTC offset are New York wall-clock time; years 1900–2999; forward jumps are capped at 25
+    years of new sessions (`MAX_JUMP_DAYS`; 20 years take about 20 s). `api/deps.py`: `market` (read-only) and `idle_market` (409 during a jump) for
     anything that syncs or changes state. Trading (`api/trading.py`): `GET /api/account`, `POST /api/account/reset`,
     `GET|POST /api/orders`, `POST /api/orders/preview`, `PATCH /api/orders/{id}` (replace),
     `DELETE /api/orders/{id}`, `GET /api/bars?symbol&interval&end&count`; 422 responses carry a user-readable

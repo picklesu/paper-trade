@@ -113,10 +113,14 @@ def parse_snapshots(body: dict, symbols: list[str]) -> dict[str, tuple[float, da
 def _refusal(code: int, body: bytes, service: str = "Alpaca") -> FetchError:
     # Errors usually carry JSON {"message": ...}; some are an HTML page, which isn't shown.
     try:
-        message = str(json.loads(body).get("message") or "")
+        parsed = json.loads(body)
+        message = str(parsed.get("message") or parsed.get("error_message") or "")
     except (ValueError, AttributeError):
         message = ""
     detail = f"{code} {message}".strip()
+    firewall = body.decode(errors="replace").strip().splitlines()[0] if body.startswith((b"Approval required", b"Blocked by")) else ""
+    if code == 403 and firewall:
+        return FetchStop(f"the network blocked {service}: {firewall} (ask for it to be approved)")
     if code in (401, 403):
         names = f"{KEY_ID_NAME} and {SECRET_NAME}" if service == "Alpaca" else "the key"
         return FetchStop(f"{service} rejected the API keys ({detail}). Check {names}.")

@@ -1,0 +1,74 @@
+import asyncio
+from datetime import UTC, date, datetime, timedelta
+
+import pytest
+
+from paper_trade.macro import SERIES, Macro, parse_observations
+from paper_trade.market.clock import SimClock
+from paper_trade.market.engine import MarketEngine
+from paper_trade.market.service import MarketService
+from paper_trade.realprices import FetchError, FetchStop
+from paper_trade.store import Store
+
+START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
+ROWS = [(date(2020, 1, 2), 1.55), (date(2020, 1, 3), 1.54), (date(2020, 1, 6), 1.56)]
+
+
+def test_parse_leaves_out_missing_days() -> None:
+    body = {"observations": [{"date": "2020-01-03", "value": "1.54"}, {"date": "2020-01-01", "value": "."}, {"date": "2020-01-02", "value": "1.55"}]}
+    assert parse_observations(body) == [(date(2020, 1, 2), 1.55), (date(2020, 1, 3), 1.54)]
+    with pytest.raises(FetchError):
+        parse_observations({"error_message": "Bad Request"})
+
+
+def test_series_and_what_was_known_on_a_day() -> None:
+    macro = Macro(Store(":memory:"), "k")
+    macro.record("DFF", ROWS)
+    assert macro.series("DFF", date(2020, 1, 3)) == ROWS[1:]
+    assert macro.latest("DFF", date(2020, 1, 4)) == (date(2020, 1, 3), 1.54)  # a weekend: Friday's
+    assert macro.latest("DFF", date(2019, 12, 31)) is None and macro.latest("DGS2", date(2020, 1, 4)) is None
+
+
+def test_series_are_due_again_after_a_day_and_wait_after_a_failure() -> None:
+    now = [datetime(2026, 1, 5, tzinfo=UTC)]
+    macro = Macro(Store(":memory:"), "k", now=lambda: now[0])
+    assert macro.due() == list(SERIES)
+    macro.record("DFF", ROWS)
+    assert "DFF" not in macro.due()
+    now[0] += timedelta(hours=21)
+    assert "DFF" in macro.due()
+    macro.failed("down")
+    assert macro.due() == [] and macro.status()["last_error"] == "down"
+    now[0] += timedelta(hours=2)
+    assert macro.due()
+
+
+def test_the_background_fetch_saves_each_series_and_stops_on_a_refusal(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.MACRO_PAUSE_SECONDS", 0)
+    calls = []
+
+    def fetch(series, key):
+        calls.append(series)
+        if series == "DGS3MO":
+            raise FetchStop("FRED rejected the API keys (400 Bad Request)")
+        return ROWS
+
+    macro = Macro(Store(":memory:"), "k", fetch=fetch)
+    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5, macro=macro)
+
+    async def run() -> None:
+        task = asyncio.create_task(svc._refresh_macro())
+        await asyncio.sleep(0.2)
+        task.cancel()
+
+    asyncio.run(run())
+    assert calls == ["DFF", "DGS3MO"] and set(macro.fetched) == {"DFF"}
+    assert "rejected" in macro.status()["last_error"] and svc.real_prices_status()["macro"]["available"] == 1
+
+
+def test_a_network_block_is_not_reported_as_a_rejected_key() -> None:
+    from paper_trade.realprices import _refusal
+
+    e = _refusal(403, b"Approval required for api.stlouisfed.org:443.\n\nReview and respond with:\n  sbx policy approval ls", "FRED")
+    assert isinstance(e, FetchStop) and "network blocked FRED" in str(e) and "rejected" not in str(e)
+    assert "rejected the API keys" in str(_refusal(403, b'{"message": "forbidden"}', "FRED"))

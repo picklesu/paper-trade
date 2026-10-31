@@ -30,11 +30,53 @@ _Last updated: 2026-10-31. Phase 8c (real historical start prices) is merged._
 | 8a. Option trading, expiration, exercise, assignment (the user approved the proposal) | Merged | #35 |
 | 8b. Dividends, American-style pricing, the real rate, a VIX-like index, uncertainty shocks (the user approved the proposal and added the shocks and a trigger button) | Merged | #39 |
 | Fix: the jump cap counted the whole distance, so after a rewind you couldn't jump forward again; it now counts only sessions not yet generated | Merged | #40 |
-| 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | Merged | #41 |
+| 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | Merged | #41, #42 |
+| Fix: the clock's date shows the year | Merged | #43 |
+| 8d. Real daily data (Tiingo bars, FRED series) | **In review** | see below |
 
 `main` is clean and up to date with GitHub.
 
 ## Pick up here
+
+**The real-history plan (the user's request after 20 simulated years of SPY went $125 → $300; discussed
+and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
+- *Goal:* the **past replays exactly** (every session up to the last real day follows its real daily
+  bar and volume, so 2008, March 2020 and the bull and bear markets land on their real dates; the
+  sim fills only the minutes and seconds inside each day). The **future is simulated by a model
+  trained on the real history** (regime shifts = the dated big events, the flow between them = a
+  slow drift and volatility driven by interest rates, the yield curve, credit spreads and so on),
+  and it **starts from the real state of whatever date is simulated from** (regime odds, volatility,
+  rates known up to that date; no look-ahead). Be honest with the user: nobody predicts a crash's
+  date; the model gives calibrated odds and realistic bull/bear lengths, drawdowns and crash
+  frequency. Accuracy is measured by walk-forward checks (train before a date, simulate forward, see
+  how often reality falls inside the sim's range).
+- *Decisions:* prices and volumes **split-adjusted** (dividends not; the engine models dividends
+  itself); market-level regime-switching model (about 3 states: calm bull, correction/bear, crisis;
+  transition odds depend on macro inputs; a crash is a jump with a state-dependent hazard); the 40
+  symbols follow through the engine's betas and sector factors; training is an offline script that
+  saves parameters in the repo (nothing trains at runtime); parameters fitted on the whole history
+  have seen 2020 (fine for a simulator; the walk-forward checks use only earlier data).
+- *Steps:* **8d real daily data** (this PR) → **8e replay the real past** (engine conditions each
+  session's minute path on the real bar and volume; the 5-year history before a past start is real
+  too; VIX and option prices follow from real volatility) → **8f the future model** (fit, start state
+  from any date, "Generate a new future" uses it) → **8g walk-forward validation**.
+- **8d (in review):** `pricehistory.py` now stores `Bar`s (day, open, high, low, close, volume,
+  dividend, split) in a `daily` table (the old `closes` table is dropped on start and its symbols are
+  fetched again, about 0.5 MB each, 1 request per symbol, 40 in all), split-adjusted by
+  `parse_bars` (a bar before a split is divided by the factor, its volume multiplied; checked on
+  AAPL 2014 and 2020: 2014-06-06 closes at $23.06). `PriceHistory.bars(symbol, start, end)`,
+  `last_day`, `price_on`/`listed_from` as before. Store keys moved to `daily_history*`.
+  `macro.py` (new): `Macro` fetches ten FRED series (`FRED_API_KEY` in `backend/.env`; DFF, DGS3MO,
+  DGS2, DGS10, T10Y2Y, BAA10Y, VIXCLS, UNRATE, CPIAUCSL, USREC, from 1985) into a `macro` table, again
+  about daily (`MarketService._refresh_macro`); `series(name, start, end)`, `latest(name, day)` (what
+  was known on a day). `/api/real-prices` has `macro: {configured, available, total, last_error}`. The
+  sandbox firewall blocks a new host until the user approves it (`Approval required for
+  api.stlouisfed.org`); `_refusal` now says so instead of "rejected the API keys". Tests never read
+  the Tiingo or FRED keys. Live check: AAPL and SPY bars and all ten FRED series fetched once
+  (VIX 79.13 on 2008-10-24, the curve inverted in March 2007, recession flag on in April 2020).
+  After merging, the user restarts; the app then downloads 40 symbols (Tiingo's allowance is 50 an
+  hour: if it stops, it retries in an hour and keeps what it has) and the FRED series. A reset to the
+  past is refused until the first symbol is saved.
 
 **Phase 8c (merged, #41):** going before the
 history used to reset the market at *today's* real prices (SPY at $757 in 2006). Now:

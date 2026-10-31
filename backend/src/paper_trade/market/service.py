@@ -26,6 +26,7 @@ from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
 from paper_trade.market import options
 from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
+from paper_trade.macro import Macro
 from paper_trade.pricehistory import PriceHistory, back_cast
 from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, FetchStop, RealPrices
 from paper_trade.store import Store
@@ -37,6 +38,8 @@ SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it ru
 MAX_JUMP_DAYS = 252 * 25  # about 20 s of generation for 20 years
 PRICE_HISTORY_PAUSE_SECONDS = 2  # between a symbol's price history requests
 PRICE_HISTORY_CHECK_SECONDS = 600  # between looks for symbols still to fetch
+MACRO_PAUSE_SECONDS = 1  # between FRED requests (it allows 120 a minute)
+MACRO_CHECK_SECONDS = 3600  # between looks for series due
 PROGRESS_EVERY_DAYS = 5
 SPARKLINE_MINUTES = 5
 SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
@@ -67,6 +70,7 @@ class MarketService:
         real: RealPrices | None = None,
         option_data: OptionData | None = None,
         price_history: PriceHistory | None = None,
+        macro: Macro | None = None,
     ) -> None:
         self.clock = clock
         self.engine = engine
@@ -95,6 +99,8 @@ class MarketService:
         self.option_data = option_data
         self.price_history = price_history
         self._history_prices_task: asyncio.Task | None = None
+        self.macro = macro
+        self._macro_task: asyncio.Task | None = None
         self.calibrations = options.calibrations(option_data.saved, options.RATE if option_data.rate is None else option_data.rate) if option_data else {}
         self._calibration_version = 0
         self._option_task: asyncio.Task | None = None
@@ -415,7 +421,8 @@ class MarketService:
         else:
             status = self.real.status(self.symbols)
         history = self.price_history.status(self.symbols) if self.price_history else {"configured": False, "available": 0, "total": len(self.symbols)}
-        return status | {"options": self.option_data_status(), "history": history}
+        macro = self.macro.status() if self.macro else {"configured": False, "available": 0, "total": 0}
+        return status | {"options": self.option_data_status(), "history": history, "macro": macro}
 
     def option_data_status(self) -> dict:
         if self.option_data is None:
@@ -584,7 +591,7 @@ class MarketService:
         while True:
             for symbol in hist.due(self.symbols):
                 try:
-                    closes = await asyncio.to_thread(hist.fetch, symbol)
+                    bars = await asyncio.to_thread(hist.fetch, symbol)
                 except FetchStop as e:
                     hist.failed(str(e))
                     log.warning("fetching %s's price history failed: %s", symbol, e)
@@ -597,9 +604,33 @@ class MarketService:
                     hist.failed(f"fetching price history failed ({e})")
                     log.exception("fetching price history failed")
                     break
-                hist.record(symbol, closes)
+                hist.record(symbol, bars)
                 await asyncio.sleep(PRICE_HISTORY_PAUSE_SECONDS)
             await asyncio.sleep(PRICE_HISTORY_CHECK_SECONDS)
+
+    async def _refresh_macro(self) -> None:
+        """Fetch FRED's series (one request each), then again about daily."""
+        macro = self.macro
+        assert macro
+        while True:
+            for series in macro.due():
+                try:
+                    rows = await asyncio.to_thread(macro.fetch, series)
+                except FetchStop as e:
+                    macro.failed(str(e))
+                    log.warning("fetching FRED's %s failed: %s", series, e)
+                    break
+                except FetchError as e:
+                    macro.failed(f"{series}: {e}")
+                    log.warning("fetching FRED's %s failed: %s", series, e)
+                    break
+                except Exception as e:
+                    macro.failed(f"fetching {series} failed ({e})")
+                    log.exception("fetching FRED data failed")
+                    break
+                macro.record(series, rows)
+                await asyncio.sleep(MACRO_PAUSE_SECONDS)
+            await asyncio.sleep(MACRO_CHECK_SECONDS)
 
     async def _refresh_option_data(self) -> None:
         """Keep calibrations about a day old, in the background, after the first
@@ -690,8 +721,14 @@ class MarketService:
             self._option_task = asyncio.create_task(self._refresh_option_data())
         if self.price_history and self.price_history.configured:
             self._history_prices_task = asyncio.create_task(self._refresh_price_history())
+        if self.macro and self.macro.configured:
+            self._macro_task = asyncio.create_task(self._refresh_macro())
 
     async def stop(self) -> None:
+        if self._macro_task:
+            self._macro_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._macro_task
         if self._history_prices_task:
             self._history_prices_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

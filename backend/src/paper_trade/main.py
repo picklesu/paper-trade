@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from paper_trade import __version__, optiondata, pricehistory, realprices
+from paper_trade import __version__, macro, optiondata, pricehistory, realprices
 from paper_trade.api import health, market, stream, trading, watchlists
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
@@ -44,7 +44,8 @@ def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: 
         real = realprices.RealPrices(store, creds)
         option_data = optiondata.OptionData(store, creds, optiondata.av_key())
         history = pricehistory.PriceHistory(store, pricehistory.tiingo_key())
-        svc = MarketService(clock, engine, store, history_days, real, option_data, history)
+        economy = macro.Macro(store, macro.fred_key())
+        svc = MarketService(clock, engine, store, history_days, real, option_data, history, economy)
         app.state.market = svc
         svc.start()
         yield

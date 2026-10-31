@@ -199,10 +199,10 @@ describe('GoToDialog: sync to real prices', () => {
     const fetchMock = mockReal({ configured: true, available: 25, total: 40, oldest: '2026-10-27', newest: '2026-10-28', fetched })
     const onClose = vi.fn()
     render(<GoToDialog clock={clock} onClose={onClose} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
 
     const time = new Date(fetched).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    expect(await screen.findByText(`saved for 25 of 40 symbols (prices from Oct 27–Oct 28, fetched at ${time})`, { exact: false })).toBeInTheDocument()
+    expect(await screen.findByText(`saved for 25 of 40 symbols (Oct 27–Oct 28, fetched at ${time})`, { exact: false })).toBeInTheDocument()
     expect(screen.getByText(/the other 15 keep their current price/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Sync prices' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
@@ -217,7 +217,7 @@ describe('GoToDialog: sync to real prices', () => {
     }))
     vi.stubGlobal('fetch', fn)
     render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
     expect(await screen.findByText(/Real history: 40 of 40 symbols, through Oct 30; 10 of 10 economic series/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Update real history' }))
     expect(await screen.findByText('Added 4 days of prices (2 symbols) and 2 economic readings.')).toBeInTheDocument()
@@ -227,7 +227,7 @@ describe('GoToDialog: sync to real prices', () => {
     const options = { configured: true, earnings: false, calibrated: 38, total: 40, oldest: '2026-10-29', newest: '2026-10-30', last_error: "XLF's options: Alpaca says too many requests" }
     mockReal({ configured: true, available: 40, total: 40, newest: '2026-10-30', options })
     render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
     expect(await screen.findByText(/fitted to real options for 38 of 40 symbols \(Oct 29–Oct 30\), again daily/)).toBeInTheDocument()
     expect(screen.getByText(/Real earnings dates need an Alpha Vantage key/)).toBeInTheDocument()
     expect(screen.getByText("Option data: XLF's options: Alpaca says too many requests")).toBeInTheDocument()
@@ -237,7 +237,7 @@ describe('GoToDialog: sync to real prices', () => {
     const options = { configured: true, earnings: true, calibrated: 3, total: 40, running: { done: 12, total: 40 } }
     mockReal({ configured: true, available: 0, total: 40, options })
     render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
     expect(await screen.findByText(/fitting to real options, 12 of 40 symbols done/)).toBeInTheDocument()
     expect(screen.queryByText(/Alpha Vantage/)).not.toBeInTheDocument()
   })
@@ -245,7 +245,7 @@ describe('GoToDialog: sync to real prices', () => {
   it('shows the last fetch problem', async () => {
     mockReal({ configured: true, available: 0, total: 40, last_error: 'Alpaca rejected the API keys (401).' })
     render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
     expect(await screen.findByText(/The last fetch failed: Alpaca rejected the API keys/)).toBeInTheDocument()
   })
 
@@ -256,27 +256,57 @@ describe('GoToDialog: sync to real prices', () => {
       vi.fn(() => new Promise((resolve) => (answer = resolve))),
     )
     render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     answer({ ok: true, json: async () => ({ configured: true, available: 5, total: 40 }) })
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.getByLabelText('Market date and time')).toBeInTheDocument()
-    expect(screen.queryByText(/Sync to real prices\?/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Sync to latest real prices\?/)).not.toBeInTheDocument()
   })
 
   it('explains when there is no key or nothing fetched yet', async () => {
     mockReal({ configured: false, available: 0, total: 40 })
     const { unmount } = render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
     expect(await screen.findByText(/need its free API keys/)).toBeInTheDocument()
     unmount()
 
     mockReal({ configured: true, available: 0, total: 40, refresh_minutes: 15 })
     render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
     expect(await screen.findByText(/No real prices yet.*every 15 minutes/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Sync prices' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     expect(screen.getByLabelText('Market date and time')).toBeInTheDocument()
+  })
+})
+
+
+describe('GoToDialog: the real past', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+  })
+  const past = { ...clock, time: '2008-10-10T19:30:00Z', real_through: '2026-10-30' }
+
+  it("explains up front that the real past can't be shocked, and Back clears an old error", async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 422, json: async () => ({ detail: "the real past can't be shocked" }) })))
+    const { rerender } = render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger an uncertainty shock…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger it' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("can't be shocked")
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    rerender(<GoToDialog clock={past} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger an uncertainty shock…' }))
+    expect(screen.getByText(/real past/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Trigger it' })).toBeDisabled()
+  })
+
+  it("says syncing doesn't apply in the real past and offers no sync button", async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ configured: true, available: 40, total: 40 }) })))
+    render(<GoToDialog clock={past} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to latest real prices…' }))
+    expect(await screen.findByText(/The market is in the real past/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sync prices' })).not.toBeInTheDocument()
   })
 })

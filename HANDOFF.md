@@ -36,6 +36,7 @@ _Last updated: 2026-10-31. Phase 8d (real daily data) and the on-request update 
 | Update real history on request (fetch only new days; no automatic FRED refresh) | Merged | #46 |
 | 8e-1. Replay the real past: prices, volume, closures, dividends, backfill (the user approved the design and the 8e-1/8e-2 split) | Merged; the user restarts to test | #47 |
 | 8e-2. Volatility/options follow the real VIX; past earnings dates inferred | Merged; the user restarts to test | #48 |
+| Fix (user's report): Back clears the shock error and the shock view explains the real past up front; Sync reworded ("latest real prices", no button in the real past); a backfill's bridging scale no longer rescales the real days (MODEL_VERSION 8) | Merged; the user restarts to test | #49 |
 
 `main` is clean and up to date with GitHub.
 
@@ -93,7 +94,7 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   left to the background fetch. A split among the new days makes it fetch that symbol's whole history again
   (earlier bars need re-adjusting). The old automatic daily FRED refresh is gone (`Macro.due` = never fetched).
   Store workers never touch SQLite: `last_day` is read on the loop thread and passed to `fetch_new`.
-  Status: `/api/real-prices` `history` has `newest` and `updated`. Backend 372, frontend 165.
+  Status: `/api/real-prices` `history` has `newest` and `updated`. Backend 373, frontend 167.
 - **8e-1 (built; the user approved the design and the split):** `market/realbars.py` `RealBars` (built at
   startup by `main` from `PriceHistory`; the engine never touches the database) gives `day(d)` (a `RealDay`:
   open/high/low/close/volume per symbol, `has` mask), `dividends`, `close_before`, `covers`, `closures()`.
@@ -104,7 +105,7 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   185 symbol-days in 2008–09 match exactly; 5-year backfill 4.0 s. `real_through` (saved in the market state)
   is the newest real day *when the market began*: a market keeps its data, `engine.use_real` (called after
   Update real history) only reaches markets started from then on (reset, sync, rewinds before the history).
-  `MODEL_VERSION` 7 (6 in 8e-1); `from_state` raises `ValueError` if the bars it replayed are gone, and `load_market` then
+  `MODEL_VERSION` 8 (7 in 8e-2, 6 in 8e-1); `from_state` raises `ValueError` if the bars it replayed are gone, and `load_market` then
   continues as a new market. Backfill starts from the real close before the first history day (symbols
   without bars still start at 1.0 and are scaled; real symbols scale 1.0). Calendar: `calendar.set_overrides`
   (closed, opened) from `RealBars.closures()`, applied once at startup (real closures found: 1985-09-27, 1994-04-27,
@@ -131,6 +132,8 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   options (`reports`, spread widening, the chain's earnings flag) use it. Spot-check from memory of 7 stocks'
   2022–23 reports: 39 of 56 within a day vs 16 of 56 for the model's dates; megacaps and market-wide days are
   the misses. Live check: 2008-10-10 15:59 sim VIX 67.4 vs real close 69.95.
+  `clock_state.real_through` says how far the real days run (the dialog uses it). A backfill's scale to the origin's prices now
+  applies only to simulated days (`engine.backfill_scale_on(day)`; real days stay exactly real, the first simulated day opens with the gap).
   The real past can't be shocked (`trigger_shock` raises, the API says 422). Known limits: sim VIX can't go under about 11.8 (the real lows are 9–10); earnings reaction days are inferred, not
   looked up; no real earnings calendar before today.
 - **Next:** 8f (the future model: fit regimes and drift/vol on the real history and macro series, start from the
@@ -667,7 +670,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 372 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 373 (pytest), frontend 167 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

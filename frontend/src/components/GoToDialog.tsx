@@ -50,6 +50,7 @@ export function GoToDialog({ clock, onClose }: Props) {
 
   const closeSync = () => {
     syncView.current++
+    setError(null)
     setReal(null)
   }
 
@@ -64,6 +65,10 @@ export function GoToDialog({ clock, onClose }: Props) {
       setBusy(false)
     }
   }
+
+  // The next session is still in the real past: prices there are real, so there is nothing to shock.
+  const today = toMarketInput(clock.time).slice(0, 10)
+  const inRealPast = !!clock.real_through && today < clock.real_through
 
   const shock = async () => {
     setBusy(true)
@@ -116,7 +121,7 @@ export function GoToDialog({ clock, onClose }: Props) {
   return (
     <Modal labelledBy="goto-title" onClose={onClose}>
       {real !== null ? (
-        <SyncToReal status={real} busy={busy} onSync={sync} onBack={closeSync} />
+        <SyncToReal status={real} busy={busy} onSync={sync} onBack={closeSync} realThrough={inRealPast ? clock.real_through : null} />
       ) : shockView ? (
         <>
           <h2 id="goto-title">Trigger an uncertainty shock?</h2>
@@ -126,11 +131,24 @@ export function GoToDialog({ clock, onClose }: Props) {
             go up with it. It is the kind of shock Nick Bloom's research describes (9/11, the 2008 crisis, Brexit). Shocks also
             arrive on their own about once every three years. Going back to before you triggered it undoes it.
           </p>
+          {inRealPast && (
+            <p className="warn-text">
+              This date is in the real past (the real daily prices run through {calendarDate(clock.real_through ?? '')}), where
+              prices follow what really happened, so a shock can't be added. Go to a later date first.
+            </p>
+          )}
           <div className="dialog-actions">
-            <button className="btn primary" disabled={busy} onClick={shock}>
+            <button className="btn primary" disabled={busy || inRealPast} onClick={shock}>
               Trigger it
             </button>
-            <button className="btn" disabled={busy} onClick={() => setShockView(false)}>
+            <button
+              className="btn"
+              disabled={busy}
+              onClick={() => {
+                setError(null)
+                setShockView(false)
+              }}
+            >
               Back
             </button>
           </div>
@@ -208,7 +226,7 @@ export function GoToDialog({ clock, onClose }: Props) {
           </div>
           <div className="dialog-footer">
             <button className="link-button" disabled={busy} onClick={openSync}>
-              Sync to real prices…
+              Sync to latest real prices…
             </button>
             <button className="link-button" disabled={busy} onClick={() => setShockView(true)}>
               Trigger an uncertainty shock…
@@ -230,6 +248,8 @@ interface SyncProps {
   busy: boolean
   onSync: () => void
   onBack: () => void
+  /** Set while the market is in the real past (through this day): syncing doesn't apply there. */
+  realThrough?: string | null
 }
 
 /** ", fetched at 2:41 PM" in the computer's own time (it's when, not market time). */
@@ -308,7 +328,7 @@ function RealHistory({ status: initial }: { status: RealPricesStatus }) {
 }
 
 /** Offer to continue the market from now at the saved real prices. */
-function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
+function SyncToReal({ status, busy, onSync, onBack, realThrough }: SyncProps) {
   const back = (
     <button className="btn" disabled={busy} onClick={onBack}>
       Back
@@ -317,7 +337,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
   if (status === 'loading') {
     return (
       <>
-        <h2 id="goto-title">Sync to real prices</h2>
+        <h2 id="goto-title">Sync to latest real prices</h2>
         <p className="muted">Checking real prices…</p>
         <div className="dialog-actions">{back}</div>
       </>
@@ -326,7 +346,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
   if (!status.configured) {
     return (
       <>
-        <h2 id="goto-title">Sync to real prices</h2>
+        <h2 id="goto-title">Sync to latest real prices</h2>
         <p>
           Real prices come from Alpaca and need its free API keys (from a free paper trading account). Add the lines{' '}
           <code>APCA_API_KEY_ID=your-key-id</code> and <code>APCA_API_SECRET_KEY=your-secret</code> to{' '}
@@ -344,7 +364,7 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
   if (status.available === 0) {
     return (
       <>
-        <h2 id="goto-title">Sync to real prices</h2>
+        <h2 id="goto-title">Sync to latest real prices</h2>
         <p>
           No real prices yet. The server fetches all {status.total} symbols from Alpaca when it starts and every{' '}
           {status.refresh_minutes ?? 15} minutes.
@@ -365,23 +385,37 @@ function SyncToReal({ status, busy, onSync, onBack }: SyncProps) {
         : ''
   return (
     <>
-      <h2 id="goto-title">Sync to real prices?</h2>
-      <p>
-        Real prices are saved for {status.available} of {status.total} symbols{days && ` (prices from ${days}${fetchedAt(status.fetched)})`}. Prices
-        move to them now{missing > 0 && `; the other ${missing} keep their current price`}.
-      </p>
-      <p className="muted">
-        The market continues from here: its 5-year history is generated again to end at these prices, and going back
-        before now starts a new market. Your cash, positions and orders are kept; positions are valued at the new
-        prices, and working orders whose stop or limit the move crosses will trigger or fill at them.
-      </p>
+      <h2 id="goto-title">{realThrough ? 'Sync to latest real prices' : 'Sync to latest real prices?'}</h2>
+      {realThrough ? (
+        <>
+          <p>
+            The market is in the real past, where prices already follow the real daily prices (through {calendarDate(realThrough)}). Syncing
+            only applies from the day after that, so there is nothing to do here.
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            Latest real quotes are saved for {status.available} of {status.total} symbols{days && ` (${days}${fetchedAt(status.fetched)})`}. This
+            starts a new market at the current simulated time with each symbol priced at its latest real quote
+            {missing > 0 && `; the other ${missing} keep their current price`}.
+          </p>
+          <p className="muted">
+            The real daily prices up to the newest saved day are kept as they were; the days after them are simulated and now
+            end at these quotes, and the 5-year history before now is rebuilt. Your cash, positions and orders are kept; positions are
+            valued at the new prices, and working orders whose stop or limit the move crosses will trigger or fill at them.
+          </p>
+        </>
+      )}
       {problem}
       <OptionSync status={status.options} />
       <RealHistory status={status} />
       <div className="dialog-actions">
-        <button className="btn primary" disabled={busy} onClick={onSync}>
-          Sync prices
-        </button>
+        {!realThrough && (
+          <button className="btn primary" disabled={busy} onClick={onSync}>
+            Sync prices
+          </button>
+        )}
         {back}
       </div>
     </>

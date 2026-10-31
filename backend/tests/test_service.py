@@ -97,6 +97,18 @@ def test_goto_rejects_huge_jumps() -> None:
         asyncio.run(svc.goto(datetime(2040, 1, 2, 15, 0, tzinfo=UTC)))
 
 
+def test_the_way_back_after_a_rewind_is_not_capped(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.MAX_JUMP_DAYS", 30)
+    svc, _ = make_service()
+    start = svc.engine.time
+    for month in (2, 3):  # two jumps, each under the cap
+        asyncio.run(svc.goto(datetime(2026, month, 2, 15, 0, tzinfo=UTC)))
+    far = svc.engine.time
+    asyncio.run(svc.goto(start))
+    asyncio.run(svc.goto(far))  # farther than the cap, but already generated
+    assert svc.engine.time == far
+
+
 def test_no_ticks_while_jumping() -> None:
     svc, real = make_service()
     svc._jumping = True

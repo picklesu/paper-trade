@@ -300,8 +300,9 @@ class MarketService:
         if self.building_history:
             raise BusyError("price history is still being built; try again in a moment")
         action, target = self.preview_goto(target)
-        if action == "forward" and trading_days_between(market_day(self.engine.time), market_day(target)) > MAX_JUMP_DAYS:
-            raise ValueError(f"can jump at most {MAX_JUMP_DAYS} trading days ahead")
+        # Only sessions not yet generated count: after a rewind, the way back is free.
+        if action == "forward" and trading_days_between(self.engine.generated_through, market_day(target)) > MAX_JUMP_DAYS:
+            raise ValueError(f"can jump at most {MAX_JUMP_DAYS} new trading days ahead")
         if action == "rewind":
             # Match orders up to now first, so what gets rolled back is complete.
             self.sync()

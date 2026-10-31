@@ -363,7 +363,7 @@ def test_trade_and_exercise_options(client: TestClient) -> None:
     client.post("/api/clock", json={"paused": True})
     expiry = client.get("/api/options/expirations?symbol=AAPL").json()[2]["date"]
     chain = client.get(f"/api/options/chain?symbol=AAPL&expiration={expiry}").json()
-    i = min(range(len(chain["strikes"])), key=lambda j: abs(chain["strikes"][j] - chain["spot"] * 0.9))
+    i = min(range(len(chain["strikes"])), key=lambda j: abs(chain["strikes"][j] - chain["spot"] * 0.97))
     symbol = f"AAPL{expiry[2:4]}{expiry[5:7]}{expiry[8:10]}C{round(chain['strikes'][i] * 1000):08d}"
     preview = client.post("/api/orders/preview", json={"symbol": symbol, "side": "buy", "qty": 1, "type": "market"}).json()
     assert preview["option"]["right"] == "call" and preview["effect"] == "open" and preview["max_loss"] > 0

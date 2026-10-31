@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from paper_trade.market import engine as engine_mod
-from paper_trade.market.calendar import MARKET_TZ, add_trading_seconds, session_close
+from paper_trade.market.calendar import MARKET_TZ, add_trading_days, add_trading_seconds, market_day, next_trading_day, session_close
 from paper_trade.market.engine import MarketEngine, bid_ask
 from paper_trade.market.symbols import SymbolSpec
 
@@ -162,8 +162,9 @@ def test_daily_volatility_matches_spec(monkeypatch) -> None:
     monkeypatch.setattr(engine_mod, "REGIMES", (("normal", 1.0, 1e12, 0.0),))
     for name in ("GARCH_ALPHA", "GARCH_GAMMA", "GARCH_BETA", "OWN_GARCH_ALPHA", "OWN_GARCH_GAMMA", "OWN_GARCH_BETA"):
         monkeypatch.setattr(engine_mod, name, 0.0)
-    for name in ("NEWS_PER_YEAR", "CRASHES_PER_YEAR"):
+    for name in ("NEWS_PER_YEAR", "CRASHES_PER_YEAR", "SHOCKS_PER_YEAR"):
         monkeypatch.setattr(engine_mod, name, 0.0)
+    monkeypatch.setattr(engine_mod, "SHOCK_VARIANCE", 1.0)
     spec = SymbolSpec("TEST", "Test", 100, vol=0.30, drift=0, market_corr=0.5, daily_volume=1000)
     engine = MarketEngine(START, seed=3, specs=(spec,))
     closes = []
@@ -582,3 +583,53 @@ def test_continue_older_maps_the_old_symbols() -> None:
     for i, symbol in enumerate(engine_mod.LEGACY_SYMBOLS):
         assert q[symbol].prev_close == old["starts"]["2026-01-08"][0][i]
     assert q["XOM"].prev_close == next(s.price for s in engine_mod.SYMBOLS if s.symbol == "XOM")
+
+
+# ----- uncertainty shocks ------------------------------------------------------------
+
+
+def _daily_moves(engine: MarketEngine, days: int, symbol: str = "SPY") -> np.ndarray:
+    closes = [engine.quotes[symbol].prev_close]
+    t = engine.time
+    for _ in range(days):
+        t = add_trading_seconds(t, 23_400)
+        engine.advance(t)
+        closes.append(engine.quotes[symbol].prev_close)
+    return np.diff(np.log(closes))
+
+
+def test_a_triggered_shock_drops_the_market_at_the_open_then_volatility_fades(monkeypatch) -> None:
+    monkeypatch.setattr(engine_mod, "SHOCKS_PER_YEAR", 0.0)  # only the one we trigger
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "AAPL"))
+    engine = MarketEngine(START, seed=5, specs=specs)
+    before = _daily_moves(engine, 60)
+    day = engine.trigger_shock()
+    assert day == next_trading_day(market_day(engine.time))
+    after = _daily_moves(engine, 120)
+    excess = engine._shocks[day][0]
+    assert 0.6 <= excess <= 1.3
+    assert engine._skeleton(day).shock_onset and engine._skeleton(day).shock == pytest.approx(excess)
+    assert after[0] < -0.01  # the market drops at the onset (about 2.5% per unit of excess)
+    assert np.abs(after[1:31]).mean() > 1.3 * np.abs(before).mean()
+    assert np.abs(after[-40:]).mean() < np.abs(after[1:31]).mean()  # it fades
+    later = engine._skeleton(add_trading_days(day, 60)).shock
+    assert later == pytest.approx(excess / 2, rel=0.05)  # half-life of 60 sessions
+
+
+def test_shocks_are_saved_and_a_rewind_before_the_trigger_undoes_them(monkeypatch) -> None:
+    monkeypatch.setattr(engine_mod, "SHOCKS_PER_YEAR", 0.0)
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    engine = MarketEngine(START, seed=5, specs=specs)
+    engine.advance(et(2026, 1, 12, 11, 0))
+    engine.advance(et(2026, 1, 13, 11, 0))
+    triggered_at = engine.time
+    day = engine.trigger_shock()
+    engine.advance(et(2026, 1, 20, 11, 0))
+    shocked = engine.quotes["SPY"].last
+    restored = MarketEngine.from_state(engine.to_state(), specs)
+    assert restored._shocks == engine._shocks and restored.quotes["SPY"].last == shocked
+    engine.rewind(triggered_at - timedelta(minutes=5), new_future=False)
+    assert engine._shocks == {} and day not in engine._starts
+    engine.advance(et(2026, 1, 20, 11, 0))
+    assert engine.quotes["SPY"].last != shocked  # the replay has no shock in it
+    assert engine._skeleton(day).shock == 0.0

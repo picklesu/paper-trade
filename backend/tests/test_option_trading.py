@@ -341,7 +341,7 @@ def test_limits_at_the_mid_fill_when_someone_trades_with_them() -> None:
 
 def test_the_chance_grows_toward_the_far_side_of_the_spread() -> None:
     e, b = setup()
-    c = contract(e, "put", 1.0)
+    c = contract(e, "put", 1.0, date(2026, 2, 20))  # a spread wide enough to have prices inside it
     q = b.option_quote(c)
     bid, ask = np.array([q["bid"]]), np.array([q["ask"]])
     order = lambda limit: broker_module.Order(1, c.symbol, "buy", 1, "limit", "day", limit, None, e.time)  # noqa: E731

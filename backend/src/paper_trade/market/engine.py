@@ -97,6 +97,25 @@ NEWS_SIZE = 2.5
 CRASHES_PER_YEAR = 1.0
 CRASH_MIN = 0.015
 CRASH_EXTRA = 0.015
+# Uncertainty shocks (Bloom 2009): volatility jumps by a multiple of its normal level
+# and fades with a half-life of about three months; the market drops at the onset
+# (waiting and seeing) and rebounds a little as the uncertainty clears.
+SHOCKS_PER_YEAR = 0.3
+SHOCK_EXCESS_MIN = 0.6  # the extra volatility at onset (0.9: nearly double), between this
+SHOCK_EXCESS_RANGE = 0.7  # and this much more
+SHOCK_HALF_LIFE_DAYS = 60.0
+SHOCK_DROP = 0.025  # the market's log drop at the open, per unit of excess
+SHOCK_REBOUND = 0.06  # annual drift per unit of excess, while it lasts
+_SHOCK_DECAY = 0.5 ** (1 / SHOCK_HALF_LIFE_DAYS)  # a day's decay of the excess
+_SHOCK_MEAN = SHOCK_EXCESS_MIN + SHOCK_EXCESS_RANGE / 2
+# On average a session's volatility is this many times higher because of shocks (the
+# baseline is divided by it, so long-run volatility still matches each spec), and
+# the market's drift this much lower (added back).
+_SHOCK_DAILY_RATE = SHOCKS_PER_YEAR / TRADING_DAYS_PER_YEAR
+SHOCK_VARIANCE = 1 + _SHOCK_DAILY_RATE * (
+    2 * _SHOCK_MEAN / (1 - _SHOCK_DECAY) + (_SHOCK_MEAN**2 + SHOCK_EXCESS_RANGE**2 / 12) / (1 - _SHOCK_DECAY**2)
+)
+SHOCK_DRIFT_LOSS = SHOCKS_PER_YEAR * SHOCK_DROP * _SHOCK_MEAN - SHOCK_REBOUND * _SHOCK_DAILY_RATE * _SHOCK_MEAN / (1 - _SHOCK_DECAY)
 EARNINGS_PER_YEAR = 4
 EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
 
@@ -206,6 +225,7 @@ class _DayStart:
     regime: int  # regime at the end of the previous session
     variance: float = 1.0  # the market factor's variance for the session, as a multiple of normal
     own_variance: np.ndarray | None = None  # (N,) each symbol's own variance, likewise (None: all 1)
+    shock: float = 0.0  # extra volatility from an uncertainty shock, as a multiple of normal (0: none)
 
 
 @dataclass
@@ -225,6 +245,8 @@ class _Draws:
     crash_u: float  # a selloff happens if this uniform is small enough
     crash_size: float  # unit exponential
     minute_seed: np.ndarray  # (M,) the seed each minute's seconds are drawn from
+    shock_u: float = 1.0  # an uncertainty shock begins if this uniform is small enough
+    shock_size: float = 0.0  # uniform: how big
 
 
 @dataclass
@@ -244,6 +266,8 @@ class _Skeleton:
     own_load: np.ndarray  # (N,)
     minute_seed: np.ndarray  # (M,)
     next_start: _DayStart  # the following session's starting state
+    shock: float = 0.0  # the uncertainty shock in force this session (extra volatility)
+    shock_onset: bool = False  # it began at this session's open
 
 
 @dataclass(frozen=True)
@@ -289,9 +313,9 @@ class MarketEngine:
         earnings_var = EARNINGS_PER_YEAR * self._earnings_move**2
         news_var = NEWS_PER_YEAR * self._news_sd**2
         jump_var = earnings_var + news_var + CRASHES_PER_YEAR * (crash_mean**2 + CRASH_EXTRA**2) * self._beta**2
-        self._day_sd = np.sqrt(np.maximum(vol**2 - jump_var, 0.5 * vol**2) / TRADING_DAYS_PER_YEAR)
+        self._day_sd = np.sqrt(np.maximum(vol**2 - jump_var, 0.5 * vol**2) / TRADING_DAYS_PER_YEAR / SHOCK_VARIANCE)
         # Selloffs would pull the drift down; add their average back.
-        self._drift = np.array([s.drift for s in specs]) + CRASHES_PER_YEAR * crash_mean * self._beta
+        self._drift = np.array([s.drift for s in specs]) + (CRASHES_PER_YEAR * crash_mean + SHOCK_DRIFT_LOSS) * self._beta
         # Dividends drop the price by a fraction of the previous close on each ex-date.
         # A spec's drift is its total return, so the continuous part makes up the
         # difference between the drops and the yield (about nothing).
@@ -378,6 +402,13 @@ class MarketEngine:
         t = snap(t)
         if not self.origin <= t <= self._time:
             raise ValueError("rewind target must be between origin and now")
+        undone = [d for d, (_, at) in self._shocks.items() if at > t]
+        if undone:  # a shock triggered after t never happened; the sessions it shaped are generated again
+            for d in undone:
+                del self._shocks[d]
+            self._starts = {d: s for d, s in self._starts.items() if d <= market_day(t)}
+            self.starts_version += 1
+            self._forget(lambda d: d > market_day(t))
         if new_future:
             day = market_day(t)
             first = self._epochs[0]
@@ -388,6 +419,20 @@ class MarketEngine:
             self._forget(lambda d: d >= day)
         self._time = t
         self._quotes = None
+
+    def trigger_shock(self) -> date:
+        """Start an uncertainty shock at the next session's open (sessions already
+        generated beyond today are generated again). Returns that session."""
+        today = market_day(self._time)
+        day = next_trading_day(today)
+        if day in self._shocks:
+            return day
+        draw = np.random.default_rng([self._seed, day.toordinal(), _key("shock")]).random()
+        self._shocks[day] = (SHOCK_EXCESS_MIN + SHOCK_EXCESS_RANGE * float(draw), self._time)
+        self._starts = {d: s for d, s in self._starts.items() if d <= today}
+        self.starts_version += 1
+        self._forget(lambda d: d > today)
+        return day
 
     def reset(self, t: datetime, prices: np.ndarray | None = None) -> None:
         """Start a brand-new market at `t`, with fresh prices and no history, its
@@ -487,12 +532,13 @@ class MarketEngine:
         the market factor's GARCH variance and regime for the part the market
         explains, the symbol's own variance and the regime for the rest (option
         prices start from this)."""
-        start = self._starts[market_day(self._time)]
+        day = market_day(self._time)
+        start = self._starts[day]
         r = self._regime_index()
         own = start.own_variance if start.own_variance is not None else np.ones(len(self.specs))
         rho2 = self._rho**2
         var = rho2 * start.variance * self._market_mults[r] ** 2 + (1 - rho2) * own * self._own_mults[r] ** 2
-        return np.sqrt(var)
+        return np.sqrt(var) * (1 + self._skeleton(day).shock)
 
     def option_inputs(self, day: date, col: int) -> "OptionInputs":
         """What a session's option prices for one symbol depend on besides its
@@ -504,7 +550,7 @@ class MarketEngine:
         start = self._starts[day]
         own = 1.0 if start.own_variance is None else float(start.own_variance[col])
         rho2 = float(self._rho[col] ** 2)
-        by_regime = np.sqrt(rho2 * start.variance * self._market_mults**2 + (1 - rho2) * own * self._own_mults**2)
+        by_regime = np.sqrt(rho2 * start.variance * self._market_mults**2 + (1 - rho2) * own * self._own_mults**2) * (1 + sk.shock)
         # Second s follows the regime of minute (s-1)//60; the open, the previous session's.
         regimes = np.concatenate([[start.regime], sk.regimes])
         inputs = OptionInputs(
@@ -561,7 +607,7 @@ class MarketEngine:
             self._forget(lambda d: d < origin_day)
         scale = self._starts[origin_day].prev_close / start.prev_close
         self._starts.update(
-            {d: _DayStart(s.prev_close * scale, s.regime, s.variance, s.own_variance) for d, s in unit.items()}
+            {d: _DayStart(s.prev_close * scale, s.regime, s.variance, s.own_variance, s.shock) for d, s in unit.items()}
         )
         self.backfill_scale = scale
         if unit:
@@ -661,6 +707,7 @@ class MarketEngine:
                     s.regime,
                     s.variance,
                     None if s.own_variance is None else s.own_variance.tolist(),
+                    s.shock,
                 ]
                 for d, s in self._starts.items()
             },
@@ -668,6 +715,7 @@ class MarketEngine:
             "seeds_used": self._seeds_used,
             "backfilled": self.backfilled,
             "model": MODEL_VERSION,
+            "shocks": {d.isoformat(): [e, at.isoformat()] for d, (e, at) in self._shocks.items()},
             "symbols": [s.symbol for s in self.specs],
         }
 
@@ -679,6 +727,7 @@ class MarketEngine:
         engine._time = datetime.fromisoformat(state["time"])
         engine._epochs = [(datetime.fromisoformat(start), seed) for start, seed in state["epochs"]]
         engine._starts = {date.fromisoformat(d): _start_from(s) for d, s in state["starts"].items()}
+        engine._shocks = {date.fromisoformat(d): (e, datetime.fromisoformat(at)) for d, (e, at) in state.get("shocks", {}).items()}
         return engine
 
     @classmethod
@@ -704,6 +753,7 @@ class MarketEngine:
         if prices is None:
             prices = np.array([s.price for s in self.specs])
         self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, self._normal)}
+        self._shocks: dict[date, tuple[float, datetime]] = {}  # shocks the user triggered: onset session -> (excess, when)
         self._skeletons: OrderedDict[date, _Skeleton] = OrderedDict()
         self._option_inputs: dict[tuple[date, int], tuple[_Skeleton, OptionInputs]] = {}
         self._fines: OrderedDict[tuple[date, int], tuple[np.ndarray, np.ndarray]] = OrderedDict()
@@ -738,6 +788,7 @@ class MarketEngine:
             if j == 0:
                 u = rng.random((_M, 2))
                 crash_u, crash_size = rng.random(), rng.exponential()
+                shock_u, shock_size = rng.random(), rng.random()
             elif j > k:
                 i = j - 1 - k
                 extremes[:, i] = 1 - rng.random((_M, 2))
@@ -759,6 +810,8 @@ class MarketEngine:
             crash_u,
             crash_size,
             np.full(_M, seed, dtype=np.int64),
+            shock_u,
+            shock_size,
         )
 
     def _draws(self, day: date) -> _Draws:
@@ -835,11 +888,22 @@ class MarketEngine:
             steps[2::2, cols] = np.sqrt(dv[1::2])[:, None] * draws.between[:-1, cols]
         paths = np.cumsum(steps, axis=0)
 
+        # An uncertainty shock scales every symbol's volatility; a new one begins at the open.
+        forced = self._shocks.get(day)
+        onset = 0.0
+        if forced is not None:
+            onset = forced[0]
+        elif draws.shock_u < SHOCKS_PER_YEAR / TRADING_DAYS_PER_YEAR:
+            onset = SHOCK_EXCESS_MIN + SHOCK_EXCESS_RANGE * draws.shock_size
+        began = onset > start.shock
+        excess = max(start.shock, onset)
+        scale = 1 + excess
+
         # Each symbol's loadings on them, today.
         h = start.variance
         h_own = np.ones(n) if start.own_variance is None else start.own_variance
-        market_load = self._rho * self._day_sd * math.sqrt(h)
-        own_sd = np.sqrt(1 - self._rho**2) * self._day_sd * np.sqrt(h_own)
+        market_load = self._rho * self._day_sd * math.sqrt(h) * scale
+        own_sd = np.sqrt(1 - self._rho**2) * self._day_sd * np.sqrt(h_own) * scale
         sector_load = own_sd * self._sector_corr
         own_load = own_sd * np.sqrt(1 - self._sector_corr**2)
 
@@ -851,7 +915,7 @@ class MarketEngine:
             + market_load * paths[:, :1]
             + sector_load * paths[:, 1 + self._sector_of]
             + own_load * paths[:, 1 + k :]
-            + self._drift / (TRADING_DAYS_PER_YEAR * (_S - 1)) * t
+            + (self._drift + SHOCK_REBOUND * excess * self._beta) / (TRADING_DAYS_PER_YEAR * (_S - 1)) * t
             + self._beta * tilt[knots][:, None]
             - 0.5 * (market_load**2 * v_market[knots][:, None] + own_sd**2 * v_own[knots][:, None])
         )
@@ -861,6 +925,8 @@ class MarketEngine:
         crash = 0.0
         if draws.crash_u < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR:
             crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
+        if began:
+            crash += SHOCK_DROP * onset
         log += own_jump - crash * self._beta
         log += np.where(self._dividend_on(day), np.log1p(-self._div_fraction), 0.0)
         news = np.flatnonzero(draws.news_minute >= 0)
@@ -894,7 +960,7 @@ class MarketEngine:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
             activity[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
         noise = draws.volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
-        level = self._daily_volume * math.sqrt(h) * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
+        level = self._daily_volume * math.sqrt(h) * scale * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
         shape = self._volume_shape * self._volume_mults[regimes]
         volume = np.floor(level / _M * shape[:, None] * activity * noise)
         cum_volume = np.zeros((_M + 1, n))
@@ -902,7 +968,7 @@ class MarketEngine:
 
         # Spreads: by the market's volatility this minute relative to normal.
         normal_second = math.sqrt((1 - GAP_SHARE) / (_S - 1))
-        spread_factor = np.clip(np.sqrt(dv_market * h / 59) / normal_second, 1.0, MAX_SPREAD_FACTOR)
+        spread_factor = np.clip(np.sqrt(dv_market * h / 59) * scale / normal_second, 1.0, MAX_SPREAD_FACTOR)
 
         # The day's shocks (a jump counts in full) set the next session's variances.
         market_day_sd = MARKET_VOL / math.sqrt(TRADING_DAYS_PER_YEAR) * math.sqrt(h)
@@ -918,6 +984,8 @@ class MarketEngine:
             1.0,
         )
 
+        shock_next = excess * _SHOCK_DECAY
+        shock_next = shock_next if shock_next > 0.01 else 0.0
         return _Skeleton(
             regimes=regimes,
             open=open_,
@@ -932,7 +1000,9 @@ class MarketEngine:
             own_load=own_load,
             minute_seed=draws.minute_seed,
             # The close is the last price shown in the session (one second before 4:00).
-            next_start=_DayStart(np.exp(close[-1]), int(regimes[-1]), h_next, h_own_next),
+            next_start=_DayStart(np.exp(close[-1]), int(regimes[-1]), h_next, h_own_next, shock_next),
+            shock=excess,
+            shock_onset=began,
         )
 
     def _fine(self, day: date, m: int, cols: int | np.ndarray | None = None) -> np.ndarray:
@@ -1094,7 +1164,8 @@ def _start_from(saved: list) -> _DayStart:
     prev_close, regime, *rest = saved
     variance = rest[0] if rest else 1.0
     own = rest[1] if len(rest) > 1 and rest[1] is not None else None
-    return _DayStart(np.array(prev_close), regime, variance, None if own is None else np.array(own))
+    shock = rest[2] if len(rest) > 2 else 0.0
+    return _DayStart(np.array(prev_close), regime, variance, None if own is None else np.array(own), shock)
 
 
 def _stationary(p_switch: list[float]) -> np.ndarray:

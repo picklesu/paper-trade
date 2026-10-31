@@ -51,7 +51,7 @@ from paper_trade.market.calendar import (
     session_open,
     session_seconds,
 )
-from paper_trade.market.engine import MarketEngine, Quote, _key, _unit_hash, bid_ask, bid_ask_arrays
+from paper_trade.market.engine import MarketEngine, Quote, dividend_days, _key, _unit_hash, bid_ask, bid_ask_arrays
 from paper_trade.market.options import MULTIPLIER, Calibration, Contract
 from paper_trade.store import Store
 from paper_trade.trading.orders import EVENT_TYPES, Order, OrderType, Side, TimeInForce
@@ -59,6 +59,7 @@ from paper_trade.trading.orders import EVENT_TYPES, Order, OrderType, Side, Time
 STARTING_CASH = 100_000.0
 MAX_QTY = 1_000_000
 MAX_CONTRACTS = 10_000
+DIVIDEND_ASSIGNMENT = 0.9  # chance a short call is assigned before a dividend its time value is less than
 DIVIDEND_LAG = 3  # trading days from the ex-date to the payment (at that day's close)
 MAX_PRICE = 1_000_000.0
 IN_THE_MONEY = 0.01  # exercised or assigned at expiration from this much in the money
@@ -1101,15 +1102,27 @@ class Broker:
         intrinsic = float(c.intrinsic(spot))
         if intrinsic < IN_THE_MONEY:
             return
-        time_value = self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"] - intrinsic
-        # A mid below intrinsic value (European pricing, wide spreads) counts as no time value.
-        chance = EARLY_ASSIGNMENT * max(0.0, 1 - max(time_value, 0.0) / EARLY_TIME_VALUE)
+        time_value = max(self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"] - intrinsic, 0.0)
+        # The holder of a call gets the dividend by exercising the day before the ex-date,
+        # which pays when the call's time value is less than the dividend.
+        chance, reason = EARLY_ASSIGNMENT * max(0.0, 1 - time_value / EARLY_TIME_VALUE), "Assigned early"
+        dividend = self._dividend_next_session(c, day, spot)
+        if c.right == "call" and dividend > time_value:
+            chance, reason = max(chance, DIVIDEND_ASSIGNMENT * (1 - time_value / dividend)), f"Assigned before the {money(dividend)} dividend"
         if chance <= 0:
             return
         seed = self.engine.option_inputs(day, self.engine.symbol_index(c.underlying)).minute_seed
         u = float(_unit_hash(np.array([(seed ^ _key(f"assign:{c.symbol}")) % 2**64], dtype=np.uint64))[0])
         if u < chance:
-            self._settle(c, -qty, "assignment", spot, session_close(day), "Assigned early")
+            self._settle(c, -qty, "assignment", spot, session_close(day), reason)
+
+    def _dividend_next_session(self, c: Contract, day: date, spot: float) -> float:
+        """The dividend per share the underlying pays at the next session's open (0 if none).
+        The next session opens at today's close, so it is a fraction of that price."""
+        spec = self.engine.specs[self.engine.symbol_index(c.underlying)]
+        if next_trading_day(day) not in dividend_days(spec, next_trading_day(day), next_trading_day(day)):
+            return 0.0
+        return round(spec.dividend_fraction * spot, 2)
 
     # ----- time travel -----------------------------------------------------------
 

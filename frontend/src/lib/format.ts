@@ -102,6 +102,7 @@ const TYPE_LABEL = {
   exercise: 'Exercise',
   assignment: 'Assignment',
   expiration: 'Expiration',
+  dividend: 'Dividend',
 } as const
 
 /** "Limit 580.00", "Stop 570.00", "Stop limit 570.00 / 571.00", "Market". */

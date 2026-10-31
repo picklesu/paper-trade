@@ -21,6 +21,7 @@ export function tifLabel(tif: TimeInForce, short = false): string {
 
 /** One line of status, shared by the Orders tab and the ticket: "Filled at 230.01", "Working (stop hit)". */
 export function statusText(o: Order): string {
+  if (o.type === 'dividend') return `Paid ${price(o.fill_price!)} a share`
   let text = STATUS_LABEL[o.status]
   if (o.status === 'filled') text += ` at ${price(o.fill_price!)}`
   if (o.status === 'working' && o.triggered_at) text += ' (stop hit)'
@@ -45,6 +46,7 @@ export function latestVersion(order: Order, replacedBy: Map<number, Order>): Ord
 /** The ticket's sentence about an order, with a tone for coloring. */
 export function describeOrder(o: Order): { text: string; tone: 'ok' | 'info' | 'error' } {
   const what = `${o.qty.toLocaleString()} ${o.option?.label ?? o.symbol}`
+  if (o.type === 'dividend') return { text: `Dividend on ${what}: ${price(o.fill_price!)} a share`, tone: 'ok' }
   if (o.status === 'filled') {
     return { text: `${o.side === 'buy' ? 'Bought' : 'Sold'} ${what} at ${price(o.fill_price!)}`, tone: 'ok' }
   }

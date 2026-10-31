@@ -99,8 +99,8 @@ export interface Account {
 }
 
 export type Side = 'buy' | 'sell'
-/** Exercise, assignment and expiration are records of what happened to options, not orders placed. */
-export type OrderType = 'market' | 'limit' | 'stop' | 'stop_limit' | 'exercise' | 'assignment' | 'expiration'
+/** Exercise, assignment, expiration and dividend are records of what happened, not orders placed. */
+export type OrderType = 'market' | 'limit' | 'stop' | 'stop_limit' | 'exercise' | 'assignment' | 'expiration' | 'dividend'
 export type TimeInForce = 'day' | 'gtc'
 export type OrderStatus = 'working' | 'filled' | 'canceled' | 'expired' | 'rejected'
 

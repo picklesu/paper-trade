@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phase 8d (real daily data) and the on-request update are merged; 8e-1 (replay the real past) is merged; 8e-2 (real volatility) is merged; 8f is next after the user tests._
+_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged. The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
 
 ## Where things stand
 
@@ -60,10 +60,9 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   symbols follow through the engine's betas and sector factors; training is an offline script that
   saves parameters in the repo (nothing trains at runtime); parameters fitted on the whole history
   have seen 2020 (fine for a simulator; the walk-forward checks use only earlier data).
-- *Steps:* **8d real daily data** (merged, #44) → **8e replay the real past** (engine conditions each
-  session's minute path on the real bar and volume; the 5-year history before a past start is real
-  too; VIX and option prices follow from real volatility) → **8f the future model** (fit, start state
-  from any date, "Generate a new future" uses it) → **8g walk-forward validation**.
+- *Steps:* **8d real daily data** (merged, #44, #46) → **8e replay the real past** (merged: 8e-1 #47,
+  8e-2 #48, fix #49) → **8f the future model** (**next, not started**: fit, start state from any date,
+  "Generate a new future" uses it) → **8g walk-forward validation**.
 - **8d (merged, #44):** `pricehistory.py` now stores `Bar`s (day, open, high, low, close, volume,
   dividend, split) in a `daily` table (the old `closes` table is dropped on start and its symbols are
   fetched again, about 0.5 MB each, 1 request per symbol, 40 in all), split-adjusted by
@@ -136,8 +135,33 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   applies only to simulated days (`engine.backfill_scale_on(day)`; real days stay exactly real, the first simulated day opens with the gap).
   The real past can't be shocked (`trigger_shock` raises, the API says 422). Known limits: sim VIX can't go under about 11.8 (the real lows are 9–10); earnings reaction days are inferred, not
   looked up; no real earnings calendar before today.
-- **Next:** 8f (the future model: fit regimes and drift/vol on the real history and macro series, start from the
-  real state of any date, "Generate a new future" uses it), then 8g (walk-forward validation).
+- **Next, 8f (not started; propose the design and confirm with the user first, as for 8e).** What exists to build on:
+  - *Inputs:* `PriceHistory.bars(symbol)` (SPY from 1993, others from their listing), `Macro.series(name)` for
+    DFF, DGS3MO, DGS2, DGS10, T10Y2Y, BAA10Y, VIXCLS, UNRATE, CPIAUCSL, USREC (from 1985), and
+    `Macro.latest(name, day)` for what was known on a day (publication lags applied: no look-ahead).
+  - *Where the future starts:* after `engine.real_through` (the newest real day when the market began) sessions
+    are the old model: GARCH market variance, the three intraday regimes, random news/crash/shock/earnings
+    draws, drift from each spec. The start state at the last real day is already real-derived: `_DayStart.variance`
+    from the real VIX (`_vix_variance`), `own_variance` filtered from real returns (`_filter_own`), prev closes
+    real. 8f should replace the sim's market-level drift, volatility level, crash/shock hazard (and the
+    regime-switching between calm / correction / crisis) with a model fitted offline on the real history (script in
+    the repo, parameters saved in the repo, nothing trains at runtime); "Generate a new future" and any session
+    past the real days use it, starting from the real state of the date simulated from.
+  - *Plumbing to remember:* `MODEL_VERSION` is 8 (bump it for any change to generated sessions: saved markets then
+    continue as new ones); a market keeps its `real_through`; `engine.use_real` only reaches new markets;
+    `calendar.set_overrides` closures are applied once at startup; the real past can't be shocked.
+  - *Honest framing for the user:* nobody predicts a crash's date. The model gives calibrated odds, realistic bull/bear
+    lengths, drawdowns and crash frequency; 8g checks it by walk-forward tests (train before a date, simulate forward,
+    see how often reality falls in the sim's range).
+  - *Known limits carried over:* the sim VIX can't go below about 11.8 (real lows are 9–10, `VIX_SLOPE`/`VIX_BASE2`
+    were measured on one calibration); past earnings days are inferred from volume (about 70% within a day of the
+    truth in a 56-report spot check; the model's own dates were about 29%); the order of a day's high and low is
+    generated; one-off closures found after an update need a restart; the sim's own earnings/news/crash draws no
+    longer feed variance on real days.
+  - *Checking in the sandbox:* copy the `daily` and `macro` tables from the user's `backend/paper_trade.db`
+    (open it read-only with `mode=ro`; never write to it) into a scratchpad database, build `RealBars` and an engine
+    from that (scripts like the ones used for 8e: pin check, VIX tracking, earnings spot check). The user's
+    real account is in that file.
 
 **Phase 8c (merged, #41):** going before the
 history used to reset the market at *today's* real prices (SPY at $757 in 2006). Now:

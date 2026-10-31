@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { matchSymbols } from './symbols'
+import { isIndex, matchSymbols } from './symbols'
 
 const SYMBOLS = [
   { symbol: 'AMD', name: 'Advanced Micro Devices', sector: null },
@@ -21,5 +21,12 @@ describe('matchSymbols', () => {
   it('returns nothing for blank text and respects the limit', () => {
     expect(matchSymbols(SYMBOLS, '  ')).toEqual([])
     expect(matchSymbols(SYMBOLS, 'a', 2)).toHaveLength(2)
+  })
+})
+
+describe('isIndex', () => {
+  it('knows the VIX is an index and stocks are not', () => {
+    expect(isIndex('VIX')).toBe(true)
+    expect(isIndex('SPY')).toBe(false)
   })
 })

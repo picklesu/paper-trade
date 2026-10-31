@@ -43,6 +43,7 @@ import numpy as np
 from paper_trade.market import options
 from paper_trade.market.calendar import (
     SESSION_SECONDS,
+    add_trading_days,
     market_day,
     next_trading_day,
     previous_trading_day,
@@ -50,7 +51,7 @@ from paper_trade.market.calendar import (
     session_open,
     session_seconds,
 )
-from paper_trade.market.engine import MarketEngine, Quote, _key, _unit_hash, bid_ask, bid_ask_arrays
+from paper_trade.market.engine import MarketEngine, Quote, dividend_days, _key, _unit_hash, bid_ask, bid_ask_arrays
 from paper_trade.market.options import MULTIPLIER, Calibration, Contract
 from paper_trade.store import Store
 from paper_trade.trading.orders import EVENT_TYPES, Order, OrderType, Side, TimeInForce
@@ -58,6 +59,8 @@ from paper_trade.trading.orders import EVENT_TYPES, Order, OrderType, Side, Time
 STARTING_CASH = 100_000.0
 MAX_QTY = 1_000_000
 MAX_CONTRACTS = 10_000
+DIVIDEND_ASSIGNMENT = 0.9  # chance a short call is assigned before a dividend its time value is less than
+DIVIDEND_LAG = 3  # trading days from the ex-date to the payment (at that day's close)
 MAX_PRICE = 1_000_000.0
 IN_THE_MONEY = 0.01  # exercised or assigned at expiration from this much in the money
 CLOSEOUT_SECOND = SESSION_SECONDS - 60  # 3:59 PM: unexercisable options are sold
@@ -160,6 +163,9 @@ class Broker:
         for o in fills:
             if before is not None and o.filled_at >= before:
                 break
+            if o.type == "dividend":
+                led.cash += o.qty * o.fill_price
+                continue
             realized = apply_fill(led, o.symbol, o.side, o.qty, o.fill_price)
             if realized is not None:
                 led.realized_by_order[o.id] = realized
@@ -509,6 +515,8 @@ class Broker:
         """Validate an order request and return the order, not yet placed. When
         `replacing`, that order's reserved cash or shares count as available."""
         c = Contract.parse(symbol)
+        if symbol == options.VIX_SYMBOL:
+            raise OrderError("VIX is an index: it can't be traded")
         if c is None and symbol not in self.engine.quotes:
             raise OrderError(f"Unknown symbol {symbol}")
         if c and c.underlying not in self.engine.quotes:
@@ -764,13 +772,22 @@ class Broker:
             changed |= changed_today
         return changed
 
-    def _busy(self) -> bool:
-        """Anything to do at the next close: working orders or option positions."""
-        return bool(self.working()) or bool(self.held_contracts())
+    def _busy(self, day: date) -> bool:
+        """Anything to do at the close after `day`: working orders, option positions,
+        shares held, or shares traded since an ex-date whose dividend isn't paid yet."""
+        if self.working() or self.held_contracts():
+            return True
+        if any(p.qty > 0 and not Contract.parse(p.symbol) for p in self.ledger().positions.values()):
+            return True
+        since = session_open(add_trading_days(day, 1 - DIVIDEND_LAG))  # the next close pays the ex-date this far back
+        return any(
+            o.status == "filled" and o.type not in EVENT_TYPES and not Contract.parse(o.symbol) and o.filled_at >= since
+            for o in self.orders.values()
+        )
 
     def process_iter(self, t0: datetime, t1: datetime) -> Iterator[bool]:
         """Like process(), yielding after each session (True if orders changed)."""
-        if t1 <= t0 or not self._busy():
+        if t1 <= t0 or not self._busy(market_day(t0)):
             return
         day, end_day = market_day(t0), market_day(t1)
         first = int(session_seconds(t0)) + 1
@@ -784,8 +801,9 @@ class Broker:
             # shares they held are free for exercises at this close.
             changed |= self._expire_day_orders(day)
             changed |= self._settle_options(day)
+            changed |= self._pay_dividends(day)
             yield changed
-            if not self._busy():
+            if not self._busy(day):
                 return
             day, first = next_trading_day(day), 0
 
@@ -1039,6 +1057,24 @@ class Broker:
                 self._maybe_assign_early(c, day)
         return len(self.orders) != before
 
+    def _pay_dividends(self, day: date) -> bool:
+        """At `day`'s close: dividends that went ex DIVIDEND_LAG sessions ago are paid
+        on the shares held when that session opened."""
+        ex = add_trading_days(day, -DIVIDEND_LAG)
+        if not any(dividend_days(spec, ex, ex) for spec in self.engine.specs):
+            return False
+        held = self.ledger(before=session_open(ex))
+        paid = session_close(day)
+        before = len(self.orders)
+        for symbol, p in sorted(held.positions.items()):
+            if p.qty <= 0 or Contract.parse(symbol):
+                continue
+            amount = self.engine.dividend(ex, self.engine.symbol_index(symbol))
+            if amount <= 0 or any(o.type == "dividend" and o.symbol == symbol and o.filled_at == paid for o in self.orders.values()):
+                continue
+            self._record(symbol, "buy", p.qty, amount, paid, "dividend", f"Dividend, ex-date {ex.isoformat()}")
+        return len(self.orders) != before
+
     def _close_price(self, c: Contract, day: date) -> float:
         return round(self.engine.price_at(day, SESSION_SECONDS - 1, self.engine.symbol_index(c.underlying)), 2)
 
@@ -1076,15 +1112,27 @@ class Broker:
         intrinsic = float(c.intrinsic(spot))
         if intrinsic < IN_THE_MONEY:
             return
-        time_value = self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"] - intrinsic
-        # A mid below intrinsic value (European pricing, wide spreads) counts as no time value.
-        chance = EARLY_ASSIGNMENT * max(0.0, 1 - max(time_value, 0.0) / EARLY_TIME_VALUE)
+        time_value = max(self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"] - intrinsic, 0.0)
+        # The holder of a call gets the dividend by exercising the day before the ex-date,
+        # which pays when the call's time value is less than the dividend.
+        chance, reason = EARLY_ASSIGNMENT * max(0.0, 1 - time_value / EARLY_TIME_VALUE), "Assigned early"
+        dividend = self._dividend_next_session(c, day, spot)
+        if c.right == "call" and dividend > time_value:
+            chance, reason = max(chance, DIVIDEND_ASSIGNMENT * (1 - time_value / dividend)), f"Assigned before the {money(dividend)} dividend"
         if chance <= 0:
             return
         seed = self.engine.option_inputs(day, self.engine.symbol_index(c.underlying)).minute_seed
         u = float(_unit_hash(np.array([(seed ^ _key(f"assign:{c.symbol}")) % 2**64], dtype=np.uint64))[0])
         if u < chance:
-            self._settle(c, -qty, "assignment", spot, session_close(day), "Assigned early")
+            self._settle(c, -qty, "assignment", spot, session_close(day), reason)
+
+    def _dividend_next_session(self, c: Contract, day: date, spot: float) -> float:
+        """The dividend per share the underlying pays at the next session's open (0 if none).
+        The next session opens at today's close, so it is a fraction of that price."""
+        spec = self.engine.specs[self.engine.symbol_index(c.underlying)]
+        if next_trading_day(day) not in dividend_days(spec, next_trading_day(day), next_trading_day(day)):
+            return 0.0
+        return round(spec.dividend_fraction * spot, 2)
 
     # ----- time travel -----------------------------------------------------------
 

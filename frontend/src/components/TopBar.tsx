@@ -9,6 +9,8 @@ interface Props {
   status: ConnectionStatus
   clock: ClockState | null
   regime: Regime | null
+  shock?: number
+  shockPending?: boolean
   progress: ProgressMessage | null
   account: Account | null
 }
@@ -19,7 +21,7 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
   disconnected: 'Disconnected',
 }
 
-export function TopBar({ status, clock, regime, progress, account }: Props) {
+export function TopBar({ status, clock, regime, shock, shockPending, progress, account }: Props) {
   return (
     <header className="topbar">
       <div className="brand">Paper Trade</div>
@@ -32,7 +34,7 @@ export function TopBar({ status, clock, regime, progress, account }: Props) {
           className={account ? direction(account.day_pnl) : undefined}
         />
       </div>
-      <ClockControls clock={clock} regime={regime} progress={progress} />
+      <ClockControls clock={clock} regime={regime} shock={shock} shockPending={shockPending} progress={progress} />
       <PanelsMenu />
       <FullscreenButton />
       <div className={`conn conn-${status}`} role="status" title={STATUS_LABEL[status]}>

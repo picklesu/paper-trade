@@ -28,6 +28,7 @@ from paper_trade.market.calendar import (
 from paper_trade.market.engine import MarketEngine
 
 STORED_MINUTES = 30
+VIX_SYMBOL = "VIX"  # an index stored beside the symbols, in 30-minute bars only
 INTERVALS = ("1m", "5m", "15m", "30m", "1h", "1D", "1W")
 FINE_MINUTES = {"1m": 1, "5m": 5, "15m": 15}
 # How many sessions back the finer bars go (they're computed on request).
@@ -79,7 +80,7 @@ class History:
 
     def record(self, day: date) -> None:
         """Store a finished session's 30-minute bars (idempotent)."""
-        self._record_bars(day, aggregate(self.engine.minute_bars(day), STORED_MINUTES))
+        self._record_bars(day, aggregate(self.engine.minute_bars(day), STORED_MINUTES), self.engine.vix_bars(day))
 
     def backfill_iter(self, days: int) -> Iterator[date]:
         """Generate the history before the market's origin and store its bars,
@@ -88,19 +89,21 @@ class History:
         final scale is known; an interrupted build stores nothing."""
         held = []
         for day in self.engine.backfill_iter(days):
-            held.append((day, aggregate(self.engine.minute_bars(day), STORED_MINUTES)))
+            held.append((day, aggregate(self.engine.minute_bars(day), STORED_MINUTES), self.engine.vix_bars(day)))
             yield day
         scale = self.engine.backfill_scale
-        for day, bars in held:
+        for day, bars, vix in held:
             bars[..., :4] *= scale[:, None]
-            self._record_bars(day, bars)
+            self._record_bars(day, bars, vix)  # the index needs no scale
 
-    def _record_bars(self, day: date, bars: np.ndarray) -> None:
+    def _record_bars(self, day: date, bars: np.ndarray, vix: np.ndarray | None = None) -> None:
         rows = [
             (spec.symbol, day.isoformat(), i, *map(float, bars[i, j]))
             for j, spec in enumerate(self.engine.specs)
             for i in range(bars.shape[0])
         ]
+        if vix is not None:
+            rows += [(VIX_SYMBOL, day.isoformat(), i, *map(float, vix[i])) for i in range(vix.shape[0])]
         if self._pending is not None:
             self._pending += rows
             if len(self._pending) >= BATCH_ROWS:
@@ -215,7 +218,10 @@ class History:
         if interval not in INTERVALS:
             raise ValueError(f"interval must be one of {', '.join(INTERVALS)}")
         count = max(1, min(count, MAX_COUNT))
-        col = self.engine.symbol_index(symbol)
+        index = symbol == VIX_SYMBOL
+        col = -1 if index else self.engine.symbol_index(symbol)
+        if index and interval in FINE_MINUTES:
+            interval = "30m"  # the index is sampled every half hour
         now = self.engine.time
         limit = end.timestamp() if end is not None and end < now else None
         cutoff = end if limit is not None else now
@@ -243,6 +249,8 @@ class History:
         return out
 
     def _fine(self, col: int, interval: str, cutoff: datetime, count: int) -> tuple[list[tuple[Bar, float]], bool]:
+        if col < 0:
+            raise ValueError("an index has no bars finer than 30 minutes")
         k = FINE_MINUTES[interval]
         today = market_day(self.engine.time)
         origin_day = market_day(self.engine.origin)
@@ -284,8 +292,14 @@ class History:
             days.setdefault(date.fromisoformat(d), []).append(ohlcv)
         sessions: list[tuple[date, np.ndarray]] = [(d, np.array(v)) for d, v in days.items()]
         if last_day >= today:
-            mb = self.engine.minute_bars(today, through=int(session_seconds(self.engine.time)))[:, col, :]
-            sessions.append((today, aggregate(mb, STORED_MINUTES)))
+            through = int(session_seconds(self.engine.time))
+            if symbol == VIX_SYMBOL:
+                live = self.engine.vix_bars(today, through=through)
+                if live is not None:
+                    sessions.append((today, live))
+            else:
+                mb = self.engine.minute_bars(today, through=through)[:, col, :]
+                sessions.append((today, aggregate(mb, STORED_MINUTES)))
 
         out: list[tuple[Bar, float]] = []
         if interval in ("30m", "1h"):

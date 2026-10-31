@@ -89,3 +89,11 @@ describe('ranges and labels', () => {
     expect(formatBarTime(OPEN, '1W')).toBe('Week of Jan 7, 2026')
   })
 })
+
+describe('fillMarkers and dividends', () => {
+  it('leaves dividend records off the chart', () => {
+    const bars: Bar[] = [[1_000, 1, 2, 0.5, 1.5, 10]]
+    const order = { symbol: 'KO', status: 'filled', filled_at: new Date(1_500_000).toISOString(), type: 'dividend', side: 'buy', qty: 100, fill_price: 0.5 } as Order
+    expect(fillMarkers(bars, [order], 'KO')).toEqual([])
+  })
+})

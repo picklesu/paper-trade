@@ -28,7 +28,8 @@ class ClockUpdate(BaseModel):
 
 @router.get("/quotes")
 async def get_quotes(request: Request) -> list[dict]:
-    return [q.to_dict() for q in market(request).engine.quotes.values()]
+    svc = market(request)
+    return [q.to_dict() for q in svc.engine.quotes.values()] + svc.index_quotes()
 
 
 @router.get("/clock")
@@ -92,6 +93,17 @@ async def goto(body: Goto, request: Request) -> dict:
     return {"action": action, "target": target.isoformat(), "clock": svc.clock_state()}
 
 
+@router.post("/shock")
+async def trigger_shock(request: Request) -> dict:
+    """Start an uncertainty shock at the next open (for practice)."""
+    svc = market(request)
+    try:
+        day = svc.trigger_shock()
+    except BusyError as e:
+        raise HTTPException(409, str(e)) from None
+    return {"day": day.isoformat(), "clock": svc.clock_state()}
+
+
 @router.get("/real-prices")
 async def real_prices(request: Request) -> dict:
     """How many symbols have a saved real price, and from when (fetching first if
@@ -120,7 +132,7 @@ async def sync_real_prices(request: Request) -> dict:
 async def get_bars(request: Request, symbol: str, interval: str = "5m", end: str | None = None, count: int = 500) -> dict:
     """Chart bars: up to `count` before `end` (default now, including the live bar), oldest first."""
     svc = market(request)
-    if symbol not in svc.engine.quotes:
+    if symbol not in svc.engine.quotes and symbol not in svc.indexes:
         raise HTTPException(422, f"Unknown symbol {symbol}")
     try:
         return svc.history.bars(symbol, interval, parse_market_time(end) if end else None, count)

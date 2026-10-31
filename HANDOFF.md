@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-30, after Phase 7.5 (option prices calibrated to real markets)._
+_Last updated: 2026-10-31, after Phase 8b (dividends, American pricing, the real rate, the VIX, uncertainty shocks)._
 
 ## Where things stand
 
@@ -28,47 +28,59 @@ _Last updated: 2026-10-30, after Phase 7.5 (option prices calibrated to real mar
 | 7. Options chain with Greeks, exchange holidays (the user approved Claude's proposal without trading) | Merged | #31 |
 | 7.5. Option prices calibrated to real markets (the user approved the proposal as is) | Merged | #33 |
 | 8a. Option trading, expiration, exercise, assignment (the user approved the proposal) | Merged | #35 |
-| 8b. Dividends, American-style pricing, the real rate, a VIX-like index | Next: propose first | — |
+| 8b. Dividends, American-style pricing, the real rate, a VIX-like index, uncertainty shocks (the user approved the proposal and added the shocks and a trigger button) | PR open | — |
 
 `main` is clean and up to date with GitHub. No open branches or PRs.
 
 ## Pick up here
 
-**Phase 8b proposal**
-Both sources work with your existing keys:
-- Dividends: Alpaca's corporate-actions data lists real ex-dates and amounts (AAPL: $0.26–0.27 quarterly).
-- Interest rate: Alpha Vantage gives the daily 3-month Treasury yield (4.18% on Oct 28).
+**Phase 8b (built as approved; the user added the shocks and the trigger button):**
+- *Interest rate:* `optiondata.fetch_treasury_rate` (Alpha Vantage `TREASURY_YIELD`, daily 3-month, made continuous)
+  is fetched about daily (`MarketService.refresh_rate`, saved as `risk_free_rate`); `Calibration.rate` carries it
+  (default 4%) into every pricing call. No key: 4% stays.
+- *Dividends:* `SymbolSpec.dividend_yield/_months/_day` (a built-in table `symbols.DIVIDENDS`, roughly the real
+  payers' yields and ex-months; **not fetched from Alpaca**: its corporate-actions response format couldn't be
+  checked from the sandbox; a real-schedule sync is still open). Each payment is yield ÷ payments × the previous
+  close; the price drops by that at the ex-date's open (`engine.dividend_days`, `_dividend_on`, `dividend`).
+  A spec's drift is its total return, so the continuous part makes up the difference. `MODEL_VERSION` 5.
+  Cash: `Broker._pay_dividends` at each close pays `DIVIDEND_LAG` (3) sessions after the ex-date on shares held
+  when the ex-date opened, as a filled `dividend` record (type in `EVENT_TYPES`; ledger adds `qty × price` to cash
+  and changes no position; rewind erases it; `_busy` is true while stock is held). Orders shows "Dividend ·
+  Paid 0.55 a share · +$55.00".
+- *Option prices:* `market/american.py`: escrowed dividends (each is a share of the price when it goes ex, so
+  the escrowed price is spot × (1 − q) per dividend ahead), Black's approximation for calls (max over each
+  ex-date), Bjerksund–Stensland 1993 for puts (captures most, about 60%, of the early-exercise premium at the
+  money: roughly 1% of the price off a 1500-step tree; its tests say so). `options.price` prices with it; the
+  spread width still uses the European delta of the escrowed price; `price(..., greeks=True)` (chain and
+  `contract_quote`) measures Greeks by bumping the American price. The sticky-strike anchor includes the
+  dividends. **Dividend assignment:** the close before an ex-date a short ITM call whose time value is less than
+  the dividend is assigned with chance 0.9 × (1 − time value / dividend) (`DIVIDEND_ASSIGNMENT`; reason
+  "Assigned before the $X dividend"). Exercising a long call for the dividend is the existing manual exercise.
+- *Uncertainty shocks (Bloom 2009):* `_DayStart.shock` is the extra volatility (excess; the multiple is
+  1 + excess), set at onset to 0.4–0.9 and decaying with a 60-session half-life; it scales market and own
+  loadings, volume and spread factors, and options' `vol_ratio`/`option_inputs`. At onset the market drops
+  `SHOCK_DROP` (2.5%) × excess × beta, then drifts up a little (`SHOCK_REBOUND`). Random arrivals: 0.3 a year
+  (`draws.shock_u`). The baseline volatility is divided by `SHOCK_VARIANCE` and the drift loss added back, so
+  long-run volatility and return still match each spec. **Trigger a shock** (Go to… footer link →
+  `POST /api/shock` → `MarketService.trigger_shock` → `engine.trigger_shock`): begins at the *next session's
+  open* (not mid-session), saved in the market state (`shocks`: onset day → excess, trigger time); sessions
+  already generated beyond today are regenerated; going back to before the trigger undoes it (the history from
+  that day is deleted). Ticks carry `shock` and `shock_pending`; the top bar shows "Shock" / "Shock at open".
+- *VIX-like index:* `options.vix`: Cboe's variance formula over a strip of strikes of a 30-day expiration of SPY
+  (puts below the forward, calls above, the model's smile, European, default calibration so history and live
+  agree; a year-long run gives a median near 15, a 95th percentile of 33–55). The regime in force counts only a
+  quarter (`VIX_REGIME_WEIGHT`: it lasts hours, the index looks 30 days ahead). The engine samples it at the
+  open, every half hour and the close (`_Skeleton.vix`, computed in `_generate`, so the 5-year history gets it
+  too at no real cost), stores 30-minute bars as symbol `VIX` in `bars30` (volume 0), and quotes it
+  (`vix_quote`, `MarketService.index_quotes`, appended to ticks and `/api/quotes`). `/api/symbols` marks it
+  `tradable: false`; orders on it are refused; no options; the chart offers 30m and up (finer sizes map to 30m)
+  and hides volume; sparklines work. "All symbols" gains it once (`Watchlists` `seen`). Seeds: a volatile
+  regime on top of GARCH and a shock can still take the index past 100 (the base model's regimes did that
+  before shocks existed).
+- Tests: backend 316, frontend 164.
 
-1. Dividends
-   - Real schedule: each symbol's dividend pattern comes from its real history: how often, which months, and the yield. For example AAPL quarterly at about 0.45% a year, KO about 2.9%, TLT monthly, SPY in Mar/Jun/Sep/Dec. Like the expiration pattern, it's laid over any simulated date. Symbols that don't pay, like TSLA, get none.
-   - Price drops on the ex-date: the stock opens lower by the dividend, as real stocks do. Price drift is reduced by the yield, so the long-run total return stays the same.
-   - Your account: if you hold shares at the ex-date, the cash arrives on the payment date a few days later. Orders shows it as a dividend record.
-2. More accurate option prices
-   - Dividends in pricing: dividends before expiration lower call prices and raise put prices, using the standard escrowed-dividend method.
-   - Early-exercise value (real US stock options can be exercised any day before expiration):
-     - Calls: Black's approximation, which checks whether exercising just before each ex-date is worth more.
-     - Puts: the Bjerksund–Stensland approximation, so a deep in-the-money put is never priced below its intrinsic value.
-
-     Both are fast enough to price every second, like now.
-   - Greeks are computed from these prices.
-   - Dividend assignment risk: a covered call can be assigned the day before an ex-date when its remaining time value is less than the dividend. This is the classic surprise for covered-call sellers. Exercising a long call to capture a dividend works too.
-3. The real interest rate: the daily 3-month Treasury yield replaces the fixed 4%, used for all pricing. Like the option calibration, today's real rate applies at any simulated date. It's fetched once a day, and without a key the fixed 4% stays.
-4. A VIX-like index:
-   - What it is: 30-day expected volatility for the simulated S&P 500, computed from the simulated SPY options with the real VIX method (a strip of out-of-the-money options, interpolated to 30 days).
-   - Where it shows: "VIX" in the watchlist and the chart, with 5 years of history. It can't be traded.
-   - What it does: rises in volatile regimes and selloffs, falls in calm markets, and runs a few points above realized volatility because of the premium.
-
-Cost: ex-dividend drops change how prices are generated. As with earlier model changes, your saved market continues from current prices, its 5-year history is rebuilt once, and prices jump once at the switch. Your account and orders are kept.
-
-Not included: interest on uninvested cash (real brokers pay some). It's easy to add if you want it.
-
-Two decisions:
-- Uncertainty shocks: include the Bloom shocks in 8b? The VIX makes them visible as they arrive and fade, which is why I suggested pairing them.
-- "Trigger a shock" button: if the shocks are in, add one under Go to… for practice?
-
-**Phase 8a (option trading) is done; the user tests it.** Next: Phase 8b (dividends with early
-exercise before ex-dividend dates, American-style pricing, the real interest rate, a VIX-like
-index): propose the details before building.
+**Phase 8a (option trading) is done.** Phase 8b is built (above). Next: whatever the user tests and asks for;
+the open item is syncing the real dividend schedule from Alpaca.
 
 **Phase 8a (built as approved, with the review's changes; PR #35):** buy/sell to open and close;
 covered calls and cash-secured puts only; market and limit; fills from `options.price` at each
@@ -525,7 +537,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 290 (pytest), frontend 160 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 316 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -553,7 +565,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - The ledger is rebuilt from all fills when it changes. That's fine for thousands of trades;
   revisit if history grows very large.
 - No early closes (half days); one-off closures (e.g. national days of mourning) aren't modeled.
-- Options: no dividends, a fixed 4% rate (Phase 8), model spreads and sizes; the chain streams to the browser in
+- Options: model spreads and sizes; the American put price is an approximation (about 1% low at the money); the chain streams to the browser in
   full each tick for one expiration (fine at ~150 strikes).
 - Reset (going before the history) starts at the spec prices. A new market always begins at
   the same prices whatever the date.

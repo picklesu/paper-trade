@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Modal } from './Modal'
-import { fetchRealPrices, goto, previewGoto, syncRealPrices, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
+import { fetchRealPrices, goto, previewGoto, syncRealPrices, triggerShock, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
 import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
@@ -27,6 +27,9 @@ export function GoToDialog({ clock, onClose }: Props) {
   const [busy, setBusy] = useState(false)
   // Set while offering to sync to real prices.
   const [real, setReal] = useState<RealPricesStatus | 'loading' | null>(null)
+
+  // Set while offering to trigger an uncertainty shock.
+  const [shockView, setShockView] = useState(false)
 
   // Counts sync views opened, so a status that arrives after Back is ignored.
   const syncView = useRef(0)
@@ -55,6 +58,18 @@ export function GoToDialog({ clock, onClose }: Props) {
     setError(null)
     try {
       await syncRealPrices()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setBusy(false)
+    }
+  }
+
+  const shock = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await triggerShock()
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -102,6 +117,24 @@ export function GoToDialog({ clock, onClose }: Props) {
     <Modal labelledBy="goto-title" onClose={onClose}>
       {real !== null ? (
         <SyncToReal status={real} busy={busy} onSync={sync} onBack={closeSync} />
+      ) : shockView ? (
+        <>
+          <h2 id="goto-title">Trigger an uncertainty shock?</h2>
+          <p>
+            At the next open, uncertainty jumps: volatility rises to 1.4 to 1.9 times
+            normal and fades over the following months, the market opens lower, and option prices and the VIX
+            go up with it. It is the kind of shock Nick Bloom's research describes (9/11, the 2008 crisis, Brexit). Shocks also
+            arrive on their own about once every three years. Going back to before you triggered it undoes it.
+          </p>
+          <div className="dialog-actions">
+            <button className="btn primary" disabled={busy} onClick={shock}>
+              Trigger it
+            </button>
+            <button className="btn" disabled={busy} onClick={() => setShockView(false)}>
+              Back
+            </button>
+          </div>
+        </>
       ) : preview?.action === 'rewind' ? (
         <>
           <h2 id="goto-title">Go back to {marketDateTime(preview.target)}?</h2>
@@ -176,6 +209,9 @@ export function GoToDialog({ clock, onClose }: Props) {
           <div className="dialog-footer">
             <button className="link-button" disabled={busy} onClick={openSync}>
               Sync to real prices…
+            </button>
+            <button className="link-button" disabled={busy} onClick={() => setShockView(true)}>
+              Trigger an uncertainty shock…
             </button>
           </div>
         </>

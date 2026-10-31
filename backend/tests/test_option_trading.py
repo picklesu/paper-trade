@@ -48,7 +48,7 @@ def test_buying_a_call_fills_at_the_chains_ask_and_shows_as_a_position() -> None
     assert b.ledger().cash == pytest.approx(100_000 - ask * 200)
     (row,) = b.summary(e.quotes)["positions"]
     assert row["option"]["label"] == c.label and row["qty"] == 2
-    assert row["market_value"] == pytest.approx(row["last"] * 200, abs=0.01)
+    assert row["market_value"] == pytest.approx(row["last"] * 200, abs=1.0)  # `last` is the mid rounded to a cent
     assert 50 < row["delta"] < 150  # two contracts near the money: about 100 shares' worth
     assert row["theta"] < 0
     # Sell to close: realized against the average price.
@@ -341,7 +341,7 @@ def test_limits_at_the_mid_fill_when_someone_trades_with_them() -> None:
 
 def test_the_chance_grows_toward_the_far_side_of_the_spread() -> None:
     e, b = setup()
-    c = contract(e, "put", 1.0)
+    c = contract(e, "put", 1.0, date(2026, 2, 20))  # a spread wide enough to have prices inside it
     q = b.option_quote(c)
     bid, ask = np.array([q["bid"]]), np.array([q["ask"]])
     order = lambda limit: broker_module.Order(1, c.symbol, "buy", 1, "limit", "day", limit, None, e.time)  # noqa: E731
@@ -391,3 +391,19 @@ def test_mid_fills_dont_depend_on_how_time_is_processed() -> None:
 
     at_once = fill_time(None)
     assert at_once is not None and at_once == fill_time(1)
+
+
+def test_a_short_call_is_assigned_the_day_before_a_dividend_its_time_value_is_less_than(monkeypatch) -> None:
+    monkeypatch.setattr(broker_module, "_unit_hash", lambda x: np.zeros(len(x)))  # always the unlucky draw
+    monkeypatch.setattr(broker_module, "EARLY_ASSIGNMENT", 0.0)  # only the dividend can do it
+    e, b = setup(et(2026, 3, 11, 10, 0))
+    c = contract(e, "call", 0.85, date(2026, 4, 17), "KO")  # deep in the money; KO goes ex on the 13th
+    b.place("KO", "buy", 100, "market")
+    sale = b.place(c.symbol, "sell", 1, "market")
+    assert sale.status == "filled"
+    advance(e, b, et(2026, 3, 12, 15, 0))
+    assert not [x for x in b.orders.values() if x.type == "assignment"]
+    advance(e, b, et(2026, 3, 12, 16, 30))  # the close before the ex-date
+    assigned = [x for x in b.orders.values() if x.type == "assignment"]
+    assert assigned and "dividend" in assigned[0].reason
+    assert b.ledger().qty("KO") == 0

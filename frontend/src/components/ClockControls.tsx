@@ -7,6 +7,10 @@ import { GoToDialog } from './GoToDialog'
 interface Props {
   clock: ClockState | null
   regime: Regime | null
+  /** Extra volatility from an uncertainty shock in force (0: none). */
+  shock?: number
+  /** A triggered shock that begins at the next open. */
+  shockPending?: boolean
   progress: ProgressMessage | null
 }
 
@@ -16,7 +20,7 @@ const REGIME_LABEL: Record<Regime, string> = {
   volatile: 'Volatile',
 }
 
-export function ClockControls({ clock, regime, progress }: Props) {
+export function ClockControls({ clock, regime, shock = 0, shockPending = false, progress }: Props) {
   const [showGoto, setShowGoto] = useState(false)
   const disabled = clock === null || progress !== null
   const send = (update: { speed?: number; paused?: boolean }) => {
@@ -64,6 +68,14 @@ export function ClockControls({ clock, regime, progress }: Props) {
             {REGIME_LABEL[regime]}
           </span>
         )
+      )}
+      {!progress && (shock > 0 || shockPending) && (
+        <span
+          className="regime regime-shock"
+          title={shockPending ? 'An uncertainty shock begins at the next open' : 'An uncertainty shock: volatility is higher and fading'}
+        >
+          {shockPending ? 'Shock at open' : 'Shock'}
+        </span>
       )}
       {showGoto && clock && <GoToDialog clock={clock} onClose={() => setShowGoto(false)} />}
     </div>

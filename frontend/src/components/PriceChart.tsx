@@ -30,6 +30,7 @@ import {
 } from '../lib/bars'
 import { direction, percent, price, volume } from '../lib/format'
 import { compute, DEFAULT_SETTINGS, type IndicatorId, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
+import { isIndex } from '../lib/symbols'
 import type { ClockState, Order, Quote } from '../lib/types'
 import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
 import { IndicatorMenu } from './IndicatorMenu'
@@ -50,6 +51,7 @@ interface Props {
 const UP = '#22c55e'
 const DOWN = '#ef4444'
 const PAGE = 500
+const FINE_BARS = new Set<Interval>(['1m', '5m', '15m'])
 const RESYNC_MS = 1500
 const SETTLE_MS = 80
 // Bars per preset load: enough to cover the range in one request.
@@ -97,7 +99,10 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   const indicators = useRef<IndicatorLayer | null>(null)
   const [settings, setSettings] = useState<IndicatorSettings>(loadSettings)
 
-  const [interval, setInterval_] = useState<Interval>('5m')
+  const [chosenInterval, setInterval_] = useState<Interval>('5m')
+  // The index is sampled every half hour, so finer bars are the half-hour ones.
+  const index = isIndex(quote.symbol)
+  const interval: Interval = index && FINE_BARS.has(chosenInterval) ? '30m' : chosenInterval
   const [preset, setPreset] = useState<RangePreset | null>(RANGES[1])
   const [bars, setBars] = useState<Bar[]>([])
   const [hover, setHover] = useState<Bar | null>(null)
@@ -128,8 +133,10 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   const intervalRef = useRef(interval)
   const sessionOpenRef = useRef(sessionOpen)
   const presetRef = useRef(preset)
+  const indexRef = useRef(index)
   useEffect(() => {
     intervalRef.current = interval
+    indexRef.current = index
     sessionOpenRef.current = sessionOpen
     presetRef.current = preset
   })
@@ -138,7 +145,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     barsRef.current = next
     setBars(next)
     candles.current?.setData(next.map(candle))
-    volumes.current?.setData(next.map(volumeBar))
+    volumes.current?.setData(indexRef.current ? [] : next.map(volumeBar)) // an index has no volume
     indicators.current?.setData(next)
   }
 
@@ -357,7 +364,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     barsRef.current = next
     const bar = next[next.length - 1]
     candles.current.update(candle(bar))
-    volumes.current?.update(volumeBar(bar))
+    if (!indexRef.current) volumes.current?.update(volumeBar(bar))
     indicators.current?.updateLast(next)
     setBars(next) // the legend shows the latest bar and its indicator values
   }, [quote.last, now, sessionOpen, interval, viewKey])
@@ -400,15 +407,18 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     )
   }, [fills])
 
+  const intervals = index ? INTERVALS.filter((iv) => !FINE_BARS.has(iv)) : INTERVALS
+
   const choosePreset = (p: RangePreset) => {
     setPreset(p)
-    if (p.interval === interval) {
+    const wanted = index && FINE_BARS.has(p.interval) ? '30m' : p.interval
+    if (wanted === interval) {
       // Same bar size: just move the view (loading more first if needed).
       const ts = chart.current?.timeScale()
       const last = barsRef.current[barsRef.current.length - 1]?.[0]
       if (ts && last) ts.setVisibleRange({ from: rangeStart(p, last, sessionOpen) as UTCTimestamp, to: last as UTCTimestamp })
     } else {
-      setInterval_(p.interval)
+      setInterval_(wanted)
     }
   }
 
@@ -463,7 +473,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             ))}
           </select>
           <select className="ctl" aria-label="Bar size" title="Bar size" value={interval} onChange={(e) => chooseInterval(e.target.value as Interval)}>
-            {INTERVALS.map((iv) => (
+            {intervals.map((iv) => (
               <option key={iv} value={iv}>
                 {INTERVAL_LABEL[iv].short}
               </option>
@@ -486,7 +496,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             ))}
           </div>
           <div className="seg" role="group" aria-label="Bar size">
-            {INTERVALS.map((iv) => (
+            {intervals.map((iv) => (
               <button
                 key={iv}
                 className={interval === iv ? 'ctl active' : 'ctl'}
@@ -524,7 +534,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             <span>L {price(legend[3])}</span>
             <span className={direction(legend[4] - legend[1])}>C {price(legend[4])}</span>
             <span className={direction(legend[4] - legend[1])}>{percent(((legend[4] - legend[1]) / legend[1]) * 100)}</span>
-            <span className="muted">Vol {volume(legend[5])}</span>
+            {!index && <span className="muted">Vol {volume(legend[5])}</span>}
             {indicatorValues.some((iv) => !iv.ownPane) && (
               <span className="legend-indicators">
                 {indicatorValues

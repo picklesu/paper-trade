@@ -240,6 +240,7 @@ export function Orders({ orders }: { orders: Order[] }) {
 
 /** "Buy", "Sell", or for options "Buy to open", "Sell to close"... */
 function sideText(o: Order): string {
+  if (o.type === 'dividend') return 'Dividend'
   const verb = o.side === 'buy' ? 'Buy' : 'Sell'
   return o.option && o.effect ? `${verb} to ${o.effect}` : verb
 }
@@ -247,6 +248,10 @@ function sideText(o: Order): string {
 /** What a filled order made or lost. A sell realizes P/L against the average cost; a buy only
  *  opens (or adds to) a position, whose open P/L is in Positions. */
 function PnlCell({ order }: { order: Order }) {
+  if (order.type === 'dividend') {
+    const paid = order.qty * order.fill_price!
+    return <td className={`num ${direction(paid)}`}>{signedDollars(paid)}</td>
+  }
   // `!= null`: a server from before `realized` sends none.
   if (order.realized != null) return <td className={`num ${direction(order.realized)}`}>{signedDollars(order.realized)}</td>
   if (order.status === 'filled')

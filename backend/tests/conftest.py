@@ -16,5 +16,6 @@ def no_real_prices(monkeypatch):
     monkeypatch.setattr(realprices, "fetch_snapshots", refuse)
     monkeypatch.setattr(optiondata, "request_json", refuse)
     monkeypatch.setattr(optiondata, "fetch_earnings", refuse)
-    for name in ("fetch_bars", "fetch_earnings", "summarize"):  # imported by name there
+    monkeypatch.setattr(optiondata, "fetch_treasury_rate", refuse)
+    for name in ("fetch_bars", "fetch_earnings", "fetch_treasury_rate", "summarize"):  # imported by name there
         monkeypatch.setattr(service, name, refuse)

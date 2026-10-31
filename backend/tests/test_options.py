@@ -308,3 +308,22 @@ def test_a_real_pattern_lists_the_expirations() -> None:
     assert c["kind"] == "quarterly"
     with pytest.raises(ValueError):
         o.chain(e, "AAPL", date(2026, 3, 31))  # not listed by default
+
+
+def test_dividends_lower_calls_raise_puts_and_deep_puts_never_trade_below_intrinsic() -> None:
+    ko = SPEC["KO"]
+    when = et(2026, 3, 9, 11, 0)  # the ex-date is the 13th
+    with_div = MarketEngine(et(2026, 1, 5, 15, 0), specs=(ko,))
+    without = MarketEngine(et(2026, 1, 5, 15, 0), specs=(dataclasses.replace(ko, dividend_yield=0.0, dividend_months=()),))
+    for e in (with_div, without):
+        e.advance(when)
+    day, sec = when.date(), 5400  # 11:00 AM
+    expiry = date(2026, 4, 17)
+    ks = np.array([40.0, 70.0, 100.0])
+    a = o.price(with_div, "KO", expiry, ks, day, sec, 70.0)
+    b = o.price(without, "KO", expiry, ks, day, sec, 70.0)
+    assert a.call["price"][0, 1] < b.call["price"][0, 1] and a.put["price"][0, 1] > b.put["price"][0, 1]
+    assert a.put["price"][0, 2] >= 100 - 70 and a.call["price"][0, 0] >= 70 - 40
+    greeks = o.price(with_div, "KO", expiry, ks, day, sec, 70.0, greeks=True)
+    assert -1.01 < greeks.put["delta"][0, 2] < -0.9 and 0 < greeks.call["delta"][0, 1] < 1
+    assert greeks.call["theta"][0, 1] < 0 and greeks.call["vega"][0, 1] > 0

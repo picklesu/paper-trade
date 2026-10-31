@@ -126,7 +126,7 @@ cd frontend && npm test
 | 7 | Options chain with Greeks, exchange holidays | Done |
 | 7.5 | Option prices calibrated to real markets: each symbol's smile, volatility risk premium, expirations, volume and open interest from its real options, once a day | Done |
 | 8a | Option trading: buy/sell to open and close (covered calls, cash-secured puts), positions with Greeks, expiration, exercise, assignment | Done |
-| 8b | Dividends (and early exercise before them), American-style pricing, the real interest rate, a VIX-like index | |
+| 8b | Dividends (and early exercise before them), American-style pricing, the real interest rate, a VIX-like index, uncertainty shocks | Done |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |
 | 11 | Analysis tools: screener, portfolio analytics, journal | |

@@ -4,17 +4,27 @@ subscribers. Everything here runs on the event loop's thread."""
 import asyncio
 import contextlib
 import logging
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 import numpy as np
 
-from paper_trade.market.calendar import MARKET_TZ, market_day, session_close, session_open, snap, trading_days_between
+from paper_trade.market.calendar import (
+    MARKET_TZ,
+    SESSION_SECONDS,
+    market_day,
+    session_close,
+    session_open,
+    session_seconds,
+    snap,
+    trading_days_between,
+)
 from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
 from paper_trade.market import options
-from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, summarize
+from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
 from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
@@ -73,12 +83,12 @@ class MarketService:
         self.history_days = history_days
         self.real = real
         self._real_task: asyncio.Task | None = None
-        self.watchlists = Watchlists(store, self.symbols)
+        self.watchlists = Watchlists(store, self.symbols + list(self.indexes))
         self._stats: tuple[tuple, dict] | None = None
         self._chains: dict[tuple[str, date], tuple[tuple, dict]] = {}
         self._real_lock = asyncio.Lock()
         self.option_data = option_data
-        self.calibrations = options.calibrations(option_data.saved) if option_data else {}
+        self.calibrations = options.calibrations(option_data.saved, options.RATE if option_data.rate is None else option_data.rate) if option_data else {}
         self._calibration_version = 0
         self._option_task: asyncio.Task | None = None
         self._option_lock = asyncio.Lock()
@@ -101,9 +111,20 @@ class MarketService:
             "type": "tick",
             "clock": self.clock_state(),
             "regime": self.engine.regime,
-            "quotes": [q.to_dict() for q in quotes.values()],
+            "shock": round(self.engine.shock, 2),
+            "shock_pending": self.engine.shock_pending,
+            "quotes": [q.to_dict() for q in quotes.values()] + self.index_quotes(),
             "account": self.broker.summary(quotes),
         }
+
+    @property
+    def indexes(self) -> tuple[str, ...]:
+        """Symbols that are quoted and charted but can't be traded."""
+        return (options.VIX_SYMBOL,) if any(s == "SPY" for s in self.symbols) else ()
+
+    def index_quotes(self) -> list[dict]:
+        quote = self.engine.vix_quote() if self.indexes else None
+        return [quote] if quote else []
 
     def quote_stats(self) -> dict[str, dict]:
         """52-week ranges and average volumes (cached until the day or the history changes)."""
@@ -116,14 +137,24 @@ class MarketService:
         """Today's prices every SPARKLINE_MINUTES so far, ending with the latest."""
         closes = self.engine.day_closes(SPARKLINE_MINUTES)
         cols = {s: i for i, s in enumerate(self.symbols)}
+        series = {s: [round(float(p), 2) for p in closes[:, cols[s]]] for s in symbols if s in cols}
+        if options.VIX_SYMBOL in symbols and self.indexes:
+            day, now = market_day(self.engine.time), int(session_seconds(self.engine.time))
+            step = SPARKLINE_MINUTES * 60  # the same grid as the stocks: each stretch's last second, then now
+            secs = np.append(np.arange(step - 1, now, step), now)
+            series[options.VIX_SYMBOL] = [round(float(v), 2) for v in self.engine.vix_at(day, np.minimum(secs, SESSION_SECONDS - 1))]
         return {
             "step_minutes": SPARKLINE_MINUTES,
             "session_open": session_open(market_day(self.engine.time)).isoformat(),
-            "series": {s: [round(float(p), 2) for p in closes[:, cols[s]]] for s in symbols if s in cols},
+            "series": series,
         }
 
     def calibration(self, symbol: str) -> options.Calibration:
-        return self.calibrations.get(symbol, options.DEFAULT)
+        found = self.calibrations.get(symbol)
+        if found is not None:
+            return found
+        rate = self.option_data.rate if self.option_data else None
+        return replace(options.DEFAULT, rate=rate) if rate is not None else options.DEFAULT
 
     def option_expirations(self, symbol: str) -> list[dict]:
         today = market_day(self.engine.time)
@@ -283,8 +314,9 @@ class MarketService:
                 self.broker.reset()
                 self.history.clear()
             elif action == "rewind":
+                shocks = set(self.engine._shocks)
                 self.engine.rewind(target, new_future)
-                if new_future:
+                if new_future or set(self.engine._shocks) != shocks:
                     self.history.delete_from(market_day(target))
                 self.broker.rewind(target)
             elif action == "forward":
@@ -300,6 +332,20 @@ class MarketService:
             # fast-forward state; never drop it for a full queue.
             self.publish_all()
         return action, target
+
+    def trigger_shock(self) -> date:
+        """Start an uncertainty shock at the next open. Later sessions that a replay
+        had already generated are generated again, and what was recorded of them goes."""
+        if self._jumping:
+            raise BusyError
+        if self.building_history:
+            raise BusyError("price history is still being built; try again in a moment")
+        self.sync()
+        day = self.engine.trigger_shock()
+        self.history.delete_from(day)
+        self.save()
+        self.publish_all()
+        return day
 
     async def _fast_forward(self, target: datetime) -> None:
         # Sessions still to generate (fewer than the distance if a replay already generated some).
@@ -409,7 +455,7 @@ class MarketService:
 
     def _calibrations_changed(self) -> None:
         assert self.option_data
-        self.calibrations = options.calibrations(self.option_data.saved)
+        self.calibrations = options.calibrations(self.option_data.saved, options.RATE if self.option_data.rate is None else self.option_data.rate)
         self._calibration_version += 1
 
     async def refresh_option_data(self) -> None:
@@ -462,6 +508,20 @@ class MarketService:
                 od.finished()
                 self._calibrations_changed()
 
+    async def refresh_rate(self) -> None:
+        """Fetch the real 3-month Treasury yield about daily; without it (or a key)
+        the fixed rate stays."""
+        od = self.option_data
+        if not (od and od.rate_due() and od.earnings_key):
+            return
+        try:
+            day, rate = await asyncio.to_thread(fetch_treasury_rate, od.earnings_key)
+        except FetchError as e:
+            od.note(f"interest rate: {e}")
+            return
+        od.record_rate(day, rate)
+        self._calibrations_changed()
+
     async def _refresh_option_data(self) -> None:
         """Keep calibrations about a day old, in the background, after the first
         price fetch (they share Alpaca's rate limit)."""
@@ -469,6 +529,7 @@ class MarketService:
         await self._prices_tried.wait()
         while True:
             try:
+                await self.refresh_rate()
                 await self.refresh_option_data()
             except Exception as e:
                 # Keep the schedule going: try again after RETRY_AFTER.

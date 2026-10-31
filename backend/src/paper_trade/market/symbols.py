@@ -3,7 +3,7 @@
 Prices are synthetic; tickers are used only so the watchlist feels familiar.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,17 @@ class SymbolSpec:
     # market doesn't explain) with that sector's.
     sector: str | None = None
     sector_corr: float = 0.0
+    # Dividends: the yield a year, the months of the ex-dividend dates (1-12) and the
+    # day of the month (the ex-date is the first session on or after it). Each
+    # payment is the yield divided by the payments a year, times the previous close.
+    dividend_yield: float = 0.0
+    dividend_months: tuple[int, ...] = ()
+    dividend_day: int = 10
+
+    @property
+    def dividend_fraction(self) -> float:
+        """Each payment as a fraction of the stock's previous close."""
+        return self.dividend_yield / len(self.dividend_months) if self.dividend_months else 0.0
 
 
 TECH, COMM, DISC, STAPLES, FIN, ENERGY, HEALTH, INDUSTRIAL = (
@@ -90,3 +101,29 @@ SYMBOLS: tuple[SymbolSpec, ...] = (
     S("GE", "GE Aerospace", 190.00, 0.30, 0.09, 0.60, 5_000_000, 0.05, (0, 22), INDUSTRIAL, 0.45),
 )
 del S
+
+QUARTERLY = (3, 6, 9, 12)
+FEB_QUARTERLY = (2, 5, 8, 11)
+JAN_QUARTERLY = (1, 4, 7, 10)
+# Roughly the real payers' yields and ex-dividend months (yield, months, day);
+# symbols not listed pay nothing.
+DIVIDENDS: dict[str, tuple[float, tuple[int, ...], int]] = {
+    "SPY": (0.012, QUARTERLY, 20), "QQQ": (0.006, QUARTERLY, 20), "IWM": (0.012, QUARTERLY, 20),
+    "XLF": (0.015, QUARTERLY, 20), "XLE": (0.033, QUARTERLY, 20), "XLV": (0.015, QUARTERLY, 20),
+    "TLT": (0.040, tuple(range(1, 13)), 1),
+    "AAPL": (0.0045, FEB_QUARTERLY, 10), "MSFT": (0.0075, FEB_QUARTERLY, 15), "NVDA": (0.0003, QUARTERLY, 10),
+    "AVGO": (0.013, QUARTERLY, 21), "ORCL": (0.010, JAN_QUARTERLY, 10),
+    "GOOGL": (0.004, QUARTERLY, 9), "META": (0.0035, QUARTERLY, 16), "DIS": (0.009, (6, 12), 15),
+    "HD": (0.023, QUARTERLY, 5), "NKE": (0.018, QUARTERLY, 1),
+    "WMT": (0.010, (3, 5, 8, 12), 10), "COST": (0.005, FEB_QUARTERLY, 1), "KO": (0.029, (3, 6, 9, 11), 13),
+    "PG": (0.024, JAN_QUARTERLY, 20),
+    "JPM": (0.020, JAN_QUARTERLY, 5), "BAC": (0.023, QUARTERLY, 5), "GS": (0.022, QUARTERLY, 1), "V": (0.008, FEB_QUARTERLY, 10),
+    "XOM": (0.034, FEB_QUARTERLY, 14), "CVX": (0.042, FEB_QUARTERLY, 15), "COP": (0.030, FEB_QUARTERLY, 18),
+    "UNH": (0.016, QUARTERLY, 10), "JNJ": (0.032, FEB_QUARTERLY, 25), "LLY": (0.007, FEB_QUARTERLY, 14),
+    "PFE": (0.060, (1, 5, 8, 11), 7),
+    "CAT": (0.016, JAN_QUARTERLY, 20), "GE": (0.006, QUARTERLY, 10),
+}
+SYMBOLS = tuple(
+    replace(s, dividend_yield=d[0], dividend_months=d[1], dividend_day=d[2]) if (d := DIVIDENDS.get(s.symbol)) else s
+    for s in SYMBOLS
+)

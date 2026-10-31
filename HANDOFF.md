@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phase 8d (real daily data) and the on-request update are merged; 8e-1 (replay the real past) is in review; 8e-2 is next._
+_Last updated: 2026-10-31. Phase 8d (real daily data) and the on-request update are merged; 8e-1 (replay the real past) is merged; 8e-2 is next after the user tests._
 
 ## Where things stand
 
@@ -34,7 +34,7 @@ _Last updated: 2026-10-31. Phase 8d (real daily data) and the on-request update 
 | Fix: the clock's date shows the year | Merged | #43 |
 | 8d. Real daily data (Tiingo bars split-adjusted, FRED series) | Merged; the user restarts to download it | #44 |
 | Update real history on request (fetch only new days; no automatic FRED refresh) | Merged | #46 |
-| 8e-1. Replay the real past: prices, volume, closures, dividends, backfill (the user approved the design and the 8e-1/8e-2 split) | In review | — |
+| 8e-1. Replay the real past: prices, volume, closures, dividends, backfill (the user approved the design and the 8e-1/8e-2 split) | Merged; the user restarts to test | #47 |
 | 8e-2. Volatility/options follow the real VIX; past earnings dates inferred | **Next** | — |
 
 `main` is clean and up to date with GitHub.
@@ -93,7 +93,7 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   left to the background fetch. A split among the new days makes it fetch that symbol's whole history again
   (earlier bars need re-adjusting). The old automatic daily FRED refresh is gone (`Macro.due` = never fetched).
   Store workers never touch SQLite: `last_day` is read on the loop thread and passed to `fetch_new`.
-  Status: `/api/real-prices` `history` has `newest` and `updated`. Backend 363, frontend 165.
+  Status: `/api/real-prices` `history` has `newest` and `updated`. Backend 365, frontend 165.
 - **8e-1 (built; the user approved the design and the split):** `market/realbars.py` `RealBars` (built at
   startup by `main` from `PriceHistory`; the engine never touches the database) gives `day(d)` (a `RealDay`:
   open/high/low/close/volume per symbol, `has` mask), `dividends`, `close_before`, `covers`, `closures()`.
@@ -654,7 +654,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 363 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 365 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

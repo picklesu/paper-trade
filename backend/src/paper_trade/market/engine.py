@@ -158,7 +158,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 7  # 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 8  # 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -756,7 +756,8 @@ class MarketEngine:
         except for a symbol whose real bars the session replays (those are already
         real prices; the scale bridges to the origin's prices only after them)."""
         scale = self.backfill_scale if scale is None else scale
-        assert scale is not None
+        if scale is None:
+            return np.ones(len(self.specs))
         if self._real is None or self._real_through is None or day > self._real_through:
             return scale
         real = np.array([self._real.covers(i, day) for i in range(len(self.specs))])

@@ -36,7 +36,7 @@ _Last updated: 2026-10-31. Phase 8d (real daily data) and the on-request update 
 | Update real history on request (fetch only new days; no automatic FRED refresh) | Merged | #46 |
 | 8e-1. Replay the real past: prices, volume, closures, dividends, backfill (the user approved the design and the 8e-1/8e-2 split) | Merged; the user restarts to test | #47 |
 | 8e-2. Volatility/options follow the real VIX; past earnings dates inferred | Merged; the user restarts to test | #48 |
-| Fix (user's report): Back clears the shock error and the shock view explains the real past up front; Sync reworded ("latest real prices", no button in the real past); a backfill's bridging scale no longer rescales the real days | In review | — |
+| Fix (user's report): Back clears the shock error and the shock view explains the real past up front; Sync reworded ("latest real prices", no button in the real past); a backfill's bridging scale no longer rescales the real days (MODEL_VERSION 8) | Merged; the user restarts to test | #49 |
 
 `main` is clean and up to date with GitHub.
 
@@ -105,7 +105,7 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   185 symbol-days in 2008–09 match exactly; 5-year backfill 4.0 s. `real_through` (saved in the market state)
   is the newest real day *when the market began*: a market keeps its data, `engine.use_real` (called after
   Update real history) only reaches markets started from then on (reset, sync, rewinds before the history).
-  `MODEL_VERSION` 7 (6 in 8e-1); `from_state` raises `ValueError` if the bars it replayed are gone, and `load_market` then
+  `MODEL_VERSION` 8 (7 in 8e-2, 6 in 8e-1); `from_state` raises `ValueError` if the bars it replayed are gone, and `load_market` then
   continues as a new market. Backfill starts from the real close before the first history day (symbols
   without bars still start at 1.0 and are scaled; real symbols scale 1.0). Calendar: `calendar.set_overrides`
   (closed, opened) from `RealBars.closures()`, applied once at startup (real closures found: 1985-09-27, 1994-04-27,

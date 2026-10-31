@@ -385,7 +385,7 @@ function SyncToReal({ status, busy, onSync, onBack, realThrough }: SyncProps) {
         : ''
   return (
     <>
-      <h2 id="goto-title">Sync to latest real prices?</h2>
+      <h2 id="goto-title">{realThrough ? 'Sync to latest real prices' : 'Sync to latest real prices?'}</h2>
       {realThrough ? (
         <>
           <p>

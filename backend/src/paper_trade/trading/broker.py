@@ -43,6 +43,7 @@ import numpy as np
 from paper_trade.market import options
 from paper_trade.market.calendar import (
     SESSION_SECONDS,
+    add_trading_days,
     market_day,
     next_trading_day,
     previous_trading_day,
@@ -58,6 +59,7 @@ from paper_trade.trading.orders import EVENT_TYPES, Order, OrderType, Side, Time
 STARTING_CASH = 100_000.0
 MAX_QTY = 1_000_000
 MAX_CONTRACTS = 10_000
+DIVIDEND_LAG = 3  # trading days from the ex-date to the payment (at that day's close)
 MAX_PRICE = 1_000_000.0
 IN_THE_MONEY = 0.01  # exercised or assigned at expiration from this much in the money
 CLOSEOUT_SECOND = SESSION_SECONDS - 60  # 3:59 PM: unexercisable options are sold
@@ -160,6 +162,9 @@ class Broker:
         for o in fills:
             if before is not None and o.filled_at >= before:
                 break
+            if o.type == "dividend":
+                led.cash += o.qty * o.fill_price
+                continue
             realized = apply_fill(led, o.symbol, o.side, o.qty, o.fill_price)
             if realized is not None:
                 led.realized_by_order[o.id] = realized
@@ -765,8 +770,11 @@ class Broker:
         return changed
 
     def _busy(self) -> bool:
-        """Anything to do at the next close: working orders or option positions."""
-        return bool(self.working()) or bool(self.held_contracts())
+        """Anything to do at the next close: working orders, option positions or
+        shares that may pay a dividend."""
+        return bool(self.working()) or bool(self.held_contracts()) or any(
+            p.qty > 0 and not Contract.parse(p.symbol) for p in self.ledger().positions.values()
+        )
 
     def process_iter(self, t0: datetime, t1: datetime) -> Iterator[bool]:
         """Like process(), yielding after each session (True if orders changed)."""
@@ -784,6 +792,7 @@ class Broker:
             # shares they held are free for exercises at this close.
             changed |= self._expire_day_orders(day)
             changed |= self._settle_options(day)
+            changed |= self._pay_dividends(day)
             yield changed
             if not self._busy():
                 return
@@ -1037,6 +1046,22 @@ class Broker:
         for c in held:
             if c.expiry > day:
                 self._maybe_assign_early(c, day)
+        return len(self.orders) != before
+
+    def _pay_dividends(self, day: date) -> bool:
+        """At `day`'s close: dividends that went ex DIVIDEND_LAG sessions ago are paid
+        on the shares held when that session opened."""
+        ex = add_trading_days(day, -DIVIDEND_LAG)
+        held = self.ledger(before=session_open(ex))
+        paid = session_close(day)
+        before = len(self.orders)
+        for symbol, p in sorted(held.positions.items()):
+            if p.qty <= 0 or Contract.parse(symbol):
+                continue
+            amount = self.engine.dividend(ex, self.engine.symbol_index(symbol))
+            if amount <= 0 or any(o.type == "dividend" and o.symbol == symbol and o.filled_at == paid for o in self.orders.values()):
+                continue
+            self._record(symbol, "buy", p.qty, amount, paid, "dividend", f"Dividend, ex-date {ex.isoformat()}")
         return len(self.orders) != before
 
     def _close_price(self, c: Contract, day: date) -> float:

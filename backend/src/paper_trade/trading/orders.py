@@ -10,13 +10,15 @@ from datetime import datetime
 from typing import Literal
 
 Side = Literal["buy", "sell"]
-OrderType = Literal["market", "limit", "stop", "stop_limit", "exercise", "assignment", "expiration"]
+OrderType = Literal["market", "limit", "stop", "stop_limit", "exercise", "assignment", "expiration", "dividend"]
 # Exercise, assignment and expiration aren't orders anyone placed: they're
 # recorded as filled orders so the account, history and time travel treat them
 # like trades. An exercise or assignment is two records at the same moment: the
 # option closed at its intrinsic value and the shares traded at the stock's price
-# (the cash adds up to trading the shares at the strike).
-EVENT_TYPES = frozenset({"exercise", "assignment", "expiration"})
+# (the cash adds up to trading the shares at the strike). A dividend is a filled
+# "buy" of the shares held at the ex-date, at the dividend per share: it adds that
+# cash to the account and changes no position.
+EVENT_TYPES = frozenset({"exercise", "assignment", "expiration", "dividend"})
 Effect = Literal["open", "close"]
 TimeInForce = Literal["day", "gtc"]
 Status = Literal["working", "filled", "canceled", "expired", "rejected"]

@@ -458,6 +458,28 @@ def test_earnings_gaps(ten_years) -> None:
     assert gaps[on].mean() > 3 * gaps[~on].mean()
 
 
+def test_ex_dividend_gaps(ten_years) -> None:
+    engine = ten_years["engine"]
+    i = engine.symbol_index("TLT")  # monthly, 0.33% of the close each time
+    gaps = np.log(ten_years["open"][1:, i] / ten_years["close"][:-1, i])
+    on = np.array([engine._dividend_on(d)[i] for d in ten_years["days"][1:]])
+    assert 118 <= on.sum() <= 122
+    assert gaps[on].mean() - gaps[~on].mean() == pytest.approx(math.log1p(-0.04 / 12), abs=0.0015)
+
+
+def test_dividend_schedule_and_amount() -> None:
+    engine = MarketEngine(START)
+    ko, tsla = engine.symbol_index("KO"), engine.symbol_index("TSLA")
+    day = date(2026, 3, 13)
+    assert engine._dividend_on(day)[ko] and not engine._dividend_on(date(2026, 3, 12))[ko]
+    assert not engine._dividend_on(day)[tsla]
+    engine.advance(et(2026, 3, 16, 10, 0))
+    amount = engine.dividend(day, ko)
+    close = engine.price_at(date(2026, 3, 12), 23399, ko)
+    assert amount == pytest.approx(close * 0.029 / 4, abs=0.02)
+    assert engine.dividend(day, tsla) == 0.0
+
+
 def test_volatility_is_highest_after_the_open(ten_years) -> None:
     assert (ten_years["early"].mean(axis=0) > 1.5 * ten_years["midday"].mean(axis=0)).all()
 

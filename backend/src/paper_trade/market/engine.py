@@ -132,7 +132,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 4  # 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 5  # 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -292,6 +292,12 @@ class MarketEngine:
         self._day_sd = np.sqrt(np.maximum(vol**2 - jump_var, 0.5 * vol**2) / TRADING_DAYS_PER_YEAR)
         # Selloffs would pull the drift down; add their average back.
         self._drift = np.array([s.drift for s in specs]) + CRASHES_PER_YEAR * crash_mean * self._beta
+        # Dividends drop the price by a fraction of the previous close on each ex-date.
+        # A spec's drift is its total return, so the continuous part makes up the
+        # difference between the drops and the yield (about nothing).
+        self._div_fraction = np.array([s.dividend_fraction for s in specs])
+        payments = np.array([len(s.dividend_months) for s in specs])
+        self._drift = self._drift - payments * (self._div_fraction + np.log1p(-self._div_fraction))
         # GARCH constants, so variances average 1. Jumps add to the squared shocks
         # (on average this much a day, in units of a normal day's variance).
         crash_shock = CRASHES_PER_YEAR * (crash_mean**2 + CRASH_EXTRA**2) / MARKET_VOL**2
@@ -856,6 +862,7 @@ class MarketEngine:
         if draws.crash_u < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR:
             crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
         log += own_jump - crash * self._beta
+        log += np.where(self._dividend_on(day), np.log1p(-self._div_fraction), 0.0)
         news = np.flatnonzero(draws.news_minute >= 0)
         for i in news:
             size = draws.news_size[i] * self._news_sd[i] - 0.5 * self._news_sd[i] ** 2
@@ -1015,6 +1022,17 @@ class MarketEngine:
         for key in [key for key in self._fines if which(key[0])]:
             del self._fines[key]
 
+    def _dividend_on(self, day: date) -> np.ndarray:
+        """(N,) whether each symbol goes ex-dividend at this session's open."""
+        return np.array([day in dividend_days(s, day, day) for s in self.specs], dtype=bool)
+
+    def dividend(self, day: date, col: int) -> float:
+        """The dividend per share (cents) going ex at `day`'s open, 0 if none."""
+        if day not in dividend_days(self.specs[col], day, day):
+            return 0.0
+        self._skeleton(day)  # the day's start exists once the session is generated
+        return round(float(self._div_fraction[col] * self._starts[day].prev_close[col]), 2)
+
     def _earnings_on(self, day: date) -> np.ndarray:
         """(N,) whether each symbol reports earnings before this session."""
         on = np.zeros(len(self.specs), dtype=bool)
@@ -1037,6 +1055,17 @@ def earnings_days(spec: SymbolSpec, start: date, end: date) -> list[date]:
     for year in range(start.year, end.year + 1):
         for m in range(month + 1, 13, 3):
             day = _earnings_session(year, m, dom)
+            if start <= day <= end:
+                out.append(day)
+    return out
+
+
+def dividend_days(spec: SymbolSpec, start: date, end: date) -> list[date]:
+    """The sessions in [start, end] on which `spec` goes ex-dividend."""
+    out = []
+    for year in range(start.year, end.year + 1):
+        for m in spec.dividend_months:
+            day = _earnings_session(year, m, spec.dividend_day)
             if start <= day <= end:
                 out.append(day)
     return out

@@ -49,6 +49,7 @@ from paper_trade.market.calendar import (
     session_seconds,
     trading_day_on_or_before,
 )
+from paper_trade.market import american
 from paper_trade.market.engine import (
     GAP_SHARE,
     TRADING_DAYS_PER_YEAR,
@@ -57,6 +58,7 @@ from paper_trade.market.engine import (
     _intraday_shape,
     _key,
     _unit_hash,
+    dividend_days,
     earnings_days,
 )
 from paper_trade.market.symbols import SymbolSpec
@@ -574,10 +576,14 @@ def price(
     spot,
     cal: Calibration = DEFAULT,
     inputs: OptionInputs | None = None,
+    greeks: bool = False,
 ) -> Priced:
     """Option prices on `day` at session seconds `sec` with the stock at `spot`
     (equal-length arrays, or numbers) for `strikes_`. The chain and order
-    matching both use this, so fills happen at the prices shown."""
+    matching both use this, so fills happen at the prices shown. Prices are
+    American with the stock's dividends; the Greeks are the Black-Scholes ones on
+    the stock less its dividends (they only set the spread's width), unless
+    `greeks`: then they are measured from the American prices."""
     i = engine.symbol_index(symbol)
     spec = engine.specs[i]
     inp = inputs or engine.option_inputs(day, i)
@@ -593,16 +599,47 @@ def price(
     # The skew steepens when the stock is down more than half a day's standard deviation.
     down = -np.log(spot / inp.prev_close) / (spec.vol * ratio / math.sqrt(TRADING_DAYS_PER_YEAR))
     rho = np.maximum(-0.95, cal.rho_at(symbol, years) - SELLOFF_SKEW * np.maximum(0.0, down - 0.5))
+    # Ex-dividend dates ahead (years from now; each dividend is a share of the price).
+    ex_times = [
+        ((session_open(ex) - session_open(day)).total_seconds() - sec) / YEAR_SECONDS
+        for ex in dividend_days(spec, day + timedelta(days=1), expiry)
+    ]
+    fraction = spec.dividend_fraction
+    keep = (1 - fraction) ** len(ex_times)
     # Sticky strike: the smile stays where the day opened.
-    anchor = inp.open * np.exp(cal.rate * years)
+    anchor = inp.open * keep * np.exp(cal.rate * years)
     iv = np.sqrt(smile(theta, np.log(ks / anchor), symbol, cal, rho) / years)
     atm = np.sqrt(smile(theta, np.log(spot / inp.open), symbol, cal, rho) / years)
-    model = black_scholes(spot, ks, years, iv, cal.rate)
+    model = black_scholes(spot * keep, ks, years, iv, cal.rate)
+    call, put = american.prices(spot, ks, years, iv, cal.rate, fraction, ex_times)
+    model["call"]["price"], model["put"]["price"] = call, put
     factor = spread_factor(inp, spec, day, sec, expiry)
     for side in ("call", "put"):
         m = model[side]
         m["bid"], m["ask"] = quote_prices(symbol, m["price"], m["delta"], years, factor)
+    if greeks:
+        _measure_greeks(model, spot, ks, years, iv, cal.rate, fraction, ex_times)
     return Priced(years, atm, iv, factor, model["call"], model["put"])
+
+
+def _measure_greeks(model: dict, spot, ks, years, iv, rate, fraction, ex_times) -> None:
+    """Replace the Greeks with ones measured from the American prices by bumping each input."""
+
+    def at(spot=spot, years=years, iv=iv, rate=rate, shift=0.0):
+        return american.prices(spot, ks, years, iv, rate, fraction, [t - shift for t in ex_times])
+
+    h = spot * 0.005
+    up, down, mid = at(spot + h), at(spot - h), (model["call"]["price"], model["put"]["price"])
+    day = np.minimum(1 / 365, years / 2)
+    later, hi_iv, lo_iv = at(years=years - day, shift=day), at(iv=iv + 0.005), at(iv=iv - 0.005)
+    hi_r, lo_r = at(rate=rate + 0.0005), at(rate=rate - 0.0005)
+    for n, side in enumerate(("call", "put")):
+        m = model[side]
+        m["delta"] = (up[n] - down[n]) / (2 * h)
+        m["gamma"] = (up[n] - 2 * mid[n] + down[n]) / h**2
+        m["theta"] = (later[n] - mid[n]) / (day * 365)
+        m["vega"] = hi_iv[n] - lo_iv[n]
+        m["rho"] = (hi_r[n] - lo_r[n]) * 10  # the bump spans 0.1 point of rate
 
 
 def _now(engine: MarketEngine) -> tuple[date, int]:
@@ -613,7 +650,7 @@ def _now(engine: MarketEngine) -> tuple[date, int]:
 def contract_quote(engine: MarketEngine, contract: Contract, cal: Calibration = DEFAULT) -> dict:
     """One contract's quote now: bid, ask, mid and Greeks (per share)."""
     day, sec = _now(engine)
-    p = price(engine, contract.underlying, contract.expiry, contract.strike, day, sec, engine.quotes[contract.underlying].last, cal)
+    p = price(engine, contract.underlying, contract.expiry, contract.strike, day, sec, engine.quotes[contract.underlying].last, cal, greeks=True)
     side = getattr(p, contract.right)
     return {k: float(v[0, 0]) for k, v in side.items()} | {"mid": float((side["bid"][0, 0] + side["ask"][0, 0]) / 2)}
 
@@ -636,7 +673,7 @@ def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DE
     ks = strikes(symbol, spot, atm_vol, years, (expiry - day).days)
     if held:
         ks = np.union1d(ks, np.round(sorted(held), 2))
-    p = price(engine, symbol, expiry, ks, day, sec, spot, cal, inputs)
+    p = price(engine, symbol, expiry, ks, day, sec, spot, cal, inputs, greeks=True)
     kind = found.get(expiry, "weekly")
     act = activity(engine, spec, expiry, kind, ks, cal)
     factor = float(p.factor[0, 0])

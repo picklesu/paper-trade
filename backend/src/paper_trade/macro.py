@@ -118,9 +118,10 @@ class Macro:
     def record(self, series: str, rows: list[tuple[date, float]]) -> None:
         with self._db:
             self._db.executemany("INSERT OR REPLACE INTO macro (series, day, value) VALUES (?, ?, ?)", [(series, d.isoformat(), v) for d, v in rows])
-        fetched = self.store.get("macro_fetched", {})
-        fetched[series] = self._now().isoformat()
-        self.store.set("macro_fetched", fetched)
+        if rows:  # an empty answer isn't a fetch: it is tried again
+            fetched = self.store.get("macro_fetched", {})
+            fetched[series] = self._now().isoformat()
+            self.store.set("macro_fetched", fetched)
         self.store.set("macro_error", None)
 
     def note(self, message: str) -> None:

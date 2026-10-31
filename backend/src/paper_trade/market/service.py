@@ -630,8 +630,9 @@ class MarketService:
                     last = hist.last_day(symbol)
                     if last is None:
                         continue
+                    split = next((b.split for b in hist.bars(symbol, last, last)), 1.0)
                     try:
-                        bars, whole = await asyncio.to_thread(hist.fetch_new, symbol, last)
+                        bars, whole = await asyncio.to_thread(hist.fetch_new, symbol, last, split)
                     except FetchStop as e:
                         hist.failed(str(e))
                         problems.append(str(e))
@@ -639,7 +640,11 @@ class MarketService:
                     except FetchError as e:
                         problems.append(f"{symbol}: {e}")
                         continue
-                    n = hist.record_new(symbol, bars, whole)
+                    try:
+                        n = hist.record_new(symbol, bars, whole)
+                    except FetchError as e:
+                        problems.append(str(e))
+                        continue
                     if n:
                         added[symbol] = n
                     await asyncio.sleep(PRICE_HISTORY_PAUSE_SECONDS)
@@ -662,6 +667,8 @@ class MarketService:
                     if n := sum(1 for d, _ in rows if d > before):
                         economy[series] = n
                     await asyncio.sleep(MACRO_PAUSE_SECONDS)
+            if not (hist and hist.fetched) and not (macro and macro.fetched):
+                problems.append("nothing is downloaded yet, so there is nothing to update; the first download runs in the background")
             self.store.set("real_history_updated", {"at": datetime.now(UTC).isoformat(), "problems": problems})
             return {"prices": added, "macro": economy, "problems": problems}
 

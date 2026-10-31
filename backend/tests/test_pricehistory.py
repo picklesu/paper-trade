@@ -252,3 +252,18 @@ def test_update_stops_on_a_refusal_and_names_it(monkeypatch) -> None:
     hist.record("QQQ", SPY)
     result = asyncio.run(make_service(hist).update_real_history())
     assert result["problems"] == ["Tiingo says too many requests"] and result["prices"] == {}
+
+
+def test_a_short_whole_history_does_not_replace_the_saved_one(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.PRICE_HISTORY_PAUSE_SECONDS", 0)
+    split_bar = Bar(date(2006, 1, 6), 64.0, 64.0, 64.0, 64.0, 1000.0, 0.0, 2.0)
+    hist = PriceHistory(Store(":memory:"), "k", fetch=lambda s, k: [], fetch_since=lambda s, k, d: [split_bar])
+    hist.record("SPY", SPY)
+    result = asyncio.run(make_service(hist).update_real_history())
+    assert result["prices"] == {} and "kept what is saved" in result["problems"][0]
+    assert len(hist.bars("SPY")) == 3
+
+
+def test_update_with_nothing_downloaded_says_so() -> None:
+    result = asyncio.run(make_service(PriceHistory(Store(":memory:"), "k")).update_real_history())
+    assert "nothing is downloaded yet" in result["problems"][0]

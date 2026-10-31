@@ -264,7 +264,8 @@ function OptionSync({ status }: { status: OptionDataStatus | undefined }) {
 }
 
 /** Real daily history is fetched once; this fetches only the days since, when asked. */
-function RealHistory({ status }: { status: RealPricesStatus }) {
+function RealHistory({ status: initial }: { status: RealPricesStatus }) {
+  const [status, setStatus] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
@@ -278,6 +279,7 @@ function RealHistory({ status }: { status: RealPricesStatus }) {
     setResult(null)
     try {
       const r = await updateRealHistory()
+      setStatus(r.status)
       const days = Object.values(r.prices).reduce((a, b) => a + b, 0)
       const points = Object.values(r.macro).reduce((a, b) => a + b, 0)
       const added = days + points === 0 ? 'Already up to date.' : `Added ${days} days of prices (${Object.keys(r.prices).length} symbols) and ${points} economic readings.`
@@ -294,7 +296,7 @@ function RealHistory({ status }: { status: RealPricesStatus }) {
   return (
     <div className="option-sync">
       <p className="muted">
-        Real history: {history?.available ?? 0} of {history?.total ?? 0} symbols{history?.newest && `, through ${calendarDate(history.newest)}`}
+        Real history: {history?.configured ? `${history.available} of ${history.total} symbols${history.newest ? `, through ${calendarDate(history.newest)}` : ''}` : 'no price key'}
         {macro?.configured && `; ${macro.available} of ${macro.total} economic series`}. It's fetched once; this adds only the days since.
       </p>
       <button className="btn" disabled={busy} onClick={update}>

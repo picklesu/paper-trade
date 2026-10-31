@@ -141,20 +141,23 @@ class PriceHistory:
         assert self.key
         return (self._fetch or fetch_bars)(symbol, self.key)
 
-    def fetch_new(self, symbol: str, last: date) -> tuple[list[Bar], bool]:
+    def fetch_new(self, symbol: str, last: date, last_split: float = 1.0) -> tuple[list[Bar], bool]:
         """One request for the days since `last`, the symbol's last saved bar
         (`last_day`; included, since it may have been fetched before its close); safe
         in a worker thread (it doesn't touch the store). A split among the new days changes the earlier bars' adjustment, so
         then the whole history is fetched instead (second item True)."""
         assert self.key
         bars = (self._fetch_since or fetch_bars)(symbol, self.key, last)
-        if any(b.split != 1.0 and b.day > last for b in bars):
+        if any(b.split != 1.0 and (b.day > last or b.split != last_split) for b in bars):
             return self.fetch(symbol), True
         return bars, False
 
     def record_new(self, symbol: str, bars: list[Bar], whole: bool) -> int:
         """Save `fetch_new`'s bars; returns how many days are new."""
         before = self.last_day(symbol)
+        saved = len(self.bars(symbol))
+        if whole and len(bars) < saved:  # history only grows: a short answer is a bad one
+            raise FetchError(f"{symbol}: Tiingo returned {len(bars)} days where {saved} are saved; kept what is saved")
         self.record(symbol, bars, replace=whole)
         return sum(1 for b in bars if before is None or b.day > before)
 

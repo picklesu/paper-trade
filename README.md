@@ -130,7 +130,7 @@ cd frontend && npm test
 | 8c | Real historical start prices: a market started in the past opens at that date's real closes (Tiingo), not today's prices; symbols that didn't exist yet are hidden | Done |
 | 8d | Real daily data: Tiingo bars (open, high, low, close, volume, dividends, splits; split-adjusted) and FRED economic series (rates, yield curve, credit spread, VIX, unemployment, inflation, recessions), downloaded once and saved; later days fetched only on request (Go to… → Sync to real prices… → Update real history) | Done |
 | 8e-1 | Replay the real past: every session up to the newest real day opens, peaks, bottoms and closes at its real bar with its real volume (the sim fills only the minutes and seconds inside); real closures and dividends; the 5-year history follows real bars | Done |
-| 8e-2 | Volatility and option prices follow the real VIX; earnings dates in the past inferred from real data | |
+| 8e-2 | Volatility and option prices follow the real VIX; earnings dates in the past inferred from real data | Done |
 | 8f | A regime-switching future model fitted to the real history, starting from the real state of any date | |
 | 8g | Walk-forward checks of the future model against what really happened | |
 | 9 | Multi-leg strategies and risk graph | |

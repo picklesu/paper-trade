@@ -376,13 +376,14 @@ def quote_prices(symbol: str, mid: np.ndarray, delta: np.ndarray, years, market_
     return np.round(bid, 2), np.round(ask, 2)
 
 
-def spread_factor(inputs: OptionInputs, spec: SymbolSpec, day: date, sec, expiry: date):
+def spread_factor(inputs: OptionInputs, spec: SymbolSpec, day: date, sec, expiry: date, engine: MarketEngine | None = None):
     """How much wider than usual option spreads are at second `sec` of `day`:
     the stock's own spread factor, wider in the first minutes and in the
     sessions before earnings."""
     sec = np.asarray(sec)
     factor = inputs.spread[np.minimum(sec // 60, len(inputs.spread) - 1).astype(int)] * (1 + OPEN_SPREAD * np.exp(-sec / 600))
-    soon = earnings_days(spec, day + timedelta(days=1), min(expiry, add_trading_days(day, EARNINGS_SPREAD_DAYS)))
+    end = min(expiry, add_trading_days(day, EARNINGS_SPREAD_DAYS))
+    soon = engine.earnings_dates(engine.symbol_index(spec.symbol), day + timedelta(days=1), end) if engine else earnings_days(spec, day + timedelta(days=1), end)
     return factor * (EARNINGS_SPREAD if soon else 1.0)
 
 
@@ -626,7 +627,7 @@ def price(
     left = (session_close(expiry) - session_open(day)).total_seconds() - sec
     years = np.maximum(left, 1.0) / YEAR_SECONDS
     # Today's earnings move (if any) already happened at the open.
-    reports = len(earnings_days(spec, day + timedelta(days=1), expiry))
+    reports = len(engine.earnings_dates(i, day + timedelta(days=1), expiry))
     ratio = today_ratio(inp, spec, sec)
     theta = atm_variance(spec, ratio, years, reports, cal.premium_at(years))
     # The skew steepens when the stock is down more than half a day's standard deviation.
@@ -644,7 +645,7 @@ def price(
     model = black_scholes(spot * keep, ks, years, iv, cal.rate)
     call, put = american.prices(spot, ks, years, iv, cal.rate, fraction, ex_times)
     model["call"]["price"], model["put"]["price"] = call, put
-    factor = spread_factor(inp, spec, day, sec, expiry)
+    factor = spread_factor(inp, spec, day, sec, expiry, engine)
     for side in ("call", "put"):
         m = model[side]
         m["bid"], m["ask"] = quote_prices(symbol, m["price"], m["delta"], years, factor)
@@ -718,7 +719,7 @@ def chain(engine: MarketEngine, symbol: str, expiry: date, cal: Calibration = DE
         "rate": cal.rate,
         "atm_iv": round(atm_vol, 4),
         "expected_move": round(spot * atm_vol * math.sqrt(years), 2),
-        "earnings": bool(earnings_days(spec, day + timedelta(days=1), expiry)),
+        "earnings": bool(engine.earnings_dates(engine.symbol_index(symbol), day + timedelta(days=1), expiry)),
         "calibration": cal.describe(),
         "strikes": ks.tolist(),
     }

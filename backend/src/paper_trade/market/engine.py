@@ -120,6 +120,9 @@ SHOCK_VARIANCE = 1 + _SHOCK_DAILY_RATE * (
     2 * _SHOCK_MEAN / (1 - _SHOCK_DECAY) + (_SHOCK_MEAN**2 + SHOCK_EXCESS_RANGE**2 / 12) / (1 - _SHOCK_DECAY**2)
 )
 SHOCK_DRIFT_LOSS = SHOCKS_PER_YEAR * SHOCK_DROP * _SHOCK_MEAN - SHOCK_REBOUND * _SHOCK_DAILY_RATE * _SHOCK_MEAN / (1 - _SHOCK_DECAY)
+VIX_BASE2 = 70.0  # the sim's index squared is about this plus VIX_SLOPE times the market variance multiple
+VIX_SLOPE = 295.0  # (measured over seeds; real days set the multiple from the real VIX, so the sim index follows)
+VIX_BIAS = 1.106  # the sim index ran this much above the real one over 2007-2012 once set from it (the day's own move adds to it)
 EARNINGS_PER_YEAR = 4
 EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
 
@@ -155,7 +158,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 6  # 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 7  # 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -308,6 +311,7 @@ class MarketEngine:
         self._earnings_move = np.array([s.earnings_move for s in specs])
         self._news_sd = NEWS_SIZE * vol / math.sqrt(TRADING_DAYS_PER_YEAR)
         self.sectors = sorted({s.sector for s in specs if s.sector})
+        self._spy = next((i for i, sp in enumerate(specs) if sp.symbol == "SPY"), None)
         self._sector_of = np.array([self.sectors.index(s.sector) if s.sector else 0 for s in specs])
         self._sector_corr = np.array([s.sector_corr if s.sector else 0.0 for s in specs])
         self._keys = [
@@ -433,6 +437,8 @@ class MarketEngine:
         generated beyond today are generated again). Returns that session."""
         today = market_day(self._time)
         day = next_trading_day(today)
+        if self._real_through is not None and day <= self._real_through:
+            raise ValueError("the real past can't be shocked; go past the newest real day first")
         if day in self._shocks:
             return day
         draw = np.random.default_rng([self._seed, day.toordinal(), _key("shock")]).random()
@@ -462,6 +468,7 @@ class MarketEngine:
         day; this market keeps `real_through` (the sessions it already played stay)."""
         if real is not None:
             self._real = real
+            self._real_earnings.clear()
 
     # ----- current state -----------------------------------------------------
 
@@ -713,7 +720,7 @@ class MarketEngine:
                 close = self._real.close_before(i, day)
                 if close is not None:
                     prices[i] = close
-        start = _DayStart(prices, self._normal)
+        start = _DayStart(prices, self._normal, self._vix_variance(previous_trading_day(day)) or 1.0)
         unit: dict[date, _DayStart] = {}
         try:
             while day < origin_day:
@@ -880,7 +887,10 @@ class MarketEngine:
         self._epochs: list[tuple[datetime, int]] = [(self.origin, seed)]
         if prices is None:
             prices = np.array([s.price for s in self.specs])
-        self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, self._normal)}
+        origin_day = market_day(self.origin)
+        variance = self._vix_variance(previous_trading_day(origin_day))
+        self._starts: dict[date, _DayStart] = {origin_day: _DayStart(prices, self._normal, variance or 1.0)}
+        self._real_earnings: dict[int, list[date]] = {}
         self._shocks: dict[date, tuple[float, datetime]] = {}  # shocks the user triggered: onset session -> (excess, when)
         self._vix_inputs: dict[date, tuple[_Skeleton, OptionInputs]] = {}
         self._skeletons: OrderedDict[date, _Skeleton] = OrderedDict()
@@ -980,6 +990,8 @@ class MarketEngine:
 
     def _generate(self, day: date, start: _DayStart, draws: _Draws) -> _Skeleton:
         n, k = len(self.specs), len(self.sectors)
+        real_day = self._real_day(day)
+        replayed = real_day.has if real_day is not None else np.zeros(n, dtype=bool)
         regimes = np.empty(_M, dtype=np.int8)
         r = start.regime
         for m in range(_M):
@@ -1024,8 +1036,10 @@ class MarketEngine:
             onset = forced[0]
         elif draws.shock_u < SHOCKS_PER_YEAR / TRADING_DAYS_PER_YEAR:
             onset = SHOCK_EXCESS_MIN + SHOCK_EXCESS_RANGE * draws.shock_size
+        if real_day is not None:  # the real day carries any stress: the variance follows the real VIX
+            onset = 0.0
         began = onset > start.shock
-        excess = max(start.shock, onset)
+        excess = 0.0 if real_day is not None else max(start.shock, onset)
         scale = 1 + excess
 
         # Each symbol's loadings on them, today.
@@ -1048,18 +1062,16 @@ class MarketEngine:
             + self._beta * tilt[knots][:, None]
             - 0.5 * (market_load**2 * v_market[knots][:, None] + own_sd**2 * v_own[knots][:, None])
         )
-        earnings_on = self._earnings_on(day)
+        earnings_on = self._earnings_on(day) & ~replayed
         em = np.where(earnings_on, self._earnings_move, 0.0)
         own_jump = draws.earnings * em - 0.5 * em**2
         crash = 0.0
-        if draws.crash_u < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR:
+        if draws.crash_u < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR and real_day is None:
             crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
         if began:
             crash += SHOCK_DROP * onset
         log += own_jump - crash * self._beta
-        log += np.where(self._dividend_on(day), np.log1p(-self._div_fraction), 0.0)
-        real_day = self._real_day(day)
-        replayed = real_day.has if real_day is not None else np.zeros(n, dtype=bool)
+        log += np.where(self._dividend_on(day) & ~replayed, np.log1p(-self._div_fraction), 0.0)
         news = np.flatnonzero((draws.news_minute >= 0) & ~replayed)  # real days carry their own news
         for i in news:
             size = draws.news_size[i] * self._news_sd[i] - 0.5 * self._news_sd[i] ** 2
@@ -1120,6 +1132,12 @@ class MarketEngine:
             1.0,
         )
 
+        if real_day is not None:
+            # Real days set the next variances from the real VIX and the real returns.
+            vix_h = self._vix_variance(day)
+            if vix_h is not None:
+                h_next = vix_h
+            h_own_next = self._filter_own(real_day, start, close[-1], own_sd, h_own, h_own_next)
         shock_next = excess * _SHOCK_DECAY
         shock_next = shock_next if shock_next > 0.01 else 0.0
         sk = _Skeleton(
@@ -1142,6 +1160,21 @@ class MarketEngine:
         )
         sk.vix = self._vix_samples(sk, start)
         return sk
+
+    def _filter_own(self, real_day: RealDay, start: _DayStart, last: np.ndarray, own_sd: np.ndarray, h_own: np.ndarray, generated: np.ndarray) -> np.ndarray:
+        """Each symbol's own variance for the next session, from its real return today less
+        the market's (SPY's real return times the symbol's beta), as the model does with
+        its own shocks. Symbols without a bar keep the generated value."""
+        spy = self._spy
+        if spy is None or not real_day.has[spy]:
+            return generated
+        total = last - np.log(start.prev_close) + np.log1p(np.where(real_day.has, real_day.dividend, 0.0) / np.exp(last))
+        resid = total - self._beta * total[spy]
+        usable = real_day.has & (own_sd > 0)
+        own_shock = np.divide(resid, own_sd, out=np.zeros_like(resid), where=usable)
+        response = OWN_GARCH_ALPHA + np.where(own_shock < 0, OWN_GARCH_GAMMA, 0.0)
+        filtered = np.clip(self._own_omega + OWN_GARCH_BETA * h_own + response * own_shock**2 * h_own, *VARIANCE_RANGE)
+        return np.where(usable, filtered, generated)
 
     def _fine(self, day: date, m: int, cols: int | np.ndarray | None = None) -> np.ndarray:
         """(60, N) prices for each second of minute `m`, generated for `cols`
@@ -1229,6 +1262,32 @@ class MarketEngine:
             del self._skeletons[d]
         for key in [key for key in self._fines if which(key[0])]:
             del self._fines[key]
+
+    def _vix_variance(self, day: date) -> float | None:
+        """The market variance multiple that makes the sim's VIX the real one of `day`'s
+        close (None where the real VIX isn't known or the day isn't replayed)."""
+        if self._real is None or self._real_through is None or day > self._real_through:
+            return None
+        vix = self._real.vix_on_or_before(day)
+        if vix is None:
+            return None
+        return float(np.clip(((vix / VIX_BIAS) ** 2 - VIX_BASE2) / VIX_SLOPE, *VARIANCE_RANGE))
+
+    def earnings_dates(self, col: int, start: date, end: date) -> list[date]:
+        """Sessions in [start, end] that open with `col`'s earnings reaction: the real
+        ones (found from volume spikes near the usual dates) on replayed days, the
+        model's after them."""
+        spec = self.specs[col]
+        model = earnings_days(spec, start, end)
+        real, through = self._real, self._real_through
+        first = real.first_day(col) if real else None
+        if real is None or through is None or first is None or spec.earnings is None:
+            return model
+        if col not in self._real_earnings:
+            self._real_earnings[col] = [real.spike_near(col, d, market=self._spy) or d for d in earnings_days(spec, first, through)]
+        found = [d for d in self._real_earnings[col] if start <= d <= end]
+        tail = [d for d in model if d > through or d < first]
+        return sorted(set(found + tail))
 
     def _real_day(self, day: date) -> RealDay | None:
         """The real bars `day` replays (None after the newest real day or with none)."""

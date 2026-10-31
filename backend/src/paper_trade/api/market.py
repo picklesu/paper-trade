@@ -128,6 +128,19 @@ async def sync_real_prices(request: Request) -> dict:
     return {**status, "clock": svc.clock_state()}
 
 
+@router.post("/real-history/update")
+async def update_real_history(request: Request) -> dict:
+    """Fetch only the days since the saved real history (Tiingo bars, FRED series)."""
+    svc = market(request)
+    try:
+        result = await svc.update_real_history()
+    except BusyError as e:
+        raise HTTPException(409, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    return {**result, "status": svc.real_prices_status()}
+
+
 @router.get("/bars")
 async def get_bars(request: Request, symbol: str, interval: str = "5m", end: str | None = None, count: int = 500) -> dict:
     """Chart bars: up to `count` before `end` (default now, including the live bar), oldest first."""

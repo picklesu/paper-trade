@@ -1,8 +1,8 @@
 """Real economic series from FRED (Phase 9): interest rates, the yield curve, credit
 spreads, unemployment, inflation, the VIX and the NBER recession flag. They train
 and start the future market model. Needs FRED_API_KEY (environment or
-`backend/.env`; free from fred.stlouisfed.org). One request a series; about daily
-refresh. Nothing here is needed to run the sim without a key.
+`backend/.env`; free from fred.stlouisfed.org). One request a series, once; later days
+come only when asked for (`fetch_new`). Nothing here is needed to run the sim without a key.
 """
 
 import sqlite3
@@ -17,7 +17,6 @@ from paper_trade.store import Store
 URL = "https://api.stlouisfed.org/fred/series/observations"
 KEY_NAME = "FRED_API_KEY"
 FIRST_DAY = "1985-01-01"
-REFRESH_AFTER = timedelta(hours=20)
 RETRY_AFTER = timedelta(hours=1)
 
 # name -> what it is (FRED's own series ids)
@@ -58,9 +57,10 @@ def parse_observations(body: object) -> list[tuple[date, float]]:
     return sorted(out)
 
 
-def fetch_series(series: str, key: str) -> list[tuple[date, float]]:
-    """One series' whole history (safe to run in a worker thread)."""
-    query = urllib.parse.urlencode({"series_id": series, "api_key": key, "file_type": "json", "observation_start": FIRST_DAY})
+def fetch_series(series: str, key: str, since: date | None = None) -> list[tuple[date, float]]:
+    """One series from `since` (default: all of it); safe to run in a worker thread."""
+    start = since.isoformat() if since else FIRST_DAY
+    query = urllib.parse.urlencode({"series_id": series, "api_key": key, "file_type": "json", "observation_start": start})
     body, _ = request_json(f"{URL}?{query}", {}, timeout=30, service="FRED")
     return parse_observations(body)
 
@@ -71,11 +71,13 @@ class Macro:
         store: Store,
         key: str | None,
         fetch: Callable[[str, str], list[tuple[date, float]]] | None = None,
+        fetch_since: Callable[[str, str, date], list[tuple[date, float]]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.store = store
         self.key = key
         self._fetch = fetch
+        self._fetch_since = fetch_since
         self._now = now
         self._db: sqlite3.Connection = store.connection
         self._db.execute("CREATE TABLE IF NOT EXISTS macro (series TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, day))")
@@ -89,25 +91,37 @@ class Macro:
         return {k: datetime.fromisoformat(v) for k, v in self.store.get("macro_fetched", {}).items()}
 
     def due(self) -> list[str]:
-        """Series never fetched or older than a day (nothing, a while after a failure)."""
+        """Series never fetched (nothing, a while after a failure). Later days come
+        only when asked for (`fetch_new`)."""
         retry = self.store.get("macro_retry")
         now = self._now()
         if retry and now < datetime.fromisoformat(retry):
             return []
         have = self.fetched
-        return [s for s in SERIES if s not in have or now - have[s] > REFRESH_AFTER]
+        return [s for s in SERIES if s not in have]
 
     def fetch(self, series: str) -> list[tuple[date, float]]:
         """One request (safe in a worker thread: it doesn't touch the store)."""
         assert self.key
         return (self._fetch or fetch_series)(series, self.key)
 
+    def last_day(self, series: str) -> date | None:
+        row = self._db.execute("SELECT MAX(day) FROM macro WHERE series = ?", (series,)).fetchone()
+        return date.fromisoformat(row[0]) if row and row[0] else None
+
+    def fetch_new(self, series: str, last: date) -> list[tuple[date, float]]:
+        """One request for the days since `last`, the series' last saved value
+        (`last_day`; included); safe in a worker thread (it doesn't touch the store)."""
+        assert self.key
+        return (self._fetch_since or fetch_series)(series, self.key, last)
+
     def record(self, series: str, rows: list[tuple[date, float]]) -> None:
         with self._db:
             self._db.executemany("INSERT OR REPLACE INTO macro (series, day, value) VALUES (?, ?, ?)", [(series, d.isoformat(), v) for d, v in rows])
-        fetched = self.store.get("macro_fetched", {})
-        fetched[series] = self._now().isoformat()
-        self.store.set("macro_fetched", fetched)
+        if rows:  # an empty answer isn't a fetch: it is tried again
+            fetched = self.store.get("macro_fetched", {})
+            fetched[series] = self._now().isoformat()
+            self.store.set("macro_fetched", fetched)
         self.store.set("macro_error", None)
 
     def note(self, message: str) -> None:

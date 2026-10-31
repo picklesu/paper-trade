@@ -209,6 +209,20 @@ describe('GoToDialog: sync to real prices', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/real-prices/sync' && init?.method === 'POST')).toBe(true)
   })
 
+  it('updates the real history on request and says what was added', async () => {
+    const status = { configured: true, available: 40, total: 40, newest: '2026-10-30', history: { configured: true, available: 40, total: 40, newest: '2026-10-30' }, macro: { configured: true, available: 10, total: 10 } }
+    const fn = vi.fn(async (url: string, init?: RequestInit) => ({
+      ok: true,
+      json: async () => (url === '/api/real-history/update' && init?.method === 'POST' ? { prices: { SPY: 2, QQQ: 2 }, macro: { DFF: 2 }, problems: [], status } : status),
+    }))
+    vi.stubGlobal('fetch', fn)
+    render(<GoToDialog clock={clock} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync to real prices…' }))
+    expect(await screen.findByText(/Real history: 40 of 40 symbols, through Oct 30; 10 of 10 economic series/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Update real history' }))
+    expect(await screen.findByText('Added 4 days of prices (2 symbols) and 2 economic readings.')).toBeInTheDocument()
+  })
+
   it('says how far option prices are fitted to real options', async () => {
     const options = { configured: true, earnings: false, calibrated: 38, total: 40, oldest: '2026-10-29', newest: '2026-10-30', last_error: "XLF's options: Alpaca says too many requests" }
     mockReal({ configured: true, available: 40, total: 40, newest: '2026-10-30', options })

@@ -78,6 +78,28 @@ export interface RealPricesStatus {
   last_error?: string | null
   /** Option prices calibrated to real options (fetched once a day with the same keys). */
   options?: OptionDataStatus
+  /** Real daily bars (Tiingo) and economic series (FRED), fetched once and then only on request. */
+  history?: HistoryStatus
+  macro?: { configured: boolean; available: number; total: number; last_error?: string | null }
+}
+
+export interface HistoryStatus {
+  configured: boolean
+  available: number
+  total: number
+  last_error?: string | null
+  /** The latest day with a saved bar ("YYYY-MM-DD"). */
+  newest?: string | null
+  /** The last update on request: when (ISO time) and what went wrong. */
+  updated?: { at: string; problems: string[] } | null
+}
+
+/** What an update on request added: days per symbol and per FRED series. */
+export interface RealHistoryUpdate {
+  prices: Record<string, number>
+  macro: Record<string, number>
+  problems: string[]
+  status: RealPricesStatus
 }
 
 export interface OptionDataStatus {
@@ -102,6 +124,11 @@ export function fetchRealPrices(): Promise<RealPricesStatus> {
 /** Continue the market from now at the saved real prices. */
 export function syncRealPrices(): Promise<RealPricesStatus> {
   return send('/api/real-prices/sync', 'POST')
+}
+
+/** Fetch only the days since the saved real history (Tiingo bars, FRED series). */
+export function updateRealHistory(): Promise<RealHistoryUpdate> {
+  return send('/api/real-history/update', 'POST')
 }
 
 /** Start an uncertainty shock at the next open. */

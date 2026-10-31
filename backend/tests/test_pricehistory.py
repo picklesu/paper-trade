@@ -210,3 +210,60 @@ def test_the_old_closes_table_is_dropped() -> None:
     store.connection.execute("CREATE TABLE closes (symbol TEXT, day TEXT, close REAL)")
     PriceHistory(store, "k")
     assert not store.connection.execute("SELECT name FROM sqlite_master WHERE name = 'closes'").fetchone()
+
+
+def test_update_fetches_only_the_days_since_the_last_bar(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.PRICE_HISTORY_PAUSE_SECONDS", 0)
+    asked = []
+
+    def since(symbol, key, day):
+        asked.append((symbol, day))
+        return bars([(date(2006, 1, 5), 127.4), (date(2006, 1, 6), 128.0)])  # the last day again, then a new one
+
+    hist = PriceHistory(Store(":memory:"), "k", fetch_since=since)
+    hist.record("SPY", SPY)
+    svc = make_service(hist)
+    result = asyncio.run(svc.update_real_history())
+    assert asked == [("SPY", date(2006, 1, 5))] and result["prices"] == {"SPY": 1}
+    assert [b.close for b in hist.bars("SPY")] == [126.7, 127.3, 127.4, 128.0]  # the last day was replaced
+    assert hist.newest_day() == "2006-01-06"
+    assert asyncio.run(svc.update_real_history())["prices"] == {}  # nothing new the second time
+
+
+def test_a_split_among_the_new_days_fetches_the_whole_history_again(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.PRICE_HISTORY_PAUSE_SECONDS", 0)
+    whole = [Bar(date(2006, 1, 3), 63.35, 63.35, 63.35, 63.35, 2000.0), Bar(date(2006, 1, 4), 63.65, 63.65, 63.65, 63.65, 2000.0),
+             Bar(date(2006, 1, 5), 63.69, 63.69, 63.69, 63.69, 2000.0), Bar(date(2006, 1, 6), 64.0, 64.0, 64.0, 64.0, 1000.0, 0.0, 2.0)]
+    hist = PriceHistory(Store(":memory:"), "k", fetch=lambda s, k: whole, fetch_since=lambda s, k, d: [whole[3]])
+    hist.record("SPY", SPY)
+    result = asyncio.run(make_service(hist).update_real_history())
+    assert result["prices"] == {"SPY": 1}
+    assert [b.close for b in hist.bars("SPY")] == [63.35, 63.65, 63.69, 64.0]  # earlier days re-adjusted
+
+
+def test_update_stops_on_a_refusal_and_names_it(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.PRICE_HISTORY_PAUSE_SECONDS", 0)
+
+    def since(symbol, key, day):
+        raise FetchStop("Tiingo says too many requests")
+
+    hist = PriceHistory(Store(":memory:"), "k", fetch_since=since)
+    hist.record("SPY", SPY)
+    hist.record("QQQ", SPY)
+    result = asyncio.run(make_service(hist).update_real_history())
+    assert result["problems"] == ["Tiingo says too many requests"] and result["prices"] == {}
+
+
+def test_a_short_whole_history_does_not_replace_the_saved_one(monkeypatch) -> None:
+    monkeypatch.setattr("paper_trade.market.service.PRICE_HISTORY_PAUSE_SECONDS", 0)
+    split_bar = Bar(date(2006, 1, 6), 64.0, 64.0, 64.0, 64.0, 1000.0, 0.0, 2.0)
+    hist = PriceHistory(Store(":memory:"), "k", fetch=lambda s, k: [], fetch_since=lambda s, k, d: [split_bar])
+    hist.record("SPY", SPY)
+    result = asyncio.run(make_service(hist).update_real_history())
+    assert result["prices"] == {} and "kept what is saved" in result["problems"][0]
+    assert len(hist.bars("SPY")) == 3
+
+
+def test_update_with_nothing_downloaded_says_so() -> None:
+    result = asyncio.run(make_service(PriceHistory(Store(":memory:"), "k")).update_real_history())
+    assert "nothing is downloaded yet" in result["problems"][0]

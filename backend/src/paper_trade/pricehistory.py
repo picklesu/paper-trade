@@ -78,9 +78,9 @@ def parse_bars(body: object) -> list[Bar]:
     return bars
 
 
-def fetch_bars(symbol: str, key: str) -> list[Bar]:
-    """One symbol's whole daily history (safe to run in a worker thread)."""
-    query = f"?startDate={FIRST_DAY}&columns=date,open,high,low,close,volume,divCash,splitFactor"
+def fetch_bars(symbol: str, key: str, since: date | None = None) -> list[Bar]:
+    """One symbol's daily history from `since` (default: all of it); safe to run in a worker thread."""
+    query = f"?startDate={since.isoformat() if since else FIRST_DAY}&columns=date,open,high,low,close,volume,divCash,splitFactor"
     body, _ = request_json(
         URL.format(symbol=symbol.replace(".", "-").lower()) + query,
         {"Authorization": f"Token {key}"},
@@ -102,11 +102,13 @@ class PriceHistory:
         store: Store,
         key: str | None,
         fetch: Callable[[str, str], list[Bar]] | None = None,
+        fetch_since: Callable[[str, str, date], list[Bar]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.store = store
         self.key = key
         self._fetch = fetch
+        self._fetch_since = fetch_since
         self._now = now
         self._db: sqlite3.Connection = store.connection
         self._first_days: dict[str, date | None] = {}
@@ -139,8 +141,30 @@ class PriceHistory:
         assert self.key
         return (self._fetch or fetch_bars)(symbol, self.key)
 
-    def record(self, symbol: str, bars: list[Bar]) -> None:
+    def fetch_new(self, symbol: str, last: date, last_split: float = 1.0) -> tuple[list[Bar], bool]:
+        """One request for the days since `last`, the symbol's last saved bar
+        (`last_day`; included, since it may have been fetched before its close); safe
+        in a worker thread (it doesn't touch the store). A split among the new days changes the earlier bars' adjustment, so
+        then the whole history is fetched instead (second item True)."""
+        assert self.key
+        bars = (self._fetch_since or fetch_bars)(symbol, self.key, last)
+        if any(b.split != 1.0 and (b.day > last or b.split != last_split) for b in bars):
+            return self.fetch(symbol), True
+        return bars, False
+
+    def record_new(self, symbol: str, bars: list[Bar], whole: bool) -> int:
+        """Save `fetch_new`'s bars; returns how many days are new."""
+        before = self.last_day(symbol)
+        saved = len(self.bars(symbol))
+        if whole and len(bars) < saved:  # history only grows: a short answer is a bad one
+            raise FetchError(f"{symbol}: Tiingo returned {len(bars)} days where {saved} are saved; kept what is saved")
+        self.record(symbol, bars, replace=whole)
+        return sum(1 for b in bars if before is None or b.day > before)
+
+    def record(self, symbol: str, bars: list[Bar], replace: bool = False) -> None:
         with self._db:
+            if replace:
+                self._db.execute("DELETE FROM daily WHERE symbol = ?", (symbol,))
             self._db.executemany(
                 "INSERT OR REPLACE INTO daily (symbol, day, open, high, low, close, volume, dividend, split) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(symbol, b.day.isoformat(), b.open, b.high, b.low, b.close, b.volume, b.dividend, b.split) for b in bars],
@@ -190,6 +214,11 @@ class PriceHistory:
     def last_day(self, symbol: str) -> date | None:
         row = self._db.execute("SELECT MAX(day) FROM daily WHERE symbol = ?", (symbol,)).fetchone()
         return date.fromisoformat(row[0]) if row and row[0] else None
+
+    def newest_day(self) -> str | None:
+        """The latest day with a saved bar, for any symbol."""
+        row = self._db.execute("SELECT MAX(day) FROM daily").fetchone()
+        return row[0] if row else None
 
     def price_on(self, symbol: str, day: date, drift: float) -> float | None:
         """The close on `day` (or the last one before it); before the symbol's first

@@ -105,6 +105,7 @@ class MarketService:
         self._calibration_version = 0
         self._option_task: asyncio.Task | None = None
         self._option_lock = asyncio.Lock()
+        self._history_update = asyncio.Lock()
         self._prices_tried = asyncio.Event()  # the option sync starts after the first price fetch
         self.broker.calibration = self.calibration
         self.broker.listed = self.is_listed
@@ -422,7 +423,12 @@ class MarketService:
             status = self.real.status(self.symbols)
         history = self.price_history.status(self.symbols) if self.price_history else {"configured": False, "available": 0, "total": len(self.symbols)}
         macro = self.macro.status() if self.macro else {"configured": False, "available": 0, "total": 0}
-        return status | {"options": self.option_data_status(), "history": history, "macro": macro}
+        updated = self.store.get("real_history_updated")
+        return status | {
+            "options": self.option_data_status(),
+            "history": history | {"newest": self.price_history.newest_day() if self.price_history else None, "updated": updated},
+            "macro": macro,
+        }
 
     def option_data_status(self) -> dict:
         if self.option_data is None:
@@ -608,8 +614,67 @@ class MarketService:
                 await asyncio.sleep(PRICE_HISTORY_PAUSE_SECONDS)
             await asyncio.sleep(PRICE_HISTORY_CHECK_SECONDS)
 
+    async def update_real_history(self) -> dict:
+        """On request: fetch only the days since each symbol's last saved bar and each
+        FRED series' last value. Symbols and series not yet fetched are left to the
+        background fetch. Returns what was added (and any problems)."""
+        hist, macro = self.price_history, self.macro
+        if (hist is None or not hist.configured) and (macro is None or not macro.configured):
+            raise ValueError("Add TIINGO_API_KEY and FRED_API_KEY to backend/.env to fetch real history")
+        if self._history_update.locked():
+            raise BusyError("the real history is already being updated")
+        async with self._history_update:
+            added, problems = {}, []
+            if hist and hist.configured:
+                for symbol in sorted(hist.fetched & set(self.symbols)):
+                    last = hist.last_day(symbol)
+                    if last is None:
+                        continue
+                    split = next((b.split for b in hist.bars(symbol, last, last)), 1.0)
+                    try:
+                        bars, whole = await asyncio.to_thread(hist.fetch_new, symbol, last, split)
+                    except FetchStop as e:
+                        hist.failed(str(e))
+                        problems.append(str(e))
+                        break
+                    except FetchError as e:
+                        problems.append(f"{symbol}: {e}")
+                        continue
+                    try:
+                        n = hist.record_new(symbol, bars, whole)
+                    except FetchError as e:
+                        problems.append(str(e))
+                        continue
+                    if n:
+                        added[symbol] = n
+                    await asyncio.sleep(PRICE_HISTORY_PAUSE_SECONDS)
+            economy = {}
+            if macro and macro.configured:
+                for series in sorted(macro.fetched):
+                    before = macro.last_day(series)
+                    if before is None:
+                        continue
+                    try:
+                        rows = await asyncio.to_thread(macro.fetch_new, series, before)
+                    except FetchStop as e:
+                        macro.failed(str(e))
+                        problems.append(str(e))
+                        break
+                    except FetchError as e:
+                        problems.append(f"{series}: {e}")
+                        continue
+                    macro.record(series, rows)
+                    if n := sum(1 for d, _ in rows if d > before):
+                        economy[series] = n
+                    await asyncio.sleep(MACRO_PAUSE_SECONDS)
+            if not (hist and hist.fetched) and not (macro and macro.fetched):
+                problems.append("nothing is downloaded yet, so there is nothing to update; the first download runs in the background")
+            self.store.set("real_history_updated", {"at": datetime.now(UTC).isoformat(), "problems": problems})
+            return {"prices": added, "macro": economy, "problems": problems}
+
     async def _refresh_macro(self) -> None:
-        """Fetch FRED's series (one request each), then again about daily."""
+        """Fetch FRED's series once (one request each). Later days come from
+        `update_real_history`."""
         macro = self.macro
         assert macro
         while True:

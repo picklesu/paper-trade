@@ -158,7 +158,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 6  # 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 7  # 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -437,6 +437,8 @@ class MarketEngine:
         generated beyond today are generated again). Returns that session."""
         today = market_day(self._time)
         day = next_trading_day(today)
+        if self._real_through is not None and day <= self._real_through:
+            raise ValueError("the real past can't be shocked; go past the newest real day first")
         if day in self._shocks:
             return day
         draw = np.random.default_rng([self._seed, day.toordinal(), _key("shock")]).random()
@@ -466,6 +468,7 @@ class MarketEngine:
         day; this market keeps `real_through` (the sessions it already played stay)."""
         if real is not None:
             self._real = real
+            self._real_earnings.clear()
 
     # ----- current state -----------------------------------------------------
 

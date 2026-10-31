@@ -35,8 +35,10 @@ class RealBarsGone(ValueError):
 class RealBars:
     def __init__(self, symbols: Sequence[str], bars: dict[str, list[Bar]], vix: Sequence[tuple[date, float]] = ()) -> None:
         self.symbols = tuple(symbols)
-        self._vix_days = [d for d, _ in vix]
-        self._vix = [v for _, v in vix]
+        good = [(d, v) for d, v in vix if isinstance(v, (int, float)) and math.isfinite(v) and v > 0]
+        self._vix_days = [d for d, _ in good]
+        self._vix = [v for _, v in good]
+        self._adjusted: dict[tuple[int, int], np.ndarray] = {}
         self._volume_series: dict[int, tuple[list[date], np.ndarray, np.ndarray]] = {}
         self._bars: list[dict[date, Bar]] = [{b.day: b for b in bars.get(s, [])} for s in self.symbols]
         self._first: list[date | None] = [min(d, default=None) for d in self._bars]
@@ -80,10 +82,12 @@ class RealBars:
         compared with its median of the 20 sessions before, weighted by how wide the day's
         range was (an earnings reaction), if the score is at least `min_ratio`."""
         if market is not None and market != i:  # busy because the whole market was does not count
-            days, _, ratio = self._series(i)
-            m_days, _, m_ratio = self._series(market)
-            lookup = dict(zip(m_days, m_ratio))
-            ratio = np.array([r / max(lookup.get(d, 1.0), 1.0) for d, r in zip(days, ratio)])
+            days, _, raw = self._series(i)
+            if (i, market) not in self._adjusted:
+                m_days, _, m_ratio = self._series(market)
+                lookup = dict(zip(m_days, m_ratio))
+                self._adjusted[(i, market)] = np.array([r / max(lookup.get(d, 1.0), 1.0) for d, r in zip(days, raw)])
+            ratio = self._adjusted[(i, market)]
             return self._peak(days, ratio, center, window_days, min_ratio)
         days, _, ratio = self._series(i)
         return self._peak(days, ratio, center, window_days, min_ratio)

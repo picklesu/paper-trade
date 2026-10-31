@@ -305,3 +305,17 @@ def test_earnings_days_come_from_real_volume_spikes() -> None:
     assert nominal in engine.earnings_dates(i, date(2006, 1, 1), date(2006, 3, 31))  # no spike: the model's date stands
     msft = NAMES.index("MSFT")  # no bars: the model's dates
     assert engine.earnings_dates(msft, date(2006, 1, 1), date(2006, 6, 30)) == engine_mod.earnings_days(SYMBOLS[msft], date(2006, 1, 1), date(2006, 6, 30))
+
+
+def test_the_real_past_cannot_be_shocked_but_the_future_can() -> None:
+    bars = real_bars()
+    engine = MarketEngine(START, real=RealBars(NAMES, bars))
+    with pytest.raises(ValueError, match="real past"):
+        engine.trigger_shock()
+    late = MarketEngine(session_open(next_trading_day(bars["SPY"][-1].day)), real=RealBars(NAMES, bars))
+    assert late.trigger_shock() > bars["SPY"][-1].day
+
+
+def test_a_bad_vix_value_is_ignored() -> None:
+    real = RealBars(NAMES, real_bars(), [(date(2006, 1, 4), float("nan")), (date(2006, 1, 5), 20.0), (date(2006, 1, 6), -1.0)])
+    assert real.vix_on_or_before(date(2006, 1, 10)) == 20.0

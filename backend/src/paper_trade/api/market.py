@@ -101,6 +101,8 @@ async def trigger_shock(request: Request) -> dict:
         day = svc.trigger_shock()
     except BusyError as e:
         raise HTTPException(409, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
     return {"day": day.isoformat(), "clock": svc.clock_state()}
 
 

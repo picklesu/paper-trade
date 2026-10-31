@@ -390,7 +390,7 @@ class MarketService:
         if self.building_history:
             raise BusyError("price history is still being built; try again in a moment")
         self.sync()
-        day = self.engine.trigger_shock()
+        day = self.engine.trigger_shock()  # ValueError in the real past
         self.history.delete_from(day)
         self.save()
         self.publish_all()
@@ -668,7 +668,7 @@ class MarketService:
                     if n := sum(1 for d, _ in rows if d > before):
                         economy[series] = n
                     await asyncio.sleep(MACRO_PAUSE_SECONDS)
-            if added and hist:  # markets started from now on replay the new days too
+            if (added or economy) and hist:  # markets started from now on replay the new days (and VIX) too
                 self.engine.use_real(RealBars.from_history(hist, self.symbols, macro))
             if not (hist and hist.fetched) and not (macro and macro.fetched):
                 problems.append("nothing is downloaded yet, so there is nothing to update; the first download runs in the background")

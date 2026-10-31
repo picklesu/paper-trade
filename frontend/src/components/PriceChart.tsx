@@ -411,13 +411,14 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
 
   const choosePreset = (p: RangePreset) => {
     setPreset(p)
-    if (p.interval === interval) {
+    const wanted = index && FINE_BARS.has(p.interval) ? '30m' : p.interval
+    if (wanted === interval) {
       // Same bar size: just move the view (loading more first if needed).
       const ts = chart.current?.timeScale()
       const last = barsRef.current[barsRef.current.length - 1]?.[0]
       if (ts && last) ts.setVisibleRange({ from: rangeStart(p, last, sessionOpen) as UTCTimestamp, to: last as UTCTimestamp })
     } else {
-      setInterval_(index && FINE_BARS.has(p.interval) ? '30m' : p.interval)
+      setInterval_(wanted)
     }
   }
 

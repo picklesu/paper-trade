@@ -71,3 +71,13 @@ def test_going_back_before_the_payment_removes_it_and_replaying_repeats_it() -> 
     advance(e, b, et(2026, 3, 20, 10, 0))
     (again,) = dividends(b)
     assert again.fill_price == first.fill_price and again.qty == 100
+
+
+def test_selling_after_the_ex_date_still_gets_the_dividend() -> None:
+    e, b = setup(et(2026, 3, 10, 10, 0))
+    b.place("KO", "buy", 100, "market")
+    advance(e, b, et(2026, 3, 13, 9, 45))  # the ex-date has opened; the shares were held at the open
+    b.place("KO", "sell", 100, "market")
+    advance(e, b, et(2026, 3, 20, 10, 0))
+    (d,) = dividends(b)
+    assert d.qty == 100 and d.filled_at == session_close(PAY)

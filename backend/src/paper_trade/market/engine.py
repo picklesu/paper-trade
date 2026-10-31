@@ -609,9 +609,22 @@ class MarketEngine:
 
         col = self.symbol_index("SPY")
         secs = np.atleast_1d(np.asarray(secs))
-        spots = np.array([self.price_at(day, int(s), col) for s in secs])
         sk = self._skeleton(day)
-        return options.vix(self.specs[col], self._option_inputs_of(sk, self._starts[day], col, VIX_REGIME_WEIGHT), secs, spots)
+        # A minute's first and last seconds are in the skeleton; others are generated.
+        spots = np.array(
+            [
+                float(np.exp(sk.open[int(s) // 60, col])) if s % 60 == 0
+                else float(np.exp(sk.close[int(s) // 60, col])) if s % 60 == 59
+                else self.price_at(day, int(s), col)
+                for s in secs
+            ]
+        )
+        cached = self._vix_inputs.get(day)
+        if cached is None or cached[0] is not sk:
+            if len(self._vix_inputs) > 16:
+                self._vix_inputs.clear()
+            cached = self._vix_inputs[day] = (sk, self._option_inputs_of(sk, self._starts[day], col, VIX_REGIME_WEIGHT))
+        return options.vix(self.specs[col], cached[1], secs, spots)
 
     def vix_bars(self, day: date, through: int | None = None) -> np.ndarray | None:
         """(bars, 5) half-hour bars of the index [open, high, low, close, volume 0]:
@@ -845,6 +858,7 @@ class MarketEngine:
             prices = np.array([s.price for s in self.specs])
         self._starts: dict[date, _DayStart] = {market_day(self.origin): _DayStart(prices, self._normal)}
         self._shocks: dict[date, tuple[float, datetime]] = {}  # shocks the user triggered: onset session -> (excess, when)
+        self._vix_inputs: dict[date, tuple[_Skeleton, OptionInputs]] = {}
         self._skeletons: OrderedDict[date, _Skeleton] = OrderedDict()
         self._option_inputs: dict[tuple[date, int], tuple[_Skeleton, OptionInputs]] = {}
         self._fines: OrderedDict[tuple[date, int], tuple[np.ndarray, np.ndarray]] = OrderedDict()

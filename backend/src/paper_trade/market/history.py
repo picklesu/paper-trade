@@ -249,6 +249,8 @@ class History:
         return out
 
     def _fine(self, col: int, interval: str, cutoff: datetime, count: int) -> tuple[list[tuple[Bar, float]], bool]:
+        if col < 0:
+            raise ValueError("an index has no bars finer than 30 minutes")
         k = FINE_MINUTES[interval]
         today = market_day(self.engine.time)
         origin_day = market_day(self.engine.origin)

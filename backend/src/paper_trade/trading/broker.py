@@ -772,16 +772,22 @@ class Broker:
             changed |= changed_today
         return changed
 
-    def _busy(self) -> bool:
-        """Anything to do at the next close: working orders, option positions or
-        shares that may pay a dividend."""
-        return bool(self.working()) or bool(self.held_contracts()) or any(
-            p.qty > 0 and not Contract.parse(p.symbol) for p in self.ledger().positions.values()
+    def _busy(self, day: date) -> bool:
+        """Anything to do at the close after `day`: working orders, option positions,
+        shares held, or shares traded since an ex-date whose dividend isn't paid yet."""
+        if self.working() or self.held_contracts():
+            return True
+        if any(p.qty > 0 and not Contract.parse(p.symbol) for p in self.ledger().positions.values()):
+            return True
+        since = session_open(add_trading_days(day, 1 - DIVIDEND_LAG))  # the next close pays the ex-date this far back
+        return any(
+            o.status == "filled" and o.type not in EVENT_TYPES and not Contract.parse(o.symbol) and o.filled_at >= since
+            for o in self.orders.values()
         )
 
     def process_iter(self, t0: datetime, t1: datetime) -> Iterator[bool]:
         """Like process(), yielding after each session (True if orders changed)."""
-        if t1 <= t0 or not self._busy():
+        if t1 <= t0 or not self._busy(market_day(t0)):
             return
         day, end_day = market_day(t0), market_day(t1)
         first = int(session_seconds(t0)) + 1
@@ -797,7 +803,7 @@ class Broker:
             changed |= self._settle_options(day)
             changed |= self._pay_dividends(day)
             yield changed
-            if not self._busy():
+            if not self._busy(day):
                 return
             day, first = next_trading_day(day), 0
 
@@ -1055,6 +1061,8 @@ class Broker:
         """At `day`'s close: dividends that went ex DIVIDEND_LAG sessions ago are paid
         on the shares held when that session opened."""
         ex = add_trading_days(day, -DIVIDEND_LAG)
+        if not any(dividend_days(spec, ex, ex) for spec in self.engine.specs):
+            return False
         held = self.ledger(before=session_open(ex))
         paid = session_close(day)
         before = len(self.orders)

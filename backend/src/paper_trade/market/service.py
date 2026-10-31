@@ -88,7 +88,7 @@ class MarketService:
         self._chains: dict[tuple[str, date], tuple[tuple, dict]] = {}
         self._real_lock = asyncio.Lock()
         self.option_data = option_data
-        self.calibrations = options.calibrations(option_data.saved, option_data.rate or options.RATE) if option_data else {}
+        self.calibrations = options.calibrations(option_data.saved, options.RATE if option_data.rate is None else option_data.rate) if option_data else {}
         self._calibration_version = 0
         self._option_task: asyncio.Task | None = None
         self._option_lock = asyncio.Lock()
@@ -140,7 +140,8 @@ class MarketService:
         series = {s: [round(float(p), 2) for p in closes[:, cols[s]]] for s in symbols if s in cols}
         if options.VIX_SYMBOL in symbols and self.indexes:
             day, now = market_day(self.engine.time), int(session_seconds(self.engine.time))
-            secs = np.append(np.arange(0, now, SPARKLINE_MINUTES * 60), now)
+            step = SPARKLINE_MINUTES * 60  # the same grid as the stocks: each stretch's last second, then now
+            secs = np.append(np.arange(step - 1, now, step), now)
             series[options.VIX_SYMBOL] = [round(float(v), 2) for v in self.engine.vix_at(day, np.minimum(secs, SESSION_SECONDS - 1))]
         return {
             "step_minutes": SPARKLINE_MINUTES,
@@ -153,7 +154,7 @@ class MarketService:
         if found is not None:
             return found
         rate = self.option_data.rate if self.option_data else None
-        return replace(options.DEFAULT, rate=rate) if rate else options.DEFAULT
+        return replace(options.DEFAULT, rate=rate) if rate is not None else options.DEFAULT
 
     def option_expirations(self, symbol: str) -> list[dict]:
         today = market_day(self.engine.time)
@@ -454,7 +455,7 @@ class MarketService:
 
     def _calibrations_changed(self) -> None:
         assert self.option_data
-        self.calibrations = options.calibrations(self.option_data.saved, self.option_data.rate or options.RATE)
+        self.calibrations = options.calibrations(self.option_data.saved, options.RATE if self.option_data.rate is None else self.option_data.rate)
         self._calibration_version += 1
 
     async def refresh_option_data(self) -> None:

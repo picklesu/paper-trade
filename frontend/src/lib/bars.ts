@@ -104,7 +104,7 @@ export function fillMarkers(bars: Bar[], orders: Order[], symbol: string): FillM
   if (!bars.length) return []
   const out: FillMarker[] = []
   for (const o of orders) {
-    if (o.symbol !== symbol || o.status !== 'filled' || !o.filled_at) continue
+    if (o.symbol !== symbol || o.status !== 'filled' || !o.filled_at || o.type === 'dividend') continue // a dividend isn't a trade
     const t = Date.parse(o.filled_at) / 1000
     if (t < bars[0][0]) continue
     // Last bar starting at or before the fill (binary search).

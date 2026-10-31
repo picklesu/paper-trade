@@ -55,7 +55,7 @@ def _bs93_call(s, k, t, r, b, vol):
         beta = (0.5 - b / vol**2) + np.sqrt((b / vol**2 - 0.5) ** 2 + 2 * r / vol**2)
         b_inf = beta / (beta - 1) * k
         b_zero = np.maximum(k, np.where(r != b, r / (r - b), np.inf) * k)
-        h = -(b * t + 2 * vol * np.sqrt(t)) * b_zero / (b_inf - b_zero)
+        h = -(b * t + 2 * vol * np.sqrt(t)) * k**2 / ((b_inf - b_zero) * b_zero)
         trigger = b_zero + (b_inf - b_zero) * (1 - np.exp(h))
         alpha = (trigger - k) * trigger ** (-beta)
         value = (

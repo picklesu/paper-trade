@@ -77,7 +77,7 @@ _Last updated: 2026-10-31, after Phase 8b (dividends, American pricing, the real
   and hides volume; sparklines work. "All symbols" gains it once (`Watchlists` `seen`). Seeds: a volatile
   regime on top of GARCH and a shock can still take the index past 100 (the base model's regimes did that
   before shocks existed).
-- Tests: backend 315, frontend 163.
+- Tests: backend 316, frontend 164.
 
 **Phase 8a (option trading) is done.** Phase 8b is built (above). Next: whatever the user tests and asks for;
 the open item is syncing the real dividend schedule from Alpaca.
@@ -537,7 +537,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 315 (pytest), frontend 163 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 316 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

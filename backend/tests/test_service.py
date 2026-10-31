@@ -94,7 +94,7 @@ def test_goto_snaps_to_market_hours() -> None:
 def test_goto_rejects_huge_jumps() -> None:
     svc, _ = make_service()
     with pytest.raises(ValueError):
-        asyncio.run(svc.goto(datetime(2040, 1, 2, 15, 0, tzinfo=UTC)))
+        asyncio.run(svc.goto(datetime(2060, 1, 2, 15, 0, tzinfo=UTC)))
 
 
 def test_the_way_back_after_a_rewind_is_not_capped(monkeypatch) -> None:

@@ -170,3 +170,12 @@ def test_a_newer_saved_real_price_beats_an_older_close() -> None:
     svc.real.saved["SPY"] = type("P", (), {"price": 700.0, "as_of": date(2026, 1, 2)})()
     prices = dict(zip(svc.symbols, svc.real_start_prices(date(2026, 1, 5)), strict=True))
     assert prices["SPY"] == 700.0
+
+
+def test_a_reset_waits_until_some_history_is_downloaded() -> None:
+    svc = make_service(PriceHistory(Store(":memory:"), "k", fetch=lambda s, k: SPY))
+    past = datetime(2006, 1, 3, 15, 0, tzinfo=UTC)
+    with pytest.raises(ValueError, match="still downloading"):
+        asyncio.run(svc.goto(past))
+    svc.price_history.record("SPY", SPY)
+    assert asyncio.run(svc.goto(past))[0] == "reset"

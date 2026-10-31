@@ -34,7 +34,7 @@ from paper_trade.watchlists import Watchlists
 
 TICK_SECONDS = 0.5
 SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it runs
-MAX_JUMP_DAYS = 252 * 5
+MAX_JUMP_DAYS = 252 * 25  # about 20 s of generation for 20 years
 PRICE_HISTORY_PAUSE_SECONDS = 2  # between a symbol's price history requests
 PRICE_HISTORY_CHECK_SECONDS = 600  # between looks for symbols still to fetch
 PROGRESS_EVERY_DAYS = 5
@@ -338,6 +338,11 @@ class MarketService:
         # Only sessions not yet generated count: after a rewind, the way back is free.
         if action == "forward" and trading_days_between(self.engine.generated_through, market_day(target)) > MAX_JUMP_DAYS:
             raise ValueError(f"can jump at most {MAX_JUMP_DAYS} new trading days ahead")
+        hist = self.price_history
+        if action == "reset" and hist and hist.configured and not hist.fetched:
+            # Prices of that time aren't downloaded yet: a market started now would open at today's prices.
+            problem = hist.status(self.symbols)["last_error"]
+            raise ValueError("real prices from the past are still downloading; try again in a few minutes" + (f" ({problem})" if problem else ""))
         if action == "rewind":
             # Match orders up to now first, so what gets rolled back is complete.
             self.sync()

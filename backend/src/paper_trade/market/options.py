@@ -633,7 +633,7 @@ def price(
     down = -np.log(spot / inp.prev_close) / (spec.vol * ratio / math.sqrt(TRADING_DAYS_PER_YEAR))
     rho = np.maximum(-0.95, cal.rho_at(symbol, years) - SELLOFF_SKEW * np.maximum(0.0, down - 0.5))
     # Ex-dividend dates ahead (years from now; each dividend is a share of the price).
-    schedule = engine.dividend_schedule(i, day + timedelta(days=1), expiry, float(inp.prev_close))
+    schedule = engine.dividend_schedule(i, day + timedelta(days=1), expiry)
     ex_times = [((session_open(ex) - session_open(day)).total_seconds() - sec) / YEAR_SECONDS for ex, _ in schedule]
     fraction = sum(f for _, f in schedule) / len(schedule) if schedule else spec.dividend_fraction
     keep = (1 - fraction) ** len(ex_times)

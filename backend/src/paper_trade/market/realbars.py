@@ -3,6 +3,7 @@ open, high, low, close and volume, and the dividends. Built once at startup from
 `PriceHistory`; the engine never touches the database.
 """
 
+import bisect
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -25,6 +26,10 @@ class RealDay:
     volume: np.ndarray
 
 
+class RealBarsGone(ValueError):
+    """A saved market replayed real bars that are no longer saved."""
+
+
 class RealBars:
     def __init__(self, symbols: Sequence[str], bars: dict[str, list[Bar]]) -> None:
         self.symbols = tuple(symbols)
@@ -32,6 +37,8 @@ class RealBars:
         self._first: list[date | None] = [min(d, default=None) for d in self._bars]
         days = [max(d) for d in self._bars if d]
         self.last_day: date | None = max(days, default=None)  # the newest bar of any symbol
+        self._dividends = [sorted((d, b.dividend) for d, b in bars_.items() if b.dividend > 0) for bars_ in self._bars]
+        self._days: dict[date, RealDay | None] = {}
 
     @classmethod
     def from_history(cls, history, symbols: Sequence[str]) -> "RealBars | None":
@@ -42,6 +49,11 @@ class RealBars:
 
     def day(self, d: date) -> RealDay | None:
         """The real bars of session `d` (None if no symbol has one)."""
+        if d not in self._days:
+            self._days[d] = self._build_day(d)
+        return self._days[d]
+
+    def _build_day(self, d: date) -> RealDay | None:
         found = [b.get(d) for b in self._bars]
         has = np.array([x is not None for x in found])
         if not has.any():
@@ -70,7 +82,8 @@ class RealBars:
 
     def dividends(self, i: int, start: date, end: date) -> list[tuple[date, float]]:
         """Symbol `i`'s real ex-dividend dates in [start, end] with cash a share (split-adjusted)."""
-        return sorted((d, b.dividend) for d, b in self._bars[i].items() if start <= d <= end and b.dividend > 0)
+        rows = self._dividends[i]
+        return rows[bisect.bisect_left(rows, (start, -1.0)) : bisect.bisect_right(rows, (end, float("inf")))]
 
     def covers(self, i: int, d: date) -> bool:
         """Whether real data stands for symbol `i` on `d` (from its first bar to the newest day)."""
@@ -86,7 +99,7 @@ class RealBars:
             return set(), set()
         closed, opened = set(), set()
         d = first
-        while d <= self.last_day:
+        while d < self.last_day:  # the newest day itself may be a partial fetch
             if d.weekday() < 5:
                 if d in RULE_HOLIDAYS and d in traded:
                     opened.add(d)

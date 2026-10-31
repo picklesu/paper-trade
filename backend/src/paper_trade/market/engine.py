@@ -68,7 +68,7 @@ from paper_trade.market.calendar import (
     session_seconds,
     snap,
 )
-from paper_trade.market.realbars import RealBars, RealDay
+from paper_trade.market.realbars import RealBars, RealBarsGone, RealDay
 from paper_trade.market.symbols import SYMBOLS, SymbolSpec
 
 TRADING_DAYS_PER_YEAR = 252
@@ -458,9 +458,10 @@ class MarketEngine:
         self._reset(self._time, seed, prices * prices / now)
 
     def use_real(self, real: RealBars | None) -> None:
-        """Newly fetched bars. Only markets started from now on replay up to their newest
+        """Newly fetched bars (never fewer). Only markets started from now on replay up to their newest
         day; this market keeps `real_through` (the sessions it already played stay)."""
-        self._real = real
+        if real is not None:
+            self._real = real
 
     # ----- current state -----------------------------------------------------
 
@@ -846,7 +847,7 @@ class MarketEngine:
         through = state.get("real_through")
         engine._real_through = date.fromisoformat(through) if through else None
         if engine._real_through and (real is None or real.last_day is None or real.last_day < engine._real_through):
-            raise ValueError("the saved market replays real bars that are no longer available")
+            raise RealBarsGone("the saved market replays real bars that are no longer available")
         engine._seeds_used = state["seeds_used"]
         engine.backfilled = state.get("backfilled", False)
         engine._time = datetime.fromisoformat(state["time"])
@@ -1057,7 +1058,9 @@ class MarketEngine:
             crash += SHOCK_DROP * onset
         log += own_jump - crash * self._beta
         log += np.where(self._dividend_on(day), np.log1p(-self._div_fraction), 0.0)
-        news = np.flatnonzero(draws.news_minute >= 0)
+        real_day = self._real_day(day)
+        replayed = real_day.has if real_day is not None else np.zeros(n, dtype=bool)
+        news = np.flatnonzero((draws.news_minute >= 0) & ~replayed)  # real days carry their own news
         for i in news:
             size = draws.news_size[i] * self._news_sd[i] - 0.5 * self._news_sd[i] ** 2
             log[2 * (draws.news_minute[i] + 1) :, i] += size
@@ -1078,7 +1081,6 @@ class MarketEngine:
         # Within half a second's move of the open or close, the extreme is that price.
         high = np.where(high - top < 0.5 * one_second, top, high)
         low = np.where(bottom - low < 0.5 * one_second, bottom, low)
-        real_day = self._real_day(day)
         if real_day is not None:  # the real open, high, low and close
             open_, high, low, close = _pin(open_, high, low, close, real_day)
             move = np.abs(close - open_)
@@ -1248,8 +1250,8 @@ class MarketEngine:
         self._skeleton(day)  # the day's start exists once the session is generated
         return round(float(self._div_fraction[col] * self._starts[day].prev_close[col]), 2)
 
-    def dividend_schedule(self, col: int, start: date, end: date, spot: float) -> list[tuple[date, float]]:
-        """Ex-dividend dates in [start, end] with each payment as a fraction of `spot`:
+    def dividend_schedule(self, col: int, start: date, end: date) -> list[tuple[date, float]]:
+        """Ex-dividend dates in [start, end] with each payment as a fraction of the price before it:
         the real ones on replayed days, the symbol's model after them."""
         spec = self.specs[col]
         through = self._real_through
@@ -1259,7 +1261,7 @@ class MarketEngine:
         out = []
         if first is not None and start <= through and end >= first:
             real_end = min(end, through)
-            out += [(d, a / spot) for d, a in self._real.dividends(col, max(start, first), real_end)]
+            out += [(d, a / (self._real.close_before(col, d) or a * 100)) for d, a in self._real.dividends(col, max(start, first), real_end)]
             if start < first:
                 out += [(d, spec.dividend_fraction) for d in dividend_days(spec, start, first - timedelta(days=1))]
         elif start <= through:
@@ -1329,7 +1331,7 @@ def _pin(open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray
     correction = offs[0] + sum(
         (offs[s + 1] - offs[s]) * np.clip((t - xs[s]) / np.maximum(xs[s + 1] - xs[s], 1), 0.0, 1.0) for s in range(3)
     )
-    y = np.clip(y + correction, lo, hi)
+    y = _fold(y + correction, lo, hi)
     new_open, new_close = y[0::2], y[1::2]
     mid = (correction[0::2] + correction[1::2]) / 2
     new_high = np.clip(np.maximum(gh + mid, np.maximum(new_open, new_close)), lo, hi)
@@ -1345,16 +1347,29 @@ def _pin(open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray
     return tuple(out)
 
 
+def _fold(y: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
+    """Reflect values outside [lo, hi] back inside (a triangle wave), so a path that
+    overshoots turns around instead of sitting flat on the limit."""
+    width = np.maximum(hi - lo, 1e-12)
+    z = np.mod(y - lo, 2 * width)
+    return lo + np.where(z <= width, z, 2 * width - z)
+
+
 def _pin_volume(volume: np.ndarray, real: RealDay) -> np.ndarray:
-    """Scale each symbol's minute volumes so the day totals the real volume exactly."""
+    """Scale each symbol's minute volumes so the day totals the real volume exactly
+    (the rounding left over goes to the minutes with the largest fractions)."""
     out = volume.copy()
     for i in np.flatnonzero(real.has & (real.volume > 0)):
-        total = volume[:, i].sum()
         target = round(float(real.volume[i]))
-        if total <= 0 or target <= 0:
+        total = volume[:, i].sum()
+        if target <= 0:
             continue
-        scaled = np.floor(volume[:, i] * (target / total))
-        scaled[np.argmax(scaled)] += target - scaled.sum()
+        weights = volume[:, i] / total if total > 0 else np.full(len(volume), 1.0 / len(volume))
+        exact = weights * target
+        scaled = np.floor(exact)
+        short = int(target - scaled.sum())
+        if short > 0:
+            scaled[np.argsort(exact - scaled)[::-1][:short]] += 1
         out[:, i] = scaled
     return out
 

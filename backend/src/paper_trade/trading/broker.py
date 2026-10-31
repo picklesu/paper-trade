@@ -1066,7 +1066,7 @@ class Broker:
         """At `day`'s close: dividends that went ex DIVIDEND_LAG sessions ago are paid
         on the shares held when that session opened."""
         ex = add_trading_days(day, -DIVIDEND_LAG)
-        if not any(self.engine.dividend_schedule(i, ex, ex, 1.0) for i in range(len(self.engine.specs))):
+        if not any(self.engine.dividend_schedule(i, ex, ex) for i in range(len(self.engine.specs))):
             return False
         held = self.ledger(before=session_open(ex))
         paid = session_close(day)
@@ -1135,7 +1135,7 @@ class Broker:
         """The dividend per share the underlying pays at the next session's open (0 if none).
         The next session opens at today's close, so it is a fraction of that price."""
         nxt = next_trading_day(day)
-        schedule = self.engine.dividend_schedule(self.engine.symbol_index(c.underlying), nxt, nxt, spot)
+        schedule = self.engine.dividend_schedule(self.engine.symbol_index(c.underlying), nxt, nxt)
         return round(sum(f for _, f in schedule) * spot, 2)
 
     # ----- time travel -----------------------------------------------------------

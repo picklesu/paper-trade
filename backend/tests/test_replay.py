@@ -9,7 +9,7 @@ import pytest
 from paper_trade.market import calendar
 from paper_trade.market.calendar import MARKET_TZ, market_day, next_trading_day, session_open
 from paper_trade.market.engine import MarketEngine
-from paper_trade.market.realbars import RealBars
+from paper_trade.market.realbars import RealBars, RealBarsGone
 from paper_trade.market.symbols import SYMBOLS
 from paper_trade.pricehistory import Bar
 
@@ -123,6 +123,10 @@ def test_after_the_newest_real_day_the_sim_carries_on_from_the_last_close() -> N
     assert engine.dividend(nxt, NAMES.index("MSFT")) == plain_dividend(nxt)
 
 
+def plain_schedule(col: int) -> list:
+    return MarketEngine(START).dividend_schedule(col, date(2006, 1, 4), date(2006, 1, 12))
+
+
 def plain_dividend(day: date) -> float:
     other = MarketEngine(START, seed=42)
     other.advance(session_open(day))
@@ -137,7 +141,7 @@ def test_a_saved_market_keeps_the_data_it_began_with() -> None:
     more = real_bars(days=12)
     again = MarketEngine.from_state(state, real=RealBars(NAMES, more))
     assert again._real_through == bars["SPY"][-1].day  # later bars don't change an existing market
-    with pytest.raises(ValueError):
+    with pytest.raises(RealBarsGone):
         MarketEngine.from_state(state, real=None)
     plain = MarketEngine(START).to_state()
     assert plain["real_through"] is None and MarketEngine.from_state(plain, real=RealBars(NAMES, more))._real_through is None
@@ -163,9 +167,9 @@ def test_real_dividends_set_ex_dates_and_amounts() -> None:
     i = NAMES.index("AAPL")
     assert engine.dividend(ex, i) == 0.1234
     assert engine.dividend(date(2006, 1, 5), i) == 0.0
-    assert engine.dividend_schedule(i, date(2006, 1, 4), date(2006, 1, 12), 10.0) == [(ex, pytest.approx(0.01234))]
+    assert engine.dividend_schedule(i, date(2006, 1, 4), date(2006, 1, 12)) == [(ex, pytest.approx(0.1234 / bars['AAPL'][1].close))]
     msft = NAMES.index("MSFT")  # no real bars: the model's schedule
-    assert engine.dividend_schedule(msft, date(2006, 1, 4), date(2006, 1, 12), 10.0) == engine.dividend_schedule(msft, date(2006, 1, 4), date(2006, 1, 12), 10.0)
+    assert engine.dividend_schedule(msft, date(2006, 1, 4), date(2006, 1, 12)) == plain_schedule(msft)
 
 
 def test_closures_found_from_real_data() -> None:
@@ -178,7 +182,7 @@ def test_closures_found_from_real_data() -> None:
     calendar.set_overrides()
     assert calendar.is_trading_day(date(2001, 9, 12))
     good_friday = date(2007, 4, 6)  # a rule holiday that traded (as in 2012 it didn't, but suppose)
-    closed, opened = RealBars(["SPY"], {"SPY": [Bar(good_friday - timedelta(days=1), 1, 1, 1, 1, 1), Bar(good_friday, 1, 1, 1, 1, 1)]}).closures()
+    closed, opened = RealBars(["SPY"], {"SPY": [Bar(good_friday - timedelta(days=1), 1, 1, 1, 1, 1), Bar(good_friday, 1, 1, 1, 1, 1), Bar(good_friday + timedelta(days=3), 1, 1, 1, 1, 1)]}).closures()
     assert opened == {good_friday}
 
 
@@ -207,3 +211,23 @@ def test_updated_bars_reach_new_markets_only() -> None:
     assert engine._real_through == through
     engine.reset(START)
     assert engine._real_through == real_bars(days=12)["SPY"][-1].day
+
+
+def test_a_path_far_from_the_real_range_turns_back_instead_of_going_flat() -> None:
+    bars = real_bars()
+    engine = engine_with(bars)
+    i = NAMES.index("SPY")
+    for b in bars["SPY"]:
+        sk = engine._skeleton(b.day)
+        # no long runs of minutes stuck on the real high or low
+        stuck = (np.isclose(sk.close[:, i], math.log(max(b.high, b.open, b.close)), atol=1e-12) | np.isclose(sk.close[:, i], math.log(min(b.low, b.open, b.close)), atol=1e-12)).sum()
+        assert stuck < 20
+
+
+def test_volume_totals_match_even_when_the_generated_total_is_tiny() -> None:
+    from paper_trade.market.engine import _pin_volume
+    from paper_trade.market.realbars import RealDay
+
+    real = RealDay(np.array([True, True]), *(np.array([1.0, 1.0]),) * 4, np.array([1_000_003.0, 7.0]))
+    out = _pin_volume(np.zeros((390, 2)), real)
+    assert out[:, 0].sum() == 1_000_003 and out[:, 1].sum() == 7 and (out >= 0).all()

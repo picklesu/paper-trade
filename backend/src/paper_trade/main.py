@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,11 +11,13 @@ from paper_trade import __version__, macro, optiondata, pricehistory, realprices
 from paper_trade.api import health, market, stream, trading, watchlists
 from paper_trade.market import calendar
 from paper_trade.market.clock import SimClock
-from paper_trade.market.realbars import RealBars
+from paper_trade.market.realbars import RealBars, RealBarsGone
 from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.market.symbols import SYMBOLS
 from paper_trade.store import Store
+
+log = logging.getLogger(__name__)
 
 # backend/paper_trade.db unless PAPER_TRADE_DB says otherwise.
 DEFAULT_DB = Path(__file__).resolve().parents[2] / "paper_trade.db"
@@ -32,7 +35,8 @@ def load_market(store: Store, seed: int, real: RealBars | None = None) -> tuple[
     if state.get("model") == MODEL_VERSION and state.get("symbols") == [s.symbol for s in SYMBOLS]:
         try:
             engine = MarketEngine.from_state(state, real=real)
-        except ValueError:  # it replayed real bars that are gone
+        except RealBarsGone:
+            log.warning("the saved market replayed real bars that are no longer saved: continuing as a new market")
             engine = MarketEngine.continue_older(state, real=real)
     else:
         engine = MarketEngine.continue_older(state, real=real)
@@ -48,8 +52,7 @@ def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: 
         history = pricehistory.PriceHistory(store, pricehistory.tiingo_key())
         # The real bars (saved at an earlier start) set the calendar's one-off closures and are replayed.
         bars = RealBars.from_history(history, [s.symbol for s in SYMBOLS])
-        if bars:
-            calendar.set_overrides(*bars.closures())
+        calendar.set_overrides(*(bars.closures() if bars else (set(), set())))
         clock, engine = load_market(store, seed, bars)
         creds = realprices.credentials()
         real = realprices.RealPrices(store, creds)

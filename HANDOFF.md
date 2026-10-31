@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31, during Phase 8c (real historical start prices). Phase 8b is merged._
+_Last updated: 2026-10-31. Phase 8c (real historical start prices) is merged._
 
 ## Where things stand
 
@@ -30,13 +30,13 @@ _Last updated: 2026-10-31, during Phase 8c (real historical start prices). Phase
 | 8a. Option trading, expiration, exercise, assignment (the user approved the proposal) | Merged | #35 |
 | 8b. Dividends, American-style pricing, the real rate, a VIX-like index, uncertainty shocks (the user approved the proposal and added the shocks and a trigger button) | Merged | #39 |
 | Fix: the 1,260-day jump cap counted the whole distance, so after a rewind you couldn't jump forward again; it now counts only sessions not yet generated | Merged | #40 |
-| 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | **Branch `phase-8c-historical-start-prices`, not pushed, no PR** | — |
+| 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | Merged | #41 |
 
-`main` is clean and up to date with GitHub. The 8c branch holds uncommitted work (see below); switch back to `main` if you stop.
+`main` is clean and up to date with GitHub.
 
 ## Pick up here
 
-**Phase 8c (in progress; uncommitted on branch `phase-8c-historical-start-prices`):** going before the
+**Phase 8c (merged, #41):** going before the
 history used to reset the market at *today's* real prices (SPY at $757 in 2006). Now:
 - `backend/src/paper_trade/pricehistory.py` (new): `PriceHistory` fetches each symbol's whole daily history
   once from Tiingo (`TIINGO_API_KEY` in `backend/.env`, already added by the user; one request per symbol,
@@ -59,7 +59,7 @@ history used to reset the market at *today's* real prices (SPY at $757 in 2006).
 - **Live check (2026-10-31):** one run fetched 34 of 40 symbols, then Tiingo returned 429 at JNJ (the
   allowance was shared with earlier probes). SPY 2006-01-03 close is 126.70 as expected; a market at
   2006-01-03 quotes 37 symbols (AVGO, META, TSLA, V hidden). **Left:** the 6 symbols from JNJ on fetch in
-  the app's background after the hourly retry. Then PR, `/code-review`, CI, merge, `./server.sh restart`.
+  the app's background after the hourly retry (a symbol Tiingo doesn't know is skipped for good; only a rate limit or rejected key stops the loop for an hour).
 - **Don't waste Tiingo/Alpha Vantage requests** (see the user's feedback): no probes or polling; make the
   one real fetch count and keep the data. If full-history requests turn out to count for more than one,
   switch to fetching only the date range a jump needs and cache it.

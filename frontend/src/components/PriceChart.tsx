@@ -30,6 +30,7 @@ import {
 } from '../lib/bars'
 import { direction, percent, price, volume } from '../lib/format'
 import { compute, DEFAULT_SETTINGS, type IndicatorId, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
+import { isIndex } from '../lib/symbols'
 import type { ClockState, Order, Quote } from '../lib/types'
 import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
 import { IndicatorMenu } from './IndicatorMenu'
@@ -50,6 +51,7 @@ interface Props {
 const UP = '#22c55e'
 const DOWN = '#ef4444'
 const PAGE = 500
+const FINE_BARS = new Set<Interval>(['1m', '5m', '15m'])
 const RESYNC_MS = 1500
 const SETTLE_MS = 80
 // Bars per preset load: enough to cover the range in one request.
@@ -97,7 +99,10 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   const indicators = useRef<IndicatorLayer | null>(null)
   const [settings, setSettings] = useState<IndicatorSettings>(loadSettings)
 
-  const [interval, setInterval_] = useState<Interval>('5m')
+  const [chosenInterval, setInterval_] = useState<Interval>('5m')
+  // The index is sampled every half hour, so finer bars are the half-hour ones.
+  const index = isIndex(quote.symbol)
+  const interval: Interval = index && FINE_BARS.has(chosenInterval) ? '30m' : chosenInterval
   const [preset, setPreset] = useState<RangePreset | null>(RANGES[1])
   const [bars, setBars] = useState<Bar[]>([])
   const [hover, setHover] = useState<Bar | null>(null)
@@ -400,6 +405,8 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     )
   }, [fills])
 
+  const intervals = index ? INTERVALS.filter((iv) => !FINE_BARS.has(iv)) : INTERVALS
+
   const choosePreset = (p: RangePreset) => {
     setPreset(p)
     if (p.interval === interval) {
@@ -408,7 +415,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       const last = barsRef.current[barsRef.current.length - 1]?.[0]
       if (ts && last) ts.setVisibleRange({ from: rangeStart(p, last, sessionOpen) as UTCTimestamp, to: last as UTCTimestamp })
     } else {
-      setInterval_(p.interval)
+      setInterval_(index && FINE_BARS.has(p.interval) ? '30m' : p.interval)
     }
   }
 
@@ -463,7 +470,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             ))}
           </select>
           <select className="ctl" aria-label="Bar size" title="Bar size" value={interval} onChange={(e) => chooseInterval(e.target.value as Interval)}>
-            {INTERVALS.map((iv) => (
+            {intervals.map((iv) => (
               <option key={iv} value={iv}>
                 {INTERVAL_LABEL[iv].short}
               </option>
@@ -486,7 +493,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
             ))}
           </div>
           <div className="seg" role="group" aria-label="Bar size">
-            {INTERVALS.map((iv) => (
+            {intervals.map((iv) => (
               <button
                 key={iv}
                 className={interval === iv ? 'ctl active' : 'ctl'}

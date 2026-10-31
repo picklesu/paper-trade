@@ -150,6 +150,10 @@ body {
 .regime-volatile {
   color: var(--down);
 }
+.regime-shock {
+  color: var(--down);
+  font-weight: 600;
+}
 .conn {
   display: flex;
   align-items: center;

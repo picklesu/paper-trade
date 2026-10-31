@@ -104,6 +104,11 @@ export function syncRealPrices(): Promise<RealPricesStatus> {
   return send('/api/real-prices/sync', 'POST')
 }
 
+/** Start an uncertainty shock at the next open. */
+export function triggerShock(): Promise<{ day: string }> {
+  return send('/api/shock', 'POST')
+}
+
 /** FastAPI's `detail`: a message, or a list of validation errors like "qty: must be an integer". */
 function errorText(detail: unknown): string | null {
   if (typeof detail === 'string') return detail

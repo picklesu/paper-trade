@@ -1,5 +1,10 @@
 import type { SymbolInfo } from './types'
 
+/** An index is quoted and charted but never traded and has no options (the VIX). */
+export function isIndex(symbol: string): boolean {
+  return symbol === 'VIX'
+}
+
 /** Symbols matching what was typed, best first: the exact symbol, symbols starting
  *  with it, names with a word starting with it, then names containing it. */
 export function matchSymbols(symbols: SymbolInfo[], text: string, limit = 8): SymbolInfo[] {

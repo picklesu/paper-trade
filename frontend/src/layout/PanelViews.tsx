@@ -9,6 +9,7 @@ import { QuoteDetail } from '../components/QuoteDetail'
 import { Watchlist } from '../components/Watchlist'
 import { fetchExpirations } from '../lib/api'
 import { parseOcc, pickExpiration } from '../lib/options'
+import { isIndex } from '../lib/symbols'
 import type { Expiration } from '../lib/types'
 import { useAppData } from './appDataContext'
 import { useLayout } from './layoutContext'
@@ -82,7 +83,9 @@ export function TicketView() {
   const fill = ticketRequest && parseOcc(ticketRequest.symbol)?.underlying === selected ? ticketRequest : null
   return (
     <Frame label="Order Entry">
-      {quote && tick ? <OrderTicket quote={quote} account={tick.account} orders={orders} chain={chain} fill={fill} /> : waiting}
+      {isIndex(selected) ? (
+        <Placeholder text={`${selected} is an index: it is quoted and charted, but it can't be traded.`} />
+      ) : quote && tick ? <OrderTicket quote={quote} account={tick.account} orders={orders} chain={chain} fill={fill} /> : waiting}
     </Frame>
   )
 }
@@ -104,7 +107,9 @@ export function OptionsView({ api }: IDockviewPanelProps) {
   const current = chain && chain.symbol === selected && chain.expiration === expiration ? chain : null
   return (
     <Frame label="Options">
-      {tick ? (
+      {isIndex(selected) ? (
+        <Placeholder text={`${selected} is an index: it has no options.`} />
+      ) : tick ? (
         <OptionChain
           symbol={selected}
           expirations={expirations}

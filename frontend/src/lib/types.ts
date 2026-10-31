@@ -27,6 +27,8 @@ export interface SymbolInfo {
   symbol: string
   name: string
   sector: string | null
+  /** False for an index such as the VIX: quoted and charted, never traded. */
+  tradable?: boolean
 }
 
 export interface Watchlist {
@@ -247,6 +249,10 @@ export interface TickMessage {
   type: 'tick'
   clock: ClockState
   regime: Regime
+  /** Extra volatility from an uncertainty shock in force (0: none), as a multiple of normal. */
+  shock?: number
+  /** A shock was triggered and begins at the next open. */
+  shock_pending?: boolean
   quotes: Quote[]
   account: Account
   /** The option chain this client subscribed to (null: no such expiration; absent: none asked for). */

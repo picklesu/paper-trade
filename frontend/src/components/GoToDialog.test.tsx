@@ -56,6 +56,18 @@ describe('GoToDialog', () => {
     expect(postedBody(fetchMock)).toEqual({ time: '2026-01-14T10:30', future: 'replay' })
   })
 
+  it('triggers an uncertainty shock after explaining it', async () => {
+    const fetchMock = mockFetch('none')
+    const onClose = vi.fn()
+    render(<GoToDialog clock={clock} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger an uncertainty shock…' }))
+    expect(screen.getByText(/volatility rises to 1.4 to 1.9 times/)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger it' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(fetchMock.mock.calls.find(([url, init]) => url === '/api/shock' && init?.method === 'POST')).toBeTruthy()
+  })
+
   it('going back asks to replay or generate a new future', async () => {
     const fetchMock = mockFetch('rewind')
     const onClose = vi.fn()

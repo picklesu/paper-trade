@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phase 8c (real historical start prices) is merged._
+_Last updated: 2026-10-31. Phase 8d (real daily data) is merged; 8e (replay the real past) is next, after the user has tested 8d._
 
 ## Where things stand
 
@@ -32,7 +32,8 @@ _Last updated: 2026-10-31. Phase 8c (real historical start prices) is merged._
 | Fix: the jump cap counted the whole distance, so after a rewind you couldn't jump forward again; it now counts only sessions not yet generated | Merged | #40 |
 | 8c. Real historical start prices from Tiingo (the user's request, after a jump to 2006 showed SPY at $757) | Merged | #41, #42 |
 | Fix: the clock's date shows the year | Merged | #43 |
-| 8d. Real daily data (Tiingo bars, FRED series) | **In review** | see below |
+| 8d. Real daily data (Tiingo bars split-adjusted, FRED series) | Merged; the user restarts to download it | #44 |
+| 8e. Replay the real past (next: ask the user to confirm before starting; it changes the engine's core) | **Not started** | — |
 
 `main` is clean and up to date with GitHub.
 
@@ -56,11 +57,11 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   symbols follow through the engine's betas and sector factors; training is an offline script that
   saves parameters in the repo (nothing trains at runtime); parameters fitted on the whole history
   have seen 2020 (fine for a simulator; the walk-forward checks use only earlier data).
-- *Steps:* **8d real daily data** (this PR) → **8e replay the real past** (engine conditions each
+- *Steps:* **8d real daily data** (merged, #44) → **8e replay the real past** (engine conditions each
   session's minute path on the real bar and volume; the 5-year history before a past start is real
   too; VIX and option prices follow from real volatility) → **8f the future model** (fit, start state
   from any date, "Generate a new future" uses it) → **8g walk-forward validation**.
-- **8d (in review):** `pricehistory.py` now stores `Bar`s (day, open, high, low, close, volume,
+- **8d (merged, #44):** `pricehistory.py` now stores `Bar`s (day, open, high, low, close, volume,
   dividend, split) in a `daily` table (the old `closes` table is dropped on start and its symbols are
   fetched again, about 0.5 MB each, 1 request per symbol, 40 in all), split-adjusted by
   `parse_bars` (a bar before a split is divided by the factor, its volume multiplied; checked on
@@ -74,9 +75,26 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   api.stlouisfed.org`); `_refusal` now says so instead of "rejected the API keys". Tests never read
   the Tiingo or FRED keys. Live check: AAPL and SPY bars and all ten FRED series fetched once
   (VIX 79.13 on 2008-10-24, the curve inverted in March 2007, recession flag on in April 2020).
+  Review changes: `Macro.latest(name, day)` applies publication lags (`LAG_DAYS`: UNRATE 35 days, CPIAUCSL 45,
+  USREC 365; market series 0; revisions ignored) so a start state never sees unpublished data; a failing
+  series is noted and the rest carry on (only `FetchStop`, a refusal for every series, stops the loop for
+  an hour); FRED's HTTP 400 for a bad key is a `FetchStop` saying to check `FRED_API_KEY`. Left as is:
+  the key rides in FRED's query string (required; errors never show the URL); the 40-symbol refetch;
+  rows are saved on the event loop (tens of ms per symbol).
   After merging, the user restarts; the app then downloads 40 symbols (Tiingo's allowance is 50 an
   hour: if it stops, it retries in an hour and keeps what it has) and the FRED series. A reset to the
   past is refused until the first symbol is saved.
+- **Next, 8e (not started; confirm with the user first):** the engine's `_skeleton` for a session before the
+  last real day should be conditioned on the real daily bars: each symbol's open (gap), high, low, close and
+  volume match the real bar, and only the minute/second path inside is drawn (a bridge through open, high,
+  low, close, as the seconds already are). Real daily returns carry the real cross-section, so the market and
+  sector factors need no separate fit. Open questions to settle then: how the dated news jumps and the
+  earnings/dividend models give way to real bars (real dividends are in `daily.dividend`); what
+  `backfill_iter`'s 5-year history becomes (real bars up to the start, no scaling); how `MODEL_VERSION` and
+  saved markets continue (`continue_older`); `generated_through`, rewinds and "new future" at a past date
+  (replay up to the last real day, then the model); symbols with no bars yet stay hidden (`listed_from`);
+  and option pricing's volatility ratio from real realized volatility. Check `scripts/bench_engine.py`
+  stays fast. Training for 8f uses `PriceHistory.bars` (SPY from 1993) and `Macro.series`.
 
 **Phase 8c (merged, #41):** going before the
 history used to reset the market at *today's* real prices (SPY at $757 in 2006). Now:
@@ -609,7 +627,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 316 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 343 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 
@@ -639,8 +657,8 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
 - No early closes (half days); one-off closures (e.g. national days of mourning) aren't modeled.
 - Options: model spreads and sizes; the American put price is an approximation (about 1% low at the money); the chain streams to the browser in
   full each tick for one expiration (fine at ~150 strikes).
-- Reset (going before the history) starts at the real closes of that date where Tiingo's history is
-  saved (8c, in progress), otherwise today's real price brought back by drift, otherwise the spec
+- Reset (going before the history) starts at the real (split-adjusted) closes of that date where Tiingo's
+  history is saved (8c, 8d), otherwise today's real price brought back by drift, otherwise the spec
   prices. The path from there is the sim's own, not the real one.
 - Five-year samples vary around the spec vol (persistent volatility); the average over many runs
   matches it.

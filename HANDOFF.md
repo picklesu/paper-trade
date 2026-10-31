@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phase 8d (real daily data) is merged; 8e (replay the real past) is next, after the user has tested 8d._
+_Last updated: 2026-10-31. Phase 8d (real daily data) and the on-request update are merged; 8e-1 (replay the real past) is merged; 8e-2 is next after the user tests._
 
 ## Where things stand
 
@@ -34,7 +34,8 @@ _Last updated: 2026-10-31. Phase 8d (real daily data) is merged; 8e (replay the 
 | Fix: the clock's date shows the year | Merged | #43 |
 | 8d. Real daily data (Tiingo bars split-adjusted, FRED series) | Merged; the user restarts to download it | #44 |
 | Update real history on request (fetch only new days; no automatic FRED refresh) | Merged | #46 |
-| 8e. Replay the real past (next: ask the user to confirm before starting; it changes the engine's core) | **Not started** | — |
+| 8e-1. Replay the real past: prices, volume, closures, dividends, backfill (the user approved the design and the 8e-1/8e-2 split) | Merged; the user restarts to test | #47 |
+| 8e-2. Volatility/options follow the real VIX; past earnings dates inferred | **Next** | — |
 
 `main` is clean and up to date with GitHub.
 
@@ -92,18 +93,35 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   left to the background fetch. A split among the new days makes it fetch that symbol's whole history again
   (earlier bars need re-adjusting). The old automatic daily FRED refresh is gone (`Macro.due` = never fetched).
   Store workers never touch SQLite: `last_day` is read on the loop thread and passed to `fetch_new`.
-  Status: `/api/real-prices` `history` has `newest` and `updated`. Backend 351, frontend 165.
-- **Next, 8e (not started; confirm with the user first):** the engine's `_skeleton` for a session before the
-  last real day should be conditioned on the real daily bars: each symbol's open (gap), high, low, close and
-  volume match the real bar, and only the minute/second path inside is drawn (a bridge through open, high,
-  low, close, as the seconds already are). Real daily returns carry the real cross-section, so the market and
-  sector factors need no separate fit. Open questions to settle then: how the dated news jumps and the
-  earnings/dividend models give way to real bars (real dividends are in `daily.dividend`); what
-  `backfill_iter`'s 5-year history becomes (real bars up to the start, no scaling); how `MODEL_VERSION` and
-  saved markets continue (`continue_older`); `generated_through`, rewinds and "new future" at a past date
-  (replay up to the last real day, then the model); symbols with no bars yet stay hidden (`listed_from`);
-  and option pricing's volatility ratio from real realized volatility. Check `scripts/bench_engine.py`
-  stays fast. Training for 8f uses `PriceHistory.bars` (SPY from 1993) and `Macro.series`.
+  Status: `/api/real-prices` `history` has `newest` and `updated`. Backend 365, frontend 165.
+- **8e-1 (built; the user approved the design and the split):** `market/realbars.py` `RealBars` (built at
+  startup by `main` from `PriceHistory`; the engine never touches the database) gives `day(d)` (a `RealDay`:
+  open/high/low/close/volume per symbol, `has` mask), `dividends`, `close_before`, `covers`, `closures()`.
+  `engine._generate` calls `_pin` after the minute highs/lows exist: a linear correction through anchors (real
+  open, the knots nearest the generated high and low, real close) keeps the generated noise in between; leftovers
+  are folded into the real range; the minutes holding the extremes are set exactly; `_pin_volume` scales minute
+  volumes to the real day total. Bad bars are sanitized (high ≥ open/close, low ≤). Checked on the real data:
+  185 symbol-days in 2008–09 match exactly; 5-year backfill 4.0 s. `real_through` (saved in the market state)
+  is the newest real day *when the market began*: a market keeps its data, `engine.use_real` (called after
+  Update real history) only reaches markets started from then on (reset, sync, rewinds before the history).
+  `MODEL_VERSION` 6; `from_state` raises `ValueError` if the bars it replayed are gone, and `load_market` then
+  continues as a new market. Backfill starts from the real close before the first history day (symbols
+  without bars still start at 1.0 and are scaled; real symbols scale 1.0). Calendar: `calendar.set_overrides`
+  (closed, opened) from `RealBars.closures()`, applied once at startup (real closures found: 1985-09-27, 1994-04-27,
+  2001-09-11..14, 2004-06-11, 2007-01-02, 2012-10-29/30, 2018-12-05; rule holidays that traded, such as MLK Day
+  before 1998, are opened); new closures after an update need a restart. Dividends: `engine.dividend` and
+  `engine.dividend_schedule(col, start, end, spot)` give the real ex-dates and amounts on replayed days (broker
+  payments, option escrow and early-assignment use them), the spec's model otherwise.
+  **Known approximations (8e-2 and 8f deal with them):** the sim's own earnings/news/crash/dividend draws still feed the
+  GARCH variance on replayed days (the pinned path overrides the prices only); option pricing's volatility,
+  VIX and earnings calendar are still the model's; the order of a day's high and low is the generated one; the
+  last real bar is re-fetched by an update, so its session regenerates if fetched before the close.
+- **Next, 8e-2 (approved):** market GARCH variance from the real `VIXCLS` (previous close) and each symbol's own
+  variance filtered from its real returns, shocks off on real days (the variance state carries the stress), so
+  the sim VIX and option prices follow real volatility; the state at the last real day is what 8f starts from;
+  infer past earnings days from real volume spikes plus big gaps (volume ≥ about 2.5× its 20-day median and a
+  large gap, on the quarterly pattern) so option IV crushes land on the right days; stop the sim's draws feeding
+  the variance on replayed days. Then 8f (the future model) and 8g (walk-forward checks).
 
 **Phase 8c (merged, #41):** going before the
 history used to reset the market at *today's* real prices (SPY at $757 in 2006). Now:
@@ -636,7 +654,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     2 ticks a second. Make it incremental only if that changes. Tests use a recording stand-in for
     the library (`src/test/lightweight-charts.mock.ts`, set up in `src/test/setup.ts`).
   - Vite proxies `/api` and `/ws` to `localhost:8000`.
-- Tests: backend 343 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
+- Tests: backend 365 (pytest), frontend 164 (Vitest + Testing Library; jsdom gets a ResizeObserver stand-in for dockview). CI runs them on every PR.
 
 ## Decisions already made (don't reopen without a reason)
 

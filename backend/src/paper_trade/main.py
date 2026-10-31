@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,28 +9,37 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from paper_trade import __version__, macro, optiondata, pricehistory, realprices
 from paper_trade.api import health, market, stream, trading, watchlists
+from paper_trade.market import calendar
 from paper_trade.market.clock import SimClock
+from paper_trade.market.realbars import RealBars, RealBarsGone
 from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.market.symbols import SYMBOLS
 from paper_trade.store import Store
 
+log = logging.getLogger(__name__)
+
 # backend/paper_trade.db unless PAPER_TRADE_DB says otherwise.
 DEFAULT_DB = Path(__file__).resolve().parents[2] / "paper_trade.db"
 
 
-def load_market(store: Store, seed: int) -> tuple[SimClock, MarketEngine]:
-    """Resume the saved market where it left off, or start one at the current time."""
+def load_market(store: Store, seed: int, real: RealBars | None = None) -> tuple[SimClock, MarketEngine]:
+    """Resume the saved market where it left off, or start one at the current time.
+    With `real` bars, a new market replays them up to their newest day."""
     state = store.get("market")
     if state is None:
         clock = SimClock()
-        return clock, MarketEngine(start=clock.now(), seed=seed)
+        return clock, MarketEngine(start=clock.now(), seed=seed, real=real)
     if "starts" not in state:  # saved separately since it can be large
         state = {**state, "starts": store.get("market_starts", {})}
     if state.get("model") == MODEL_VERSION and state.get("symbols") == [s.symbol for s in SYMBOLS]:
-        engine = MarketEngine.from_state(state)
+        try:
+            engine = MarketEngine.from_state(state, real=real)
+        except RealBarsGone:
+            log.warning("the saved market replayed real bars that are no longer saved: continuing as a new market")
+            engine = MarketEngine.continue_older(state, real=real)
     else:
-        engine = MarketEngine.continue_older(state)
+        engine = MarketEngine.continue_older(state, real=real)
     saved = store.get("clock", {})
     clock = SimClock(start=engine.time, speed=saved.get("speed", 1), paused=saved.get("paused", False))
     return clock, engine
@@ -39,11 +49,14 @@ def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         store = Store(db_path or os.environ.get("PAPER_TRADE_DB") or DEFAULT_DB)
-        clock, engine = load_market(store, seed)
+        history = pricehistory.PriceHistory(store, pricehistory.tiingo_key())
+        # The real bars (saved at an earlier start) set the calendar's one-off closures and are replayed.
+        bars = RealBars.from_history(history, [s.symbol for s in SYMBOLS])
+        calendar.set_overrides(*(bars.closures() if bars else (set(), set())))
+        clock, engine = load_market(store, seed, bars)
         creds = realprices.credentials()
         real = realprices.RealPrices(store, creds)
         option_data = optiondata.OptionData(store, creds, optiondata.av_key())
-        history = pricehistory.PriceHistory(store, pricehistory.tiingo_key())
         economy = macro.Macro(store, macro.fred_key())
         svc = MarketService(clock, engine, store, history_days, real, option_data, history, economy)
         app.state.market = svc

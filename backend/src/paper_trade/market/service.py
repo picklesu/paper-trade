@@ -28,6 +28,7 @@ from paper_trade.market import options
 from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
 from paper_trade.macro import Macro
 from paper_trade.pricehistory import PriceHistory, back_cast
+from paper_trade.market.realbars import RealBars
 from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, FetchStop, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
@@ -667,6 +668,8 @@ class MarketService:
                     if n := sum(1 for d, _ in rows if d > before):
                         economy[series] = n
                     await asyncio.sleep(MACRO_PAUSE_SECONDS)
+            if added and hist:  # markets started from now on replay the new days too
+                self.engine.use_real(RealBars.from_history(hist, self.symbols))
             if not (hist and hist.fetched) and not (macro and macro.fetched):
                 problems.append("nothing is downloaded yet, so there is nothing to update; the first download runs in the background")
             self.store.set("real_history_updated", {"at": datetime.now(UTC).isoformat(), "problems": problems})

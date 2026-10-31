@@ -72,8 +72,17 @@ def nyse_holidays(year: int) -> list[date]:
     return [d for d in days if d is not None]
 
 
-HOLIDAYS = frozenset(d for y in range(FIRST_YEAR, LAST_YEAR + 1) for d in nyse_holidays(y))
+RULE_HOLIDAYS = frozenset(d for y in range(FIRST_YEAR, LAST_YEAR + 1) for d in nyse_holidays(y))
+HOLIDAYS = RULE_HOLIDAYS
 _CAL = np.busdaycalendar(holidays=sorted(HOLIDAYS))
+
+
+def set_overrides(closed: set[date] = frozenset(), opened: set[date] = frozenset()) -> None:  # type: ignore[assignment]
+    """One-off closures the rules don't know (`closed`) and rule holidays the market
+    traded (`opened`), found from real data. Call before any market is built."""
+    global HOLIDAYS, _CAL
+    HOLIDAYS = frozenset((RULE_HOLIDAYS | set(closed)) - set(opened))
+    _CAL = np.busdaycalendar(holidays=sorted(HOLIDAYS))
 
 
 def is_trading_day(d: date) -> bool:

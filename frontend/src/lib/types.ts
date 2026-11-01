@@ -64,7 +64,7 @@ export interface Halt {
   resumes: string | null
 }
 
-export type Regime = 'calm' | 'correction' | 'crisis'
+export type Regime = 'calm' | 'choppy' | 'crisis'
 
 /** An option contract, as the server describes it. */
 export interface OptionInfo {

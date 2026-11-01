@@ -21,7 +21,7 @@ from paper_trade.market.calendar import (
     trading_days_between,
 )
 from paper_trade.market.clock import SPEEDS, SimClock
-from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
+from paper_trade.market.engine import HISTORY_DAYS, SHOCK_VISIBLE, MarketEngine
 from paper_trade.market.history import History
 from paper_trade.market import options
 from paper_trade.optiondata import OptionData
@@ -134,7 +134,7 @@ class MarketService:
             "type": "tick",
             "clock": self.clock_state(),
             "regime": self.engine.regime,
-            "shock": round(self.engine.shock, 2),
+            "shock": round(self.engine.shock, 2) if self.engine.shock >= SHOCK_VISIBLE else 0.0,
             "shock_pending": self.engine.shock_pending,
             "halt": self.engine.halt,
             "quotes": self.listed_quotes(),

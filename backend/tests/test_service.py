@@ -248,3 +248,13 @@ def test_a_full_queue_keeps_orders_and_watchlists_messages() -> None:
     kinds = [m["type"] for m in drain(q)]
     assert kinds.count("orders") == 2 and kinds.count("watchlists") == 2
     assert kinds.count("tick") == q.maxsize - 4
+
+
+def test_the_tick_shows_a_shock_only_while_it_matters(monkeypatch) -> None:
+    from paper_trade.market.engine import SHOCK_VISIBLE
+
+    svc, _ = make_service()
+    monkeypatch.setattr(MarketEngine, "shock", property(lambda self: SHOCK_VISIBLE / 2))
+    assert svc.snapshot()["shock"] == 0.0  # smaller than a typical week's change in volatility
+    monkeypatch.setattr(MarketEngine, "shock", property(lambda self: 0.3))
+    assert svc.snapshot()["shock"] == 0.3

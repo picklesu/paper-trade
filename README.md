@@ -26,7 +26,16 @@ APCA_API_SECRET_KEY=your-secret
 ALPHAVANTAGE_API_KEY=your-key        # optional: real earnings dates
 ```
 
-Then `./server.sh restart`. Real daily history (Tiingo) and economic series (FRED) are downloaded once and saved; **Go to… → Real data… → Update real history** adds the newest days, and **Last real day** jumps to the close of the newest real day the current market replays.
+The app itself never calls an API. Fetch and save real data from the terminal when you want it:
+
+```bash
+./server.sh update            # everything below
+./server.sh update prices     # Alpaca's latest quotes
+./server.sh update history    # Tiingo daily bars + FRED economic series (first run downloads everything; later runs add only the new days)
+./server.sh update options    # Alpaca option chains, fitted once they're about a day old; the interest rate
+```
+
+Then `./server.sh restart` to load it. In **Go to…**, **Last real day** jumps to the close of the newest real day the current market replays. Tiingo's free plan allows 50 requests an hour (a first download of all 40 symbols is 40); if a run hits a limit it stops and keeps what it fetched, so run it again later.
 
 ## Run
 

@@ -5,13 +5,12 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Literal
 
 import numpy as np
 
 from paper_trade.market.calendar import (
-    MARKET_TZ,
     SESSION_SECONDS,
     market_day,
     previous_trading_day,
@@ -25,11 +24,10 @@ from paper_trade.market.clock import SPEEDS, SimClock
 from paper_trade.market.engine import HISTORY_DAYS, MarketEngine
 from paper_trade.market.history import History
 from paper_trade.market import options
-from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
+from paper_trade.optiondata import OptionData
 from paper_trade.macro import Macro
 from paper_trade.pricehistory import PriceHistory, back_cast
-from paper_trade.market.realbars import RealBars
-from paper_trade.realprices import FetchError, FetchStop, RealPrices
+from paper_trade.realprices import RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 from paper_trade.watchlists import Watchlists
@@ -37,16 +35,9 @@ from paper_trade.watchlists import Watchlists
 TICK_SECONDS = 0.5
 SAVE_EVERY_TICKS = 10  # save the market state about every 5 seconds while it runs
 MAX_JUMP_DAYS = 252 * 25  # about 20 s of generation for 20 years
-PRICE_HISTORY_PAUSE_SECONDS = 2  # between a symbol's price history requests
-PRICE_HISTORY_CHECK_SECONDS = 600  # between looks for symbols still to fetch
-MACRO_PAUSE_SECONDS = 1  # between FRED requests (it allows 120 a minute)
-MACRO_CHECK_SECONDS = 3600  # between looks for series due
 PROGRESS_EVERY_DAYS = 5
 SPARKLINE_MINUTES = 5
 SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
-REAL_PRICES_CHECK_SECONDS = 60  # the refresher's longest wait before checking the schedule
-CALIBRATION_BATCH = 10  # symbols calibrated between repricing chains during an option-data fit
-OPTION_DATA_CHECK_SECONDS = 600  # the option sync's longest wait before checking the schedule
 
 log = logging.getLogger(__name__)
 
@@ -91,22 +82,14 @@ class MarketService:
         self.timeline = 0
         self.history_days = history_days
         self.real = real
-        self._real_task: asyncio.Task | None = None
         self.watchlists = Watchlists(store, self.symbols + list(self.indexes))
         self._stats: tuple[tuple, dict] | None = None
         self._chains: dict[tuple[str, date], tuple[tuple, dict]] = {}
-        self._real_lock = asyncio.Lock()
         self.option_data = option_data
         self.price_history = price_history
-        self._history_prices_task: asyncio.Task | None = None
         self.macro = macro
-        self._macro_task: asyncio.Task | None = None
         self.calibrations = options.calibrations(option_data.saved, options.RATE if option_data.rate is None else option_data.rate) if option_data else {}
         self._calibration_version = 0
-        self._option_task: asyncio.Task | None = None
-        self._option_lock = asyncio.Lock()
-        self._history_update = asyncio.Lock()
-        self._prices_tried = asyncio.Event()  # the option sync starts after the first price fetch
         self.broker.calibration = self.calibration
         self.broker.listed = self.is_listed
 
@@ -418,25 +401,6 @@ class MarketService:
     def symbols(self) -> list[str]:
         return [s.symbol for s in self.engine.specs]
 
-    def real_prices_status(self) -> dict:
-        if self.real is None:
-            status = {"configured": False, "available": 0, "total": len(self.symbols)}
-        else:
-            status = self.real.status(self.symbols)
-        history = self.price_history.status(self.symbols) if self.price_history else {"configured": False, "available": 0, "total": len(self.symbols)}
-        macro = self.macro.status() if self.macro else {"configured": False, "available": 0, "total": 0}
-        updated = self.store.get("real_history_updated")
-        return status | {
-            "options": self.option_data_status(),
-            "history": history | {"newest": self.price_history.newest_day() if self.price_history else None, "updated": updated},
-            "macro": macro,
-        }
-
-    def option_data_status(self) -> dict:
-        if self.option_data is None:
-            return {"configured": False, "calibrated": 0, "total": len(self.symbols)}
-        return self.option_data.status(self.symbols)
-
     def real_start_prices(self, day: date | None = None) -> np.ndarray | None:
         """Previous closes for a new market starting on `day`: the real closes of the
         day before where they're saved, otherwise today's real price brought back by
@@ -457,239 +421,6 @@ class MarketService:
                 price = real.price if before is None else back_cast(real.price, real.as_of, min(before, real.as_of), spec.drift)
             prices.append(spec.price if price is None else price)
         return np.array(prices)
-
-    async def refresh_real_prices(self, older_than: timedelta | None = timedelta(0)) -> None:
-        """Fetch every symbol's real price (one request, in a worker thread) unless
-        the last fetch was more recent than `older_than` (None: unless the
-        refresher's schedule says it's not time yet). A fetch already running is
-        waited for instead of repeated."""
-        if not (self.real and self.real.configured):
-            return
-        async with self._real_lock:
-            due = self.real.seconds_until_refresh() <= 0 if older_than is None else self.real.stale(older_than)
-            if not due:
-                return
-            symbols = self.symbols
-            self.real.attempt()
-            try:
-                prices = await asyncio.to_thread(self.real.fetch, symbols)
-            except Exception as e:
-                self.real.fetch_failed(str(e))
-                log.warning("fetching real prices failed: %s", e)
-            else:
-                self.real.record(prices, symbols)
-
-    async def _refresh_real_prices(self) -> None:
-        """Keep the saved real prices recent, in the background: a fetch at startup,
-        then on the schedule. Waits are checked against the wall clock at least
-        every minute, as a sleeping computer pauses asyncio's clock."""
-        assert self.real
-        try:
-            await self.refresh_real_prices()
-        finally:
-            self._prices_tried.set()
-        while True:
-            await asyncio.sleep(min(REAL_PRICES_CHECK_SECONDS, self.real.seconds_until_refresh()))
-            await self.refresh_real_prices(None)
-
-    # ----- real option data --------------------------------------------------------
-
-    def _calibrations_changed(self) -> None:
-        assert self.option_data
-        self.calibrations = options.calibrations(self.option_data.saved, options.RATE if self.option_data.rate is None else self.option_data.rate)
-        self._calibration_version += 1
-
-    async def refresh_option_data(self) -> None:
-        """Fetch and calibrate every symbol whose real option chain is due (see
-        OptionData.due), one at a time in a worker thread, saving each as it's
-        done. A failed request stops the sync (it's tried again later; symbols
-        done so far are kept)."""
-        od = self.option_data
-        if not (od and od.configured):
-            return
-        async with self._option_lock:
-            symbols = od.due(self.symbols)
-            if not symbols:
-                return
-            assert od.creds
-            od.attempt(len(symbols))
-            try:
-                now = datetime.now(UTC)
-                try:
-                    bars = await asyncio.to_thread(fetch_bars, self.symbols, od.creds, now)
-                except FetchError as e:
-                    od.failed(f"daily bars: {e}")
-                    return
-                earnings = None
-                if od.earnings_key:
-                    today = now.astimezone(MARKET_TZ).date()
-                    try:
-                        earnings = await asyncio.to_thread(fetch_earnings, od.earnings_key, self.symbols, today)
-                    except FetchError as e:
-                        od.note(f"earnings dates: {e}")
-                context = Context(now, bars, earnings)
-                for n, symbol in enumerate(symbols, start=1):
-                    try:
-                        summary = await asyncio.to_thread(summarize, symbol, od.creds, context, datetime.now(UTC))
-                    except FetchError as e:
-                        od.failed(f"{symbol}'s options: {e}")
-                        log.warning("fetching %s's options failed: %s", symbol, e)
-                        return
-                    except Exception:
-                        # Keep it from being retried straight away; the defaults apply.
-                        log.exception("calibrating %s's options failed", symbol)
-                        summary = {"symbol": symbol, "fetched": datetime.now(UTC).isoformat(), "shape": None}
-                        od.note(f"{symbol}'s options couldn't be calibrated")
-                    od.record(symbol, summary)
-                    # Chains reprice as symbols come in, in batches (each change
-                    # reloads every Options panel's expirations).
-                    if n % CALIBRATION_BATCH == 0:
-                        self._calibrations_changed()
-            finally:
-                od.finished()
-                self._calibrations_changed()
-
-    async def refresh_rate(self) -> None:
-        """Fetch the real 3-month Treasury yield about daily; without it (or a key)
-        the fixed rate stays."""
-        od = self.option_data
-        if not (od and od.rate_due() and od.earnings_key):
-            return
-        try:
-            day, rate = await asyncio.to_thread(fetch_treasury_rate, od.earnings_key)
-        except FetchError as e:
-            od.note(f"interest rate: {e}")
-            return
-        od.record_rate(day, rate)
-        self._calibrations_changed()
-
-    async def _refresh_price_history(self) -> None:
-        """Fetch each symbol's daily closes once, slowly, in the background."""
-        hist = self.price_history
-        assert hist
-        while True:
-            for symbol in hist.due(self.symbols):
-                try:
-                    bars = await asyncio.to_thread(hist.fetch, symbol)
-                except FetchStop as e:
-                    hist.failed(str(e))
-                    log.warning("fetching %s's price history failed: %s", symbol, e)
-                    break
-                except FetchError as e:
-                    hist.skip(symbol, str(e))
-                    log.warning("no price history for %s: %s", symbol, e)
-                    continue
-                except Exception as e:
-                    hist.failed(f"fetching price history failed ({e})")
-                    log.exception("fetching price history failed")
-                    break
-                hist.record(symbol, bars)
-                await asyncio.sleep(PRICE_HISTORY_PAUSE_SECONDS)
-            await asyncio.sleep(PRICE_HISTORY_CHECK_SECONDS)
-
-    async def update_real_history(self) -> dict:
-        """On request: fetch only the days since each symbol's last saved bar and each
-        FRED series' last value. Symbols and series not yet fetched are left to the
-        background fetch. Returns what was added (and any problems)."""
-        hist, macro = self.price_history, self.macro
-        if (hist is None or not hist.configured) and (macro is None or not macro.configured):
-            raise ValueError("Add TIINGO_API_KEY and FRED_API_KEY to backend/.env to fetch real history")
-        if self._history_update.locked():
-            raise BusyError("the real history is already being updated")
-        async with self._history_update:
-            added, problems = {}, []
-            if hist and hist.configured:
-                for symbol in sorted(hist.fetched & set(self.symbols)):
-                    last = hist.last_day(symbol)
-                    if last is None:
-                        continue
-                    split = next((b.split for b in hist.bars(symbol, last, last)), 1.0)
-                    try:
-                        bars, whole = await asyncio.to_thread(hist.fetch_new, symbol, last, split)
-                    except FetchStop as e:
-                        hist.failed(str(e))
-                        problems.append(str(e))
-                        break
-                    except FetchError as e:
-                        problems.append(f"{symbol}: {e}")
-                        continue
-                    try:
-                        n = hist.record_new(symbol, bars, whole)
-                    except FetchError as e:
-                        problems.append(str(e))
-                        continue
-                    if n:
-                        added[symbol] = n
-                    await asyncio.sleep(PRICE_HISTORY_PAUSE_SECONDS)
-            economy = {}
-            if macro and macro.configured:
-                for series in sorted(macro.fetched):
-                    before = macro.last_day(series)
-                    if before is None:
-                        continue
-                    try:
-                        rows = await asyncio.to_thread(macro.fetch_new, series, before)
-                    except FetchStop as e:
-                        macro.failed(str(e))
-                        problems.append(str(e))
-                        break
-                    except FetchError as e:
-                        problems.append(f"{series}: {e}")
-                        continue
-                    macro.record(series, rows)
-                    if n := sum(1 for d, _ in rows if d > before):
-                        economy[series] = n
-                    await asyncio.sleep(MACRO_PAUSE_SECONDS)
-            if (added or economy) and hist:  # markets started from now on replay the new days (and VIX) too
-                self.engine.use_real(RealBars.from_history(hist, self.symbols, macro))
-            if not (hist and hist.fetched) and not (macro and macro.fetched):
-                problems.append("nothing is downloaded yet, so there is nothing to update; the first download runs in the background")
-            self.store.set("real_history_updated", {"at": datetime.now(UTC).isoformat(), "problems": problems})
-            return {"prices": added, "macro": economy, "problems": problems}
-
-    async def _refresh_macro(self) -> None:
-        """Fetch FRED's series once (one request each). Later days come from
-        `update_real_history`."""
-        macro = self.macro
-        assert macro
-        while True:
-            problems = []
-            for series in macro.due():
-                try:
-                    rows = await asyncio.to_thread(macro.fetch, series)
-                except FetchStop as e:
-                    macro.failed(str(e))
-                    log.warning("fetching FRED's %s failed: %s", series, e)
-                    break
-                except FetchError as e:  # this series only: carry on with the others
-                    problems.append(f"{series}: {e}")
-                    log.warning("fetching FRED's %s failed: %s", series, e)
-                    continue
-                except Exception as e:
-                    problems.append(f"{series}: fetching failed ({e})")
-                    log.exception("fetching FRED data failed")
-                    continue
-                macro.record(series, rows)
-                await asyncio.sleep(MACRO_PAUSE_SECONDS)
-            if problems:  # recorded after the loop: a success clears the status's error
-                macro.note("; ".join(problems))
-            await asyncio.sleep(MACRO_CHECK_SECONDS)
-
-    async def _refresh_option_data(self) -> None:
-        """Keep calibrations about a day old, in the background, after the first
-        price fetch (they share Alpaca's rate limit)."""
-        assert self.option_data
-        await self._prices_tried.wait()
-        while True:
-            try:
-                await self.refresh_rate()
-                await self.refresh_option_data()
-            except Exception as e:
-                # Keep the schedule going: try again after RETRY_AFTER.
-                log.exception("syncing option data failed")
-                self.option_data.failed(f"the option sync failed ({e})")
-            wait = self.option_data.seconds_until_due(self.symbols)
-            await asyncio.sleep(min(OPTION_DATA_CHECK_SECONDS, max(5.0, wait)))
 
     # ----- trading -----------------------------------------------------------------
 
@@ -758,32 +489,8 @@ class MarketService:
     def start(self) -> None:
         self.start_history()
         self._task = asyncio.create_task(self._run())
-        if self.real and self.real.configured:
-            self._real_task = asyncio.create_task(self._refresh_real_prices())
-        if self.option_data and self.option_data.configured:
-            self._option_task = asyncio.create_task(self._refresh_option_data())
-        if self.price_history and self.price_history.configured:
-            self._history_prices_task = asyncio.create_task(self._refresh_price_history())
-        if self.macro and self.macro.configured:
-            self._macro_task = asyncio.create_task(self._refresh_macro())
 
     async def stop(self) -> None:
-        if self._macro_task:
-            self._macro_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._macro_task
-        if self._history_prices_task:
-            self._history_prices_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._history_prices_task
-        if self._option_task:
-            self._option_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._option_task
-        if self._real_task:
-            self._real_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._real_task
         if self._history_task:
             self._history_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

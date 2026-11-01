@@ -185,104 +185,12 @@ describe('GoToDialog: real data', () => {
     vi.unstubAllGlobals()
   })
 
-  function mockReal(status: object) {
-    const fn = vi.fn(async () => ({ ok: true, json: async () => status }))
-    vi.stubGlobal('fetch', fn)
-    return fn
-  }
-
-  it('has no sync option any more', () => {
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    expect(screen.queryByRole('button', { name: /Sync/ })).not.toBeInTheDocument()
-  })
-
-  it('says how far the real prices run, with the year, and updates on request', async () => {
-    const status = { configured: true, available: 40, total: 40, newest: '2026-10-30', history: { configured: true, available: 40, total: 40, newest: '2026-10-30' }, macro: { configured: true, available: 10, total: 10 } }
-    const fn = vi.fn(async (url: string, init?: RequestInit) => ({
-      ok: true,
-      json: async () => (url === '/api/real-history/update' && init?.method === 'POST' ? { prices: { SPY: 2, QQQ: 2 }, macro: { DFF: 2 }, problems: [], status } : status),
-    }))
+  it('has no sync or real data option: the app never fetches (./server.sh update does)', () => {
+    const fn = vi.fn()
     vi.stubGlobal('fetch', fn)
     render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText('Real prices through Oct 30, 2026 (40 of 40 symbols).')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Update real history' }))
-    expect(await screen.findByText('Added 4 days of prices (2 symbols) and 2 economic readings.')).toBeInTheDocument()
-  })
-
-  it('says how far option prices are fitted to real options', async () => {
-    const options = { configured: true, earnings: false, calibrated: 38, total: 40, oldest: '2026-10-29', newest: '2026-10-30', last_error: "XLF's options: Alpaca says too many requests" }
-    mockReal({ configured: true, available: 40, total: 40, newest: '2026-10-30', history: { configured: true, available: 40, total: 40, newest: '2026-10-30' }, options })
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText(/fitted to real options for 38 of 40 symbols \(Oct 29–Oct 30\), again daily/)).toBeInTheDocument()
-    expect(screen.getByText(/Real earnings dates need an Alpha Vantage key/)).toBeInTheDocument()
-    expect(screen.getByText("Option data: XLF's options: Alpaca says too many requests")).toBeInTheDocument()
-  })
-
-  it('shows option fitting in progress', async () => {
-    const options = { configured: true, earnings: true, calibrated: 3, total: 40, running: { done: 12, total: 40 } }
-    mockReal({ configured: true, available: 0, total: 40, options })
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText(/fitting to real options, 12 of 40 symbols done/)).toBeInTheDocument()
-    expect(screen.queryByText(/Alpha Vantage/)).not.toBeInTheDocument()
-  })
-
-  it('shows the last quote fetch problem', async () => {
-    mockReal({ configured: true, available: 0, total: 40, last_error: 'Alpaca rejected the API keys (401).' })
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText(/The last real quote fetch failed: Alpaca rejected the API keys/)).toBeInTheDocument()
-  })
-
-  it('ignores a status that arrives after Back', async () => {
-    let answer: (v: unknown) => void = () => {}
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => new Promise((resolve) => (answer = resolve))),
-    )
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
-    answer({ ok: true, json: async () => ({ configured: true, available: 5, total: 40 }) })
-    await new Promise((r) => setTimeout(r, 0))
-    expect(screen.getByLabelText('Market date and time')).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Real data' })).not.toBeInTheDocument()
-  })
-
-  it('explains when there are no keys', async () => {
-    mockReal({ configured: false, available: 0, total: 40 })
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText(/Real prices need TIINGO_API_KEY/)).toBeInTheDocument()
-    expect(screen.getByText(/Economic series need FRED_API_KEY/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Update real history' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
-    expect(screen.getByLabelText('Market date and time')).toBeInTheDocument()
-  })
-
-  it('names the missing key when only one source is set up', async () => {
-    mockReal({ configured: true, available: 0, total: 40, macro: { configured: true, available: 10, total: 10 } })
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText(/Real prices need TIINGO_API_KEY/)).toBeInTheDocument()
-    expect(screen.getByText('Economic series: 10 of 10.')).toBeInTheDocument()
-  })
-
-  it('says when real prices are configured but not downloaded', async () => {
-    mockReal({ configured: true, available: 0, total: 40, history: { configured: true, available: 0, total: 40 }, macro: { configured: true, available: 0, total: 10 } })
-    render(<GoToDialog clock={clock} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText('Real prices: none downloaded yet.')).toBeInTheDocument()
-  })
-
-  it("explains that newer days only reach markets started later, in the real past too", async () => {
-    mockReal({ configured: true, available: 40, total: 40, history: { configured: true, available: 40, total: 40, newest: '2026-11-02' }, macro: { configured: true, available: 10, total: 10 } })
-    render(<GoToDialog clock={{ ...clock, time: '2008-10-10T19:30:00Z', real_through: '2026-10-30' }} onClose={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Real data…' }))
-    expect(await screen.findByText('Real prices through Nov 2, 2026 (40 of 40 symbols).')).toBeInTheDocument()
-    expect(screen.getByText(/replays real days through Oct 30, 2026\. Newer days apply to markets started later/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Sync|Real data/ })).not.toBeInTheDocument()
+    expect(fn).not.toHaveBeenCalled()
   })
 
   it('"Last real day" jumps the input to the close of the market\'s newest real day', () => {

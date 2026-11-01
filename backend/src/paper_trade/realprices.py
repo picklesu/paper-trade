@@ -36,8 +36,6 @@ URL = "https://data.alpaca.markets/v2/stocks/snapshots"
 KEY_ID_NAME = "APCA_API_KEY_ID"
 SECRET_NAME = "APCA_API_SECRET_KEY"
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
-REFRESH_EVERY = timedelta(minutes=15)  # the background refresher's interval
-RETRY_AFTER = timedelta(minutes=1)  # after a failed fetch (offline at startup, a refusal)
 
 log = logging.getLogger(__name__)
 
@@ -195,33 +193,10 @@ class RealPrices:
             }
         return self._saved
 
-    def last_attempt(self) -> datetime | None:
-        at = self.store.get("real_prices_attempt")
-        return datetime.fromisoformat(at) if at else None
-
-    def stale(self, age: timedelta) -> bool:
-        """Whether the last fetch (successful or not) was longer than `age` ago."""
-        last = self.last_attempt()
-        return last is None or self._now() - last >= age
-
-    def seconds_until_refresh(self) -> float:
-        """Until the background refresher's next fetch: REFRESH_EVERY after the
-        last fetch, or RETRY_AFTER if it failed."""
-        last = self.last_attempt()
-        if last is None:
-            return 0
-        wait = RETRY_AFTER if self.store.get("real_prices_retry") else REFRESH_EVERY
-        return max(0.0, (last + wait - self._now()).total_seconds())
-
     def fetch(self, symbols: list[str]) -> dict[str, tuple[float, date]]:
         """One request (safe to run in a worker thread: it doesn't touch the store)."""
         assert self.creds
         return (self._fetch or fetch_snapshots)(symbols, self.creds)
-
-    def attempt(self) -> None:
-        """A fetch is about to be made."""
-        self.store.set("real_prices_attempt", self._now().isoformat())
-        self.store.set("real_prices_retry", False)
 
     def record(self, prices: dict[str, tuple[float, date]], symbols: list[str]) -> None:
         fetched = self._now()
@@ -236,11 +211,6 @@ class RealPrices:
             self.failed("Alpaca sent no prices")
         elif missing:
             self.failed(f"no price for {', '.join(missing)}")
-
-    def fetch_failed(self, message: str) -> None:
-        """The fetch got nothing: show why, and retry soon."""
-        self.failed(message)
-        self.store.set("real_prices_retry", True)
 
     def failed(self, message: str) -> None:
         self.store.set("real_prices_error", {"message": message, "at": self._now().isoformat()})
@@ -258,5 +228,4 @@ class RealPrices:
             "newest": max(days).isoformat() if days else None,
             "fetched": max(fetched).isoformat() if fetched else None,
             "last_error": error["message"] if error else None,
-            "refresh_minutes": round(REFRESH_EVERY.total_seconds() / 60),
         }

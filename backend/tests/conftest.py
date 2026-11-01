@@ -1,7 +1,7 @@
 import pytest
 
 from paper_trade import macro, optiondata, pricehistory, realprices
-from paper_trade.market import service
+from paper_trade import update
 
 
 @pytest.fixture(autouse=True)
@@ -22,4 +22,6 @@ def no_real_prices(monkeypatch):
     monkeypatch.setattr(optiondata, "fetch_earnings", refuse)
     monkeypatch.setattr(optiondata, "fetch_treasury_rate", refuse)
     for name in ("fetch_bars", "fetch_earnings", "fetch_treasury_rate", "summarize"):  # imported by name there
-        monkeypatch.setattr(service, name, refuse)
+        monkeypatch.setattr(update, name, refuse)
+    monkeypatch.setattr(update, "PRICE_HISTORY_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(update, "MACRO_PAUSE_SECONDS", 0)

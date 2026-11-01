@@ -47,12 +47,14 @@ the same folder. Installed dependencies are platform-specific:
 - **New dependencies:** pin an exact version at least 2 weeks old (check `npm view <pkg> time`),
   and pin transitive packages from the same project with `overrides` if a caret range would
   pull in something newer (dockview does this).
+- **Never run `./server.sh update` or `python -m paper_trade.update` in the sandbox.** `backend/.env` there holds live API keys, so it spends real, rate-limited requests (Tiingo: 50 an hour). The app itself never fetches; tests never read the keys.
 - CI (`.github/workflows/ci.yml`) must be green before merging: `gh pr checks <N> --watch`.
 
 ## Commands
 
 ```bash
 ./server.sh on|off|restart|status|logs   # user's one-command control (background)
+./server.sh update [prices|history|options]   # the only thing that fetches real data (user runs it on their Mac)
 cd backend && uv run pytest              # backend tests
 cd frontend && npm test                  # frontend tests (from a mirror if in the sandbox)
 cd frontend && npm run build && npx oxlint --deny-warnings   # CI treats warnings as errors

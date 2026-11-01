@@ -6,11 +6,12 @@ import numpy as np
 import pytest
 
 from paper_trade import optiondata as od
-from paper_trade.market import service as service_module
+from paper_trade import update
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
+from paper_trade.market.symbols import SYMBOLS
 from paper_trade.realprices import Credentials, FetchError
 from paper_trade.store import Store
 
@@ -133,69 +134,89 @@ def summary(symbol: str, at: datetime) -> dict:
     }
 
 
-def make_service(monkeypatch, fail_on: str | None = None, broken: str | None = None):
-    engine = MarketEngine(START)
-    store = Store(":memory:")
-    data = od.OptionData(store, KEYS, "av-key")
-    svc = MarketService(SimClock(start=START, real_time=lambda: 0.0), engine, store, history_days=5, option_data=data)
+NAMES = [spec.symbol for spec in SYMBOLS]
+
+
+def make_data(monkeypatch, fail_on: str | None = None, broken: str | None = None):
+    data = od.OptionData(Store(":memory:"), KEYS, "av-key")
     calls = []
 
     def summarize(symbol, creds, ctx, now):
         calls.append(symbol)
-        assert svc.option_data.progress is not None and ctx.earnings == {}
+        assert data.progress is not None and ctx.earnings == {}
         if symbol == fail_on:
             raise FetchError("Alpaca says too many requests; the next refresh will try again.")
         if symbol == broken:
             raise ValueError("bad data")
         return summary(symbol, now)
 
-    monkeypatch.setattr(service_module, "fetch_bars", lambda symbols, creds, now: {})
-    monkeypatch.setattr(service_module, "fetch_earnings", lambda key, symbols, today: {})
-    monkeypatch.setattr(service_module, "summarize", summarize)
-    return svc, calls
+    monkeypatch.setattr(update, "fetch_bars", lambda symbols, creds, now: {})
+    monkeypatch.setattr(update, "fetch_earnings", lambda key, symbols, today: {})
+    monkeypatch.setattr(update, "summarize", summarize)
+    monkeypatch.setattr(update, "fetch_treasury_rate", lambda key: (date(2026, 10, 28), 0.0418))
+    return data, calls
 
 
-def test_sync_calibrates_each_symbol_and_reprices_chains(monkeypatch) -> None:
-    svc, calls = make_service(monkeypatch)
+def restarted(data: od.OptionData) -> MarketService:
+    """The app after a restart: it reads what the update saved."""
+    return MarketService(SimClock(start=START, real_time=lambda: 0.0), MarketEngine(START), data.store, history_days=5, option_data=od.OptionData(data.store, KEYS))
+
+
+def test_update_calibrates_each_symbol_and_a_restart_reprices_chains(monkeypatch) -> None:
+    data, calls = make_data(monkeypatch)
+    svc = restarted(data)
     expiry = date.fromisoformat(svc.option_expirations("AAPL")[3]["date"])
     before = svc.option_chain("AAPL", expiry)
     assert before["calibration"]["as_of"] is None
-    asyncio.run(svc.refresh_option_data())
-    assert calls == svc.symbols
+    assert update.update_options(data, NAMES, say=lambda m: None) == []
+    assert calls == NAMES
+    svc = restarted(data)
     after = svc.option_chain("AAPL", expiry)
     assert after["calibration"]["as_of"] == "2026-10-30" and after["calibration"]["premium"] == 1.2
     assert after["call"]["iv"] != before["call"]["iv"]
-    status = svc.real_prices_status()["options"]
-    assert status["calibrated"] == len(svc.symbols) and status["running"] is None and status["earnings"]
+    status = data.status(NAMES)
+    assert status["calibrated"] == len(NAMES) and status["running"] is None and status["earnings"]
+    assert data.rate == pytest.approx(0.0418)  # the interest rate was fetched too
     calls.clear()
-    asyncio.run(svc.refresh_option_data())  # nothing due
+    update.update_options(data, NAMES, say=lambda m: None)  # nothing due
     assert calls == []
 
 
-def test_a_failed_request_stops_the_sync_and_keeps_what_was_done(monkeypatch) -> None:
-    svc, calls = make_service(monkeypatch, fail_on="XLF")
-    asyncio.run(svc.refresh_option_data())
+def test_a_failed_request_stops_the_update_and_keeps_what_was_done(monkeypatch) -> None:
+    data, calls = make_data(monkeypatch, fail_on="XLF")
+    problems = update.update_options(data, NAMES, say=lambda m: None)
     assert calls == ["SPY", "QQQ", "IWM", "XLF"]
-    assert set(svc.option_data.saved) == {"SPY", "QQQ", "IWM"}
-    status = svc.option_data_status()
-    assert "XLF's options: Alpaca says too many requests" in status["last_error"]
-    assert svc.option_data.seconds_until_due(svc.symbols) == pytest.approx(od.RETRY_AFTER.total_seconds(), abs=5)
+    assert set(data.saved) == {"SPY", "QQQ", "IWM"}
+    assert "XLF's options: Alpaca says too many requests" in problems[0]
+    assert "XLF's options: Alpaca says too many requests" in data.status(NAMES)["last_error"]
+    svc = restarted(data)
     assert svc.calibration("SPY").calibrated and not svc.calibration("XLF").calibrated
 
 
 def test_a_symbol_that_cant_be_calibrated_keeps_the_defaults_until_the_next_day(monkeypatch) -> None:
-    svc, calls = make_service(monkeypatch, broken="GLD")
-    asyncio.run(svc.refresh_option_data())
-    assert calls == svc.symbols and "GLD" in svc.option_data.saved
-    assert not svc.calibration("GLD").calibrated and svc.option_data.due(svc.symbols) == []
-    assert "GLD's options couldn't be calibrated" in svc.option_data_status()["last_error"]
+    data, calls = make_data(monkeypatch, broken="GLD")
+    problems = update.update_options(data, NAMES, say=lambda m: None)
+    assert calls == NAMES and "GLD" in data.saved
+    assert not restarted(data).calibration("GLD").calibrated and data.due(NAMES) == []
+    assert "GLD's options couldn't be calibrated" in problems[0]
+
+
+def test_an_unexpected_error_in_the_daily_bars_is_a_failure_to_show(monkeypatch) -> None:
+    data, _ = make_data(monkeypatch)
+
+    def boom(*args):
+        raise FetchError("Alpaca says no")
+
+    monkeypatch.setattr(update, "fetch_bars", boom)
+    problems = update.update_options(data, NAMES, say=lambda m: None)
+    assert problems == ["daily bars: Alpaca says no"] and "daily bars" in data.status(NAMES)["last_error"]
 
 
 def test_without_keys_nothing_is_fetched() -> None:
     data = od.OptionData(Store(":memory:"), None)
+    assert "APCA_API_KEY_ID" in update.update_options(data, NAMES, say=lambda m: None)[0]
     svc = MarketService(SimClock(start=START, real_time=lambda: 0.0), MarketEngine(START), data.store, 5, None, data)
-    asyncio.run(svc.refresh_option_data())
-    assert svc.option_data_status()["configured"] is False and svc.calibrations == {}
+    assert svc.calibrations == {}
 
 
 def test_saved_calibrations_are_used_after_a_restart(monkeypatch) -> None:
@@ -216,27 +237,6 @@ def test_rate_limit_headers_ignore_case() -> None:
     limit.update({"x-ratelimit-remaining": "3", "X-RateLimit-Reset": "9e9"})
     limit.wait()
     assert slept == [60]
-
-
-def test_an_unexpected_error_keeps_the_schedule(monkeypatch) -> None:
-    svc, _ = make_service(monkeypatch)
-
-    def boom(*args):
-        raise KeyError("t")
-
-    monkeypatch.setattr(service_module, "fetch_bars", boom)
-    monkeypatch.setattr(service_module, "OPTION_DATA_CHECK_SECONDS", 0.01)
-    monkeypatch.setattr(od, "RETRY_AFTER", od.timedelta(seconds=0))
-
-    async def run() -> None:
-        svc._prices_tried.set()
-        task = asyncio.create_task(svc._refresh_option_data())
-        await asyncio.sleep(0.05)
-        assert not task.done()  # still scheduled
-        task.cancel()
-
-    asyncio.run(run())
-    assert "the option sync failed" in svc.option_data_status()["last_error"]
 
 
 def test_treasury_rate_is_the_latest_value_made_continuous() -> None:

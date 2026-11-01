@@ -26,7 +26,7 @@ APCA_API_SECRET_KEY=your-secret
 ALPHAVANTAGE_API_KEY=your-key        # optional: real earnings dates
 ```
 
-Then `./server.sh restart`. Real daily history (Tiingo) and economic series (FRED) are downloaded once and saved; **Go to… → Real data… → Update real history** adds the newest days, and **Latest real day** jumps to the close of the newest one.
+Then `./server.sh restart`. Real daily history (Tiingo) and economic series (FRED) are downloaded once and saved; **Go to… → Real data… → Update real history** adds the newest days, and **Last real day** jumps to the close of the newest real day the current market replays.
 
 ## Run
 

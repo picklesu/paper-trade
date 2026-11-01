@@ -29,7 +29,7 @@ from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnin
 from paper_trade.macro import Macro
 from paper_trade.pricehistory import PriceHistory, back_cast
 from paper_trade.market.realbars import RealBars
-from paper_trade.realprices import STATUS_REFRESH_AFTER, FetchError, FetchStop, RealPrices
+from paper_trade.realprices import FetchError, FetchStop, RealPrices
 from paper_trade.store import Store
 from paper_trade.trading.broker import Broker
 from paper_trade.watchlists import Watchlists
@@ -45,8 +45,7 @@ PROGRESS_EVERY_DAYS = 5
 SPARKLINE_MINUTES = 5
 SUPERSEDED = {"tick", "progress", "history"}  # messages a later one of the same kind replaces
 REAL_PRICES_CHECK_SECONDS = 60  # the refresher's longest wait before checking the schedule
-STATUS_FETCH_WAIT_SECONDS = 5  # the Sync dialog's status waits this long for a fetch
-CALIBRATION_BATCH = 10  # symbols calibrated between repricing chains during a sync
+CALIBRATION_BATCH = 10  # symbols calibrated between repricing chains during an option-data fit
 OPTION_DATA_CHECK_SECONDS = 600  # the option sync's longest wait before checking the schedule
 
 log = logging.getLogger(__name__)
@@ -479,9 +478,6 @@ class MarketService:
                 log.warning("fetching real prices failed: %s", e)
             else:
                 self.real.record(prices, symbols)
-
-    async def refresh_real_prices_if_stale(self) -> None:
-        await self.refresh_real_prices(STATUS_REFRESH_AFTER)
 
     async def _refresh_real_prices(self) -> None:
         """Keep the saved real prices recent, in the background: a fetch at startup,

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { Modal } from './Modal'
 import { fetchRealPrices, goto, previewGoto, triggerShock, updateRealHistory, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
-import { calendarDate, calendarDateYear, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
+import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
 interface Props {
@@ -109,7 +109,7 @@ export function GoToDialog({ clock, onClose }: Props) {
   return (
     <Modal labelledBy="goto-title" onClose={onClose}>
       {real !== null ? (
-        <RealData status={real} onBack={closeData} />
+        <RealData status={real} onBack={closeData} realThrough={clock.real_through} />
       ) : shockView ? (
         <>
           <h2 id="goto-title">Trigger an uncertainty shock?</h2>
@@ -121,7 +121,7 @@ export function GoToDialog({ clock, onClose }: Props) {
           </p>
           {inRealPast && (
             <p className="warn-text">
-              This date is in the real past (the real daily prices run through {calendarDateYear(clock.real_through ?? '')}), where
+              This date is in the real past (the real daily prices run through {calendarDate(clock.real_through ?? '', true)}), where
               prices follow what really happened, so a shock can't be added. Go to a later date first.
             </p>
           )}
@@ -201,8 +201,8 @@ export function GoToDialog({ clock, onClose }: Props) {
               </button>
             ))}
             {clock.real_through && (
-              <button className="ctl" title={`The close of ${calendarDateYear(clock.real_through)}`} onClick={() => setValue(`${clock.real_through}T15:59`)}>
-                Latest real day
+              <button className="ctl" title={`The close of ${calendarDate(clock.real_through, true)}`} onClick={() => setValue(`${clock.real_through}T15:59`)}>
+                Last real day
               </button>
             )}
           </div>
@@ -261,14 +261,13 @@ function OptionSync({ status }: { status: OptionDataStatus | undefined }) {
 }
 
 /** Real daily history is fetched once; this fetches only the days since, when asked. */
-function RealHistory({ status: initial }: { status: RealPricesStatus }) {
+function RealHistory({ status: initial, realThrough }: { status: RealPricesStatus; realThrough?: string | null }) {
   const [status, setStatus] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const history = status.history
   const macro = status.macro
-  if (!history?.configured && !macro?.configured) return null
 
   const update = async () => {
     setBusy(true)
@@ -293,13 +292,24 @@ function RealHistory({ status: initial }: { status: RealPricesStatus }) {
   return (
     <div className="option-sync">
       <p>
-        {history?.configured && history.newest ? `Real prices through ${calendarDateYear(history.newest)}` : 'Real prices: not downloaded yet'}
-        {history?.configured && ` (${history.available} of ${history.total} symbols`}
-        {macro?.configured && `${history?.configured ? '; ' : ' ('}${macro.available} of ${macro.total} economic series`}
-        {')'}.
+        {history?.configured
+          ? history.newest
+            ? `Real prices through ${calendarDate(history.newest, true)} (${history.available} of ${history.total} symbols).`
+            : 'Real prices: none downloaded yet.'
+          : 'Real prices need TIINGO_API_KEY in backend/.env (then restart the server).'}
+      </p>
+      <p>
+        {macro?.configured
+          ? `Economic series: ${macro.available} of ${macro.total}.`
+          : 'Economic series need FRED_API_KEY in backend/.env (then restart the server).'}
       </p>
       <p className="muted">History is downloaded once; Update adds only the days since.</p>
-      <button className="btn" disabled={busy} onClick={update}>
+      {realThrough && history?.newest && history.newest > realThrough && (
+        <p className="muted">
+          This market replays real days through {calendarDate(realThrough, true)}. Newer days apply to markets started later.
+        </p>
+      )}
+      <button className="btn" disabled={busy || (!history?.configured && !macro?.configured)} onClick={update}>
         {busy ? 'Updating…' : 'Update real history'}
       </button>
       {result && <p className={failed ? 'warn-text' : 'muted'}>{result}</p>}
@@ -308,7 +318,7 @@ function RealHistory({ status: initial }: { status: RealPricesStatus }) {
 }
 
 /** What real data is saved, how to bring in newer days, and how option prices stand. */
-function RealData({ status, onBack }: { status: RealPricesStatus | 'loading'; onBack: () => void }) {
+function RealData({ status, onBack, realThrough }: { status: RealPricesStatus | 'loading'; onBack: () => void; realThrough?: string | null }) {
   const back = (
     <button className="btn" onClick={onBack}>
       Back
@@ -323,18 +333,10 @@ function RealData({ status, onBack }: { status: RealPricesStatus | 'loading'; on
       </>
     )
   }
-  const hasHistory = !!status.history?.configured || !!status.macro?.configured
   return (
     <>
       <h2 id="goto-title">Real data</h2>
-      {hasHistory ? (
-        <RealHistory status={status} />
-      ) : (
-        <p>
-          Real daily prices need free API keys in <code>backend/.env</code>: <code>TIINGO_API_KEY</code> for prices and{' '}
-          <code>FRED_API_KEY</code> for economic series. Restart the server after adding them.
-        </p>
-      )}
+      <RealHistory status={status} realThrough={realThrough} />
       {status.last_error && <p className="warn-text">The last real quote fetch failed: {status.last_error}</p>}
       <OptionSync status={status.options} />
       <div className="dialog-actions">{back}</div>

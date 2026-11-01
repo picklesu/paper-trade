@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed (cleanup PR: Go to… → Real data… holds Update real history and the option-fit status; a Latest real day shortcut was added). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
+_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed (cleanup PR: Go to… → Real data… holds Update real history and the option-fit status; a Last real day shortcut was added). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
 
 ## Where things stand
 
@@ -103,7 +103,7 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   volumes to the real day total. Bad bars are sanitized (high ≥ open/close, low ≤). Checked on the real data:
   185 symbol-days in 2008–09 match exactly; 5-year backfill 4.0 s. `real_through` (saved in the market state)
   is the newest real day *when the market began*: a market keeps its data, `engine.use_real` (called after
-  Update real history) only reaches markets started from then on (reset, sync, rewinds before the history).
+  Update real history) only reaches markets started from then on (reset, rewinds before the history).
   `MODEL_VERSION` 8 (7 in 8e-2, 6 in 8e-1); `from_state` raises `ValueError` if the bars it replayed are gone, and `load_market` then
   continues as a new market. Backfill starts from the real close before the first history day (symbols
   without bars still start at 1.0 and are scaled; real symbols scale 1.0). Calendar: `calendar.set_overrides`

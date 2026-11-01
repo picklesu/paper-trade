@@ -1186,11 +1186,11 @@ class MarketEngine:
         halts: list[tuple[int, int, int]] = []
         noted: list[tuple[int, int, int]] = []
         if self._spy is not None:
-            found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy])
+            found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy], BREAKER_LAST_MINUTE if real_day is None else _M)
             if real_day is None:
                 halts = found
             elif day >= BREAKER_RULE_FROM and real_day.has[self._spy]:
-                noted = found  # real prices aren't frozen; the breaker is only marked (when in the day is the generated path's)
+                noted = found  # real prices aren't frozen; the breaker is only marked (the time of day is the generated path's, so the 3:25 PM cutoff doesn't apply)
         if halts:  # a market-wide halt: every price freezes where it stood, then trading resumes
             open_, high, low, close = open_.copy(), high.copy(), low.copy(), close.copy()
             for first, resume, _ in halts:
@@ -1278,7 +1278,7 @@ class MarketEngine:
         return sk
 
     @staticmethod
-    def _halts(prev_log: float, spy_low: np.ndarray) -> list[tuple[int, int, int]]:
+    def _halts(prev_log: float, spy_low: np.ndarray, last_minute: int = BREAKER_LAST_MINUTE) -> list[tuple[int, int, int]]:
         """The circuit-breaker halts of a session from SPY's minute lows (log prices) and its
         previous close: (first halted minute, minute trading resumes, level). A level is
         crossed once; one crossed while trading is open halts from the next minute."""
@@ -1290,7 +1290,7 @@ class MarketEngine:
                 break
             k = m + int(hit[0])
             last = level == len(BREAKER_LEVELS) - 1
-            if not last and k >= BREAKER_LAST_MINUTE:  # too late in the session for a pause: only the last level counts
+            if not last and k >= last_minute:  # too late in the session for a pause: only the last level counts
                 level = len(BREAKER_LEVELS) - 1
                 continue
             first = k + 1
@@ -1324,10 +1324,12 @@ class MarketEngine:
         opened = session_open(day)
         for real, found in ((False, sk.halts), (True, sk.noted_halts)):
             for first, resume, level in found:
+                if real and resume >= _M:  # a real day never closed early: the estimate is a pause like the others
+                    resume = min(first + HALT_MINUTES, _M)
                 out.append(
                     {
                         "start": int((opened + timedelta(minutes=first)).timestamp()),
-                        "resume": None if resume >= _M else int((opened + timedelta(minutes=resume)).timestamp()),
+                        "resume": None if resume >= _M and not real else int((opened + timedelta(minutes=min(resume, _M))).timestamp()),
                         "level": level,
                         "estimated": real,
                     }

@@ -124,7 +124,7 @@ export function haltMarkers(bars: Bar[], halts: { start: number; resume: number 
       if (bars[mid][0] <= h.start) lo = mid
       else hi = mid - 1
     }
-    const text = h.resume === null ? `Halt L${h.level} (closed)` : `Halt L${h.level}`
+    const text = h.resume === null && !h.estimated ? `Halt L${h.level} (closed)` : `Halt L${h.level}`
     out.push({ time: bars[lo][0], text: h.estimated ? `${text} est.` : text })
   }
   return out.sort((a, b) => a.time - b.time)

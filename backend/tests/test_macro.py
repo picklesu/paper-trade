@@ -44,7 +44,8 @@ def test_series_are_fetched_once_and_a_failure_is_shown() -> None:
     now[0] += timedelta(days=3)
     assert "DFF" not in macro.due()  # later days come only on request
     macro.failed("down")
-    assert macro.status()["last_error"] == "down" and "DFF" not in macro.due()
+    assert macro.status()["last_error"] == "down"
+    assert macro.due() == [s for s in SERIES if s != "DFF"]  # a failure holds nothing back
 
 
 def test_the_update_saves_each_series_and_stops_on_a_refusal() -> None:

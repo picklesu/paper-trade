@@ -341,7 +341,8 @@ class OptionData:
         return [s for s in symbols if s not in saved or now - datetime.fromisoformat(saved[s]["fetched"]) >= REFRESH_AFTER]
 
     def attempt(self) -> None:
-        self.store.set("option_sync", {"attempt": self._now().isoformat(), "error": None})
+        """A sync begins: clear the last problem (and the old attempt/retry fields)."""
+        self.store.set("option_sync", {"error": None})
 
     def record(self, symbol: str, summary: dict) -> None:
         saved = self.saved

@@ -79,6 +79,7 @@ class Macro:
         self._fetch_since = fetch_since
         self._now = now
         self._db: sqlite3.Connection = store.connection
+        store.delete("macro_retry")  # the app no longer waits out a rate limit
         self._db.execute("CREATE TABLE IF NOT EXISTS macro (series TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, day))")
 
     @property
@@ -123,7 +124,7 @@ class Macro:
         self.store.set("macro_error", {"message": message, "at": self._now().isoformat()})
 
     def failed(self, message: str) -> None:
-        self.store.set("macro_error", {"message": message, "at": self._now().isoformat()})
+        self.note(message)
 
     def series(self, name: str, start: date | None = None, end: date | None = None) -> list[tuple[date, float]]:
         rows = self._db.execute(

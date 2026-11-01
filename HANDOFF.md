@@ -188,7 +188,7 @@ history used to reset the market at *today's* real prices (SPY at $757 in 2006).
   once from Tiingo (`TIINGO_API_KEY` in `backend/.env`, already added by the user; one request per symbol,
   `columns=date,close`, about 160 KB) into a `closes` table (symbol, day, close; unadjusted for later splits).
   `price_on(symbol, day, drift)` gives the close on or before `day`, or, before the symbol's first close,
-  that close brought back by the symbol's drift (`back_cast`). After a failure it waits an hour (`close_history_retry`).
+  that close brought back by the symbol's drift (`back_cast`).
 - `MarketService._refresh_price_history` is the background task (2 s between symbols, stops on any error);
   `real_start_prices(day)` builds the previous closes for a reset: real close, else today's real price
   brought back by drift, else the spec price (None if nothing real at all). `/api/real-prices` has
@@ -467,7 +467,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     thread) under a lock, so a second caller waits instead of fetching again (the symbol list is
     captured before the request). The background task fetches at startup, then
     `seconds_until_refresh` decides: 15 minutes after the last fetch, or 1 minute after a failed
-    one (`real_prices_retry`); it checks the wall clock at least every minute, since a sleeping Mac
+    one; it checks the wall clock at least every minute, since a sleeping Mac
     pauses asyncio's clock. GET `/api/real-prices` (the Real data dialog) fetches first when the last
     fetch is over a minute old, waiting at most 5s (the fetch carries on, shielded). The old "Sync to latest real prices" (`sync_real_prices`, `engine.reanchor`, POST
     `/api/real-prices/sync`) was removed once real history replay made it redundant. New markets (going back

@@ -110,6 +110,7 @@ class PriceHistory:
         self._fetch_since = fetch_since
         self._now = now
         self._db: sqlite3.Connection = store.connection
+        store.delete("daily_history_retry")  # the app no longer waits out a rate limit
         self._first_days: dict[str, date | None] = {}
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS daily (symbol TEXT NOT NULL, day TEXT NOT NULL, open REAL NOT NULL, high REAL NOT NULL, "

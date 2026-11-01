@@ -113,6 +113,7 @@ def test_schedule_and_status() -> None:
     assert status["calibrated"] == 1 and status["newest"] == "2026-10-30"
     data.failed("Alpaca says too many requests")
     assert data.status(["A", "B"])["last_error"] == "Alpaca says too many requests"
+    assert data.due(["A", "B"]) == []  # a failure changes nothing else
     clock.t += od.REFRESH_AFTER
     assert data.due(["A", "B"]) == ["A", "B"]
 

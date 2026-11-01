@@ -69,6 +69,7 @@ from paper_trade.market.calendar import (
     snap,
 )
 from paper_trade.market.realbars import RealBars, RealBarsGone, RealDay
+from paper_trade.market.regime import STATES, RegimeParams, load_params
 from paper_trade.market.symbols import SYMBOLS, SymbolSpec
 
 TRADING_DAYS_PER_YEAR = 252
@@ -96,7 +97,9 @@ NEWS_SIZE = 2.5
 # Selloffs: about CRASHES_PER_YEAR times a year the market factor gaps down at the
 # open by CRASH_MIN plus an exponential amount averaging CRASH_EXTRA (each symbol
 # by its beta).
-CRASHES_PER_YEAR = 1.0
+CRASHES_PER_YEAR = 1.0  # on average; the regime scales it (CRASH_BY_STATE)
+STATE_LEVEL_ADJ = (0.95, 0.95, 1.8)  # measured over seeds x 30 years: a crisis is short, so its variance falls short of the fitted level
+CRASH_BY_STATE = (0.3, 1.2, 4.0)  # selloff odds relative to the average in calm / correction / crisis
 CRASH_MIN = 0.015
 CRASH_EXTRA = 0.015
 # Uncertainty shocks (Bloom 2009): volatility jumps by a multiple of its normal level
@@ -104,7 +107,7 @@ CRASH_EXTRA = 0.015
 # (waiting and seeing) and rebounds a little as the uncertainty clears.
 VIX_REGIME_WEIGHT = 0.25  # how much of the volatility regime in force shows in the index (it lasts hours)
 VIX_STEP_MINUTES = 30  # the volatility index is sampled every half hour (the stored bar size)
-SHOCKS_PER_YEAR = 0.3
+SHOCKS_PER_YEAR = 0.0  # random uncertainty shocks are now the regime model's crisis entries; the Trigger button still works
 SHOCK_EXCESS_MIN = 0.4  # the extra volatility at onset (0.65: about 1.65 times normal), between this
 SHOCK_EXCESS_RANGE = 0.5  # and this much more (it stacks with the regime and GARCH, so the index can reach 100)
 SHOCK_HALF_LIFE_DAYS = 60.0
@@ -132,7 +135,7 @@ GARCH_ALPHA, GARCH_GAMMA, GARCH_BETA = 0.02, 0.16, 0.88
 OWN_GARCH_ALPHA, OWN_GARCH_GAMMA, OWN_GARCH_BETA = 0.05, 0.05, 0.88
 # A safety net, rarely reached: a lower cap would clip the big shocks GARCH needs
 # to average 1, and bias volatility low.
-VARIANCE_RANGE = (0.25, 25.0)
+VARIANCE_RANGE = (0.03, 25.0)
 
 # Intraday volatility: OPEN_BURST and CLOSE_BURST extra at the open and close,
 # fading over BURST_DECAY of the session (about 12 minutes).
@@ -158,7 +161,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 8  # 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 9  # 9: the long-lived regime model (calm / correction / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -233,6 +236,9 @@ class _DayStart:
     variance: float = 1.0  # the market factor's variance for the session, as a multiple of normal
     own_variance: np.ndarray | None = None  # (N,) each symbol's own variance, likewise (None: all 1)
     shock: float = 0.0  # extra volatility from an uncertainty shock, as a multiple of normal (0: none)
+    state: int = 0  # the long-lived regime (index into regime.STATES) at the end of the previous session
+    z: np.ndarray | None = None  # the standardized macro features that drive its transitions
+    phase: int = 0  # sessions into the regime model's period (0: the next session may change state)
 
 
 @dataclass
@@ -254,6 +260,8 @@ class _Draws:
     minute_seed: np.ndarray  # (M,) the seed each minute's seconds are drawn from
     shock_u: float = 1.0  # an uncertainty shock begins if this uniform is small enough
     shock_size: float = 0.0  # uniform: how big
+    regime_u: float = 0.5  # picks the regime's next state
+    regime_z: np.ndarray | None = None  # unit normals for the macro features' next values
 
 
 @dataclass
@@ -275,6 +283,8 @@ class _Skeleton:
     next_start: _DayStart  # the following session's starting state
     shock: float = 0.0  # the uncertainty shock in force this session (extra volatility)
     shock_onset: bool = False  # it began at this session's open
+    state: int = 0  # the long-lived regime in force this session
+    variance: float = 1.0  # the market variance multiple in force at the open (the state's level included)
     vix: np.ndarray | None = None  # (14,) the volatility index at each half hour and the close (None: no SPY)
 
 
@@ -347,6 +357,22 @@ class MarketEngine:
         )
         mean_response = OWN_GARCH_ALPHA + OWN_GARCH_GAMMA / 2
         self._own_omega = np.maximum(1 - OWN_GARCH_BETA - mean_response * (1 + own_jump_shock), 0.01)
+
+        # The long-lived regime (calm / correction / crisis): its variance level, drift tilt
+        # and selloff odds, centered so the long-run averages stay (up to the hand-tuned
+        # STATE_LEVEL_ADJ, which lifts the average variance by about 7%).
+        self._macro: RegimeParams = load_params()
+        self._state_variance = self._macro.variance_multiple * np.array(STATE_LEVEL_ADJ)
+        crash_by = np.array(CRASH_BY_STATE)
+        self._state_crash = crash_by / float(self._macro.share @ crash_by)
+        # The fitted drifts are what prices did (log returns, after volatility drag and
+        # selloffs), and the engine takes both off again, so they are added back here. The
+        # tilts average to zero over the long-run shares, so each symbol keeps its spec's drift.
+        self._state_tilt = (
+            self._macro.drift_tilt
+            + 0.5 * MARKET_VOL**2 * (self._state_variance - float(self._macro.share @ self._state_variance))
+            + CRASHES_PER_YEAR * (CRASH_MIN + CRASH_EXTRA) * (self._state_crash - 1.0)
+        )
 
         self._p_switch = [1 - math.exp(-1 / (r[2] * 60)) for r in REGIMES]
         self._normal = next(i for i, r in enumerate(REGIMES) if r[0] == "normal")
@@ -528,8 +554,8 @@ class MarketEngine:
 
     @property
     def regime(self) -> str:
-        """The regime that drove the latest price move (the gap's at the open)."""
-        return REGIMES[self._regime_index()][0]
+        """The market's long-lived regime today (calm, correction or crisis)."""
+        return STATES[self._skeleton(market_day(self._time)).state]
 
     @property
     def shock(self) -> float:
@@ -556,8 +582,9 @@ class MarketEngine:
         r = self._regime_index()
         own = start.own_variance if start.own_variance is not None else np.ones(len(self.specs))
         rho2 = self._rho**2
-        var = rho2 * start.variance * self._market_mults[r] ** 2 + (1 - rho2) * own * self._own_mults[r] ** 2
-        return np.sqrt(var) * (1 + self._skeleton(day).shock)
+        sk = self._skeleton(day)
+        var = rho2 * sk.variance * self._market_mults[r] ** 2 + (1 - rho2) * own * self._own_mults[r] ** 2
+        return np.sqrt(var) * (1 + sk.shock)
 
     def option_inputs(self, day: date, col: int) -> "OptionInputs":
         """What a session's option prices for one symbol depend on besides its
@@ -578,7 +605,7 @@ class MarketEngine:
         own = 1.0 if start.own_variance is None else float(start.own_variance[col])
         rho2 = float(self._rho[col] ** 2)
         market_mults, own_mults = self._market_mults**regime_weight, self._own_mults**regime_weight
-        by_regime = np.sqrt(rho2 * start.variance * market_mults**2 + (1 - rho2) * own * own_mults**2) * (1 + sk.shock)
+        by_regime = np.sqrt(rho2 * sk.variance * market_mults**2 + (1 - rho2) * own * own_mults**2) * (1 + sk.shock)
         # Second s follows the regime of minute (s-1)//60; the open, the previous session's.
         regimes = np.concatenate([[start.regime], sk.regimes])
         return OptionInputs(
@@ -708,7 +735,7 @@ class MarketEngine:
                 close = self._real.close_before(i, day)
                 if close is not None:
                     prices[i] = close
-        start = _DayStart(prices, self._normal, self._vix_variance(previous_trading_day(day)) or 1.0)
+        start = self._start_at(prices, day)
         unit: dict[date, _DayStart] = {}
         try:
             while day < origin_day:
@@ -724,7 +751,7 @@ class MarketEngine:
         scale = self._starts[origin_day].prev_close / start.prev_close
         self._starts.update(
             {
-                d: _DayStart(s.prev_close * self.backfill_scale_on(d, scale), s.regime, s.variance, s.own_variance, s.shock)
+                d: _DayStart(s.prev_close * self.backfill_scale_on(d, scale), s.regime, s.variance, s.own_variance, s.shock, s.state, s.z, s.phase)
                 for d, s in unit.items()
             }
         )
@@ -839,6 +866,9 @@ class MarketEngine:
                     s.variance,
                     None if s.own_variance is None else s.own_variance.tolist(),
                     s.shock,
+                    s.state,
+                    None if s.z is None else s.z.tolist(),
+                    s.phase,
                 ]
                 for d, s in self._starts.items()
             },
@@ -891,8 +921,7 @@ class MarketEngine:
         if prices is None:
             prices = np.array([s.price for s in self.specs])
         origin_day = market_day(self.origin)
-        variance = self._vix_variance(previous_trading_day(origin_day))
-        self._starts: dict[date, _DayStart] = {origin_day: _DayStart(prices, self._normal, variance or 1.0)}
+        self._starts: dict[date, _DayStart] = {origin_day: self._start_at(prices, origin_day)}
         self._real_earnings: dict[int, list[date]] = {}
         self._shocks: dict[date, tuple[float, datetime]] = {}  # shocks the user triggered: onset session -> (excess, when)
         self._vix_inputs: dict[date, tuple[_Skeleton, OptionInputs]] = {}
@@ -903,6 +932,15 @@ class MarketEngine:
         self.backfilled = False
         # Bumped whenever session start states change, so savers can skip the large part.
         self.starts_version = getattr(self, "starts_version", 0) + 1
+
+    def _start_at(self, prices: np.ndarray, day: date) -> _DayStart:
+        """The state before `day`'s session: the real VIX's variance and the regime the real
+        past's filter found, else the calm level and a calm regime."""
+        before = previous_trading_day(day)
+        found = self._real.regime_on(min(before, self._real_through)) if self._real and self._real_through else None
+        state, z = found if found is not None else (0, None)
+        variance = self._vix_variance(before) or float(self._state_variance[state])
+        return _DayStart(prices, self._normal, variance, None, 0.0, state, z, 0)
 
     def _new_seed(self) -> int:
         self._seeds_used += 1
@@ -931,6 +969,7 @@ class MarketEngine:
                 u = rng.random((_M, 2))
                 crash_u, crash_size = rng.random(), rng.exponential()
                 shock_u, shock_size = rng.random(), rng.random()
+                regime_u, regime_z = rng.random(), rng.standard_normal(len(self._macro.center))
             elif j > k:
                 i = j - 1 - k
                 extremes[:, i] = 1 - rng.random((_M, 2))
@@ -954,6 +993,8 @@ class MarketEngine:
             np.full(_M, seed, dtype=np.int64),
             shock_u,
             shock_size,
+            regime_u,
+            regime_z,
         )
 
     def _draws(self, day: date) -> _Draws:
@@ -1045,8 +1086,25 @@ class MarketEngine:
         excess = 0.0 if real_day is not None else max(start.shock, onset)
         scale = 1 + excess
 
-        # Each symbol's loadings on them, today.
+        # The long-lived regime may change at the start of each period; a triggered shock
+        # sends the market into a crisis. It sets today's variance level, drift and selloff odds.
+        macro = self._macro
+        state = start.state
+        z = start.z if start.z is not None else np.zeros(len(macro.center))
         h = start.variance
+        if real_day is None:
+            if start.phase == 0:
+                p = macro.transition(z * macro.scale + macro.center)[state]
+                state = min(int(np.searchsorted(np.cumsum(p), draws.regime_u)), len(p) - 1)
+                z = np.clip(macro.level[state] + macro.persistence[state] * z + macro.noise[state] * draws.regime_z, -4.0, 4.0)
+            if forced is not None:  # the user's trigger begins this session
+                state = len(STATES) - 1
+            after_real = self._real_through is not None and previous_trading_day(day) <= self._real_through
+            if not after_real:  # the real VIX sets the first simulated day's variance as it is
+                h = float(np.clip(start.variance * self._state_variance[state] / self._state_variance[start.state], *VARIANCE_RANGE))
+        state_drift = 0.0 if real_day is not None else self._state_tilt[state]
+
+        # Each symbol's loadings on them, today.
         h_own = np.ones(n) if start.own_variance is None else start.own_variance
         market_load = self._rho * self._day_sd * math.sqrt(h) * scale
         own_sd = np.sqrt(1 - self._rho**2) * self._day_sd * np.sqrt(h_own) * scale
@@ -1061,7 +1119,7 @@ class MarketEngine:
             + market_load * paths[:, :1]
             + sector_load * paths[:, 1 + self._sector_of]
             + own_load * paths[:, 1 + k :]
-            + (self._drift + SHOCK_REBOUND * excess * self._beta) / (TRADING_DAYS_PER_YEAR * (_S - 1)) * t
+            + (self._drift + (SHOCK_REBOUND * excess + state_drift) * self._beta) / (TRADING_DAYS_PER_YEAR * (_S - 1)) * t
             + self._beta * tilt[knots][:, None]
             - 0.5 * (market_load**2 * v_market[knots][:, None] + own_sd**2 * v_own[knots][:, None])
         )
@@ -1069,7 +1127,7 @@ class MarketEngine:
         em = np.where(earnings_on, self._earnings_move, 0.0)
         own_jump = draws.earnings * em - 0.5 * em**2
         crash = 0.0
-        if draws.crash_u < CRASHES_PER_YEAR / TRADING_DAYS_PER_YEAR and real_day is None:
+        if draws.crash_u < CRASHES_PER_YEAR * self._state_crash[state] / TRADING_DAYS_PER_YEAR and real_day is None:
             crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
         if began:
             crash += SHOCK_DROP * onset
@@ -1125,7 +1183,7 @@ class MarketEngine:
         market_day_sd = MARKET_VOL / math.sqrt(TRADING_DAYS_PER_YEAR) * math.sqrt(h)
         shock = paths[-1, 0] - crash / market_day_sd
         response = GARCH_ALPHA + (GARCH_GAMMA if shock < 0 else 0.0)
-        h_next = float(np.clip(self._omega + GARCH_BETA * h + response * shock**2 * h, *VARIANCE_RANGE))
+        h_next = float(np.clip(self._omega * self._state_variance[state] + GARCH_BETA * h + response * shock**2 * h, *VARIANCE_RANGE))
         own_shock = self._sector_corr * paths[-1, 1 + self._sector_of] + np.sqrt(1 - self._sector_corr**2) * paths[-1, 1 + k :]
         own_shock += np.divide(own_jump, own_sd, out=np.zeros(n), where=own_sd > 0)
         own_response = OWN_GARCH_ALPHA + np.where(own_shock < 0, OWN_GARCH_GAMMA, 0.0)
@@ -1141,6 +1199,12 @@ class MarketEngine:
             if vix_h is not None:
                 h_next = vix_h
             h_own_next = self._filter_own(real_day, start, close[-1], own_sd, h_own, h_own_next)
+        next_state, next_z, next_phase = state, z, (start.phase + 1) % macro.period
+        if real_day is not None:  # the real past: the state the model's filter finds, from the real returns
+            found = self._real.regime_on(day) if self._real else None
+            if found is not None:
+                next_state, next_z = found
+            next_phase = 0
         shock_next = excess * _SHOCK_DECAY
         shock_next = shock_next if shock_next > 0.01 else 0.0
         sk = _Skeleton(
@@ -1157,9 +1221,11 @@ class MarketEngine:
             own_load=own_load,
             minute_seed=draws.minute_seed,
             # The close is the last price shown in the session (one second before 4:00).
-            next_start=_DayStart(np.exp(close[-1]), int(regimes[-1]), h_next, h_own_next, shock_next),
+            next_start=_DayStart(np.exp(close[-1]), int(regimes[-1]), h_next, h_own_next, shock_next, next_state, next_z, next_phase),
             shock=excess,
             shock_onset=began,
+            state=state,
+            variance=h,
         )
         sk.vix = self._vix_samples(sk, start)
         return sk
@@ -1485,7 +1551,10 @@ def _start_from(saved: list) -> _DayStart:
     variance = rest[0] if rest else 1.0
     own = rest[1] if len(rest) > 1 and rest[1] is not None else None
     shock = rest[2] if len(rest) > 2 else 0.0
-    return _DayStart(np.array(prev_close), regime, variance, None if own is None else np.array(own), shock)
+    state = rest[3] if len(rest) > 3 else 0
+    z = rest[4] if len(rest) > 4 else None
+    phase = rest[5] if len(rest) > 5 else 0
+    return _DayStart(np.array(prev_close), regime, variance, None if own is None else np.array(own), shock, state, None if z is None else np.array(z), phase)
 
 
 def _stationary(p_switch: list[float]) -> np.ndarray:

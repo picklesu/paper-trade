@@ -68,7 +68,7 @@ cd frontend && npm test
 | 8b | Dividends, American-style pricing, real interest rate, VIX-like index, uncertainty shocks | Done |
 | 8c–8d | Real historical start prices and real daily data (Tiingo, FRED) | Done |
 | 8e | Replay the real past; volatility and option prices follow the real VIX | Done |
-| 8f | A regime-switching future model fitted to the real history | |
+| 8f | A regime-switching future model (calm / correction / crisis) fitted to the real history | Done |
 | 8g | Walk-forward checks of the future model against what really happened | |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |

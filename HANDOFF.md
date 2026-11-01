@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-11-01. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed, and all fetching moved out of the app into `./server.sh update` (see "Fetching real data" under Pick up here). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.** The proposal was made on 2026-11-01 (three-state regime-switching model fitted offline on SPY plus macro series; start state from the real last day; fold in the simulated-VIX floor of about 11.8 vs real 9–10; 8f and 8g as separate PRs) and **is waiting on the user's answers to those three points.**_
+_Last updated: 2026-11-01. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed, and all fetching moved out of the app into `./server.sh update` (see "Fetching real data" under Pick up here). The user restarts and tests them; **8f (the future model; the user approved 3 states with macro-driven transitions, the VIX-floor fix, and 8g as a separate PR) is built on `phase-8f-future-model`.** 8f is built (PR open; see its entry under Pick up here); **8g (walk-forward validation) is next, a separate PR.**_
 
 ## Where things stand
 
@@ -40,6 +40,8 @@ _Last updated: 2026-11-01. Phases 8d (real daily data), the on-request update, 8
 | README trimmed to the essentials (feature summary, optional keys, run/test, condensed roadmap) | Merged | #51 |
 | Removed "Sync to latest real prices" (redundant with real-history replay); added the Last real day shortcut | Merged | #52 |
 | All API fetching moved out of the app into `./server.sh update [prices\|history\|options]` (`update.py`); Real data dialog, `/api/real-prices*`, `/api/real-history/*` and background fetch tasks removed | Merged; the user restarts and runs `update` when wanted | #53 |
+| Cleanup: fetch retry/progress bookkeeping removed | Merged | #55 |
+| 8f. The future model: a long-lived regime (calm / correction / crisis) sets the market's drift, volatility level and selloff odds; starts from the regime filtered from the real past; VIX floor now about 9.8; top bar shows the regime | PR open; the user restarts to test | |
 
 `main` is clean and up to date with GitHub.
 
@@ -80,7 +82,7 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   saves parameters in the repo (nothing trains at runtime); parameters fitted on the whole history
   have seen 2020 (fine for a simulator; the walk-forward checks use only earlier data).
 - *Steps:* **8d real daily data** (merged, #44, #46) → **8e replay the real past** (merged: 8e-1 #47,
-  8e-2 #48, fix #49) → **8f the future model** (**next, not started**: fit, start state from any date,
+  8e-2 #48, fix #49) → **8f the future model** (**built, PR open**: fit, start state from any date,
   "Generate a new future" uses it) → **8g walk-forward validation**.
 - **8d (merged, #44):** `pricehistory.py` now stores `Bar`s (day, open, high, low, close, volume,
   dividend, split) in a `daily` table (the old `closes` table is dropped on start and its symbols are
@@ -154,7 +156,11 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   applies only to simulated days (`engine.backfill_scale_on(day)`; real days stay exactly real, the first simulated day opens with the gap).
   The real past can't be shocked (`trigger_shock` raises, the API says 422). Known limits: sim VIX can't go under about 11.8 (the real lows are 9–10); earnings reaction days are inferred, not
   looked up; no real earnings calendar before today.
-- **Next, 8f (not started; propose the design and confirm with the user first, as for 8e).** What exists to build on:
+- **8f (built; MODEL_VERSION 9).** `market/regime.py` (pure numpy) + `regime_params.json` (fitted offline by `backend/scripts/fit_regime.py --db PATH`; `scripts/check_regime.py` simulates it against SPY's history; both read a scratch copy of the `daily` and `macro` tables). A 3-state hidden Markov model on **weekly** SPY returns (`PERIOD` 5 sessions; daily fits flip states every few days and give only volatility levels): calm (about +16%/yr drift, 9% vol), correction (+1%, 20%), crisis (−46% floored, 52%); logit transitions on four macro features known the day before (10y-2y curve, BAA credit spread, log VIX, 12-month unemployment change; `feature_panel` applies the publication lags), a persistence prior (`STICKY`) and a calibration step to match history (time in each state, crisis drift floor, long-run return). The future has no macro path, so each state carries fitted AR(1) feature dynamics (`step`). Simulated 2000 years vs SPY 1993-2026: return 8.0% vs 8.5%, vol 16.8% vs 16.7%, drawdowns over 20% 2.3 vs 2.4 per 20 years, crisis time 2.5% vs 2.3%. **Macro inputs show weak effect (credit, VIX, jobs push toward crisis); whether they add skill is 8g's job.**
+  - *Engine:* `_DayStart` has `state`, `z` (standardized features) and `phase` (the state may change when it is 0, every `period` sessions; saved in the market state's `starts`). `_generate` (simulated days only) steps the chain from `draws.regime_u/regime_z`, scales the market variance by the state's level (`_state_variance` = `variance_multiple` × `STATE_LEVEL_ADJ`, which makes crises hit the target; GARCH now centers on `omega × level`; `VARIANCE_RANGE` floor 0.03), adds the state's drift tilt (`_state_tilt`: fitted drifts plus the volatility drag and selloff loss the engine takes off again) and scales selloff odds (`CRASH_BY_STATE`). Random uncertainty shocks are off (`SHOCKS_PER_YEAR` 0: crisis entries replace them); the Trigger button still works and sends the market into the crisis state at the onset. Real days carry the state the filter finds from real returns (`RealBars.regime_on` → `RealRegime`; needs the macro series, so `RealBars.from_history` passes them), and the first simulated day steps from it. A market with no real data starts calm. Top bar: `engine.regime` is now the state (Calm / Correction / Crisis); the intraday regimes still drive minute texture and options.
+  - *Checks:* history labels right (2008 and Mar 2020 crisis, 2017 calm, 2022 correction); real start (2026-10-30) is calm, VIX-derived variance 0.58; one 5-year path from it: SPY 758 → 1269, vol 10.7%, VIX 8.5 / 12 / 45. Pooled 16 seeds × 30 years: vol 17.3%, log price return 4.4% (what SPY's spec drift of 7% gives after dividend drops and volatility drag, so no bias), average variance 1.07, crisis realized vol 42% vs fitted 52%. Review fixes: backfilled starts keep the regime chain (`_start_at` builds origin and backfill starts alike); options, the VIX and `vol_ratio` use the variance in force (`_Skeleton.variance`); a trigger sets crisis even over a stronger leftover shock; the first simulated day after the real past keeps the VIX's variance un-rescaled.
+  - *Known limits:* the weekly Gaussian emissions miss fat tails inside a state (the engine's t gaps cover part); `STATE_LEVEL_ADJ` and `CRASH_BY_STATE` are hand-tuned; the filter's state at the last real day is its argmax at the last week boundary.
+- **8f plan (history; built above).** What existed to build on:
   - *Inputs:* `PriceHistory.bars(symbol)` (SPY from 1993, others from their listing), `Macro.series(name)` for
     DFF, DGS3MO, DGS2, DGS10, T10Y2Y, BAA10Y, VIXCLS, UNRATE, CPIAUCSL, USREC (from 1985), and
     `Macro.latest(name, day)` for what was known on a day (publication lags applied: no look-ahead).

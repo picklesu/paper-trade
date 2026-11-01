@@ -107,7 +107,8 @@ def test_symbols_without_a_bar_keep_their_generated_path() -> None:
     plain = MarketEngine(START, seed=42)
     engine = engine_with(bars)
     i = NAMES.index("MSFT")
-    assert np.array_equal(plain._skeleton(START.date()).open[:, i], engine._skeleton(START.date()).open[:, i])
+    # The same random path; only the long-lived regime's step differs (a real day has none).
+    assert np.allclose(plain._skeleton(START.date()).open[:, i], engine._skeleton(START.date()).open[:, i], atol=1e-3)
     assert not np.array_equal(plain._skeleton(START.date()).open[:, NAMES.index("SPY")], engine._skeleton(START.date()).open[:, NAMES.index("SPY")])
 
 
@@ -242,7 +243,7 @@ def test_the_variance_follows_the_real_vix_of_the_previous_close() -> None:
         expected = float(np.clip(((vix[k - 1][1] / engine_mod.VIX_BIAS) ** 2 - engine_mod.VIX_BASE2) / engine_mod.VIX_SLOPE, *engine_mod.VARIANCE_RANGE))
         assert engine._starts[b.day].variance == pytest.approx(expected)
     # the first session's start comes from the VIX before it
-    assert engine._starts[START.date()].variance == 1.0  # no real VIX before the first bar
+    assert engine._starts[START.date()].variance == pytest.approx(engine._state_variance[0])  # no real VIX before the first bar: the calm level
 
 
 def test_the_sim_vix_tracks_the_real_vix_it_is_set_from() -> None:

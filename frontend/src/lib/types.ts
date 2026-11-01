@@ -59,7 +59,7 @@ export interface ClockState {
   building_history: boolean
 }
 
-export type Regime = 'calm' | 'normal' | 'volatile'
+export type Regime = 'calm' | 'correction' | 'crisis'
 
 /** An option contract, as the server describes it. */
 export interface OptionInfo {

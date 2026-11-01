@@ -458,16 +458,6 @@ class MarketEngine:
         previous closes at `prices` (default: the specs')."""
         self._reset(t, self._new_seed(), prices)
 
-    def reanchor(self, prices: np.ndarray) -> None:
-        """Start a new market at the current time whose prices right now are
-        `prices`. Its history is then generated again (`backfilled` is false)."""
-        seed = self._new_seed()
-        self._reset(self._time, seed, prices)
-        # Prices are multiplicative: scale the previous closes by how far today's
-        # moves so far took them from the targets.
-        now = np.array([q.last for q in self.quotes.values()])
-        self._reset(self._time, seed, prices * prices / now)
-
     def use_real(self, real: RealBars | None) -> None:
         """Newly fetched bars (never fewer). Only markets started from now on replay up to their newest
         day; this market keeps `real_through` (the sessions it already played stay)."""

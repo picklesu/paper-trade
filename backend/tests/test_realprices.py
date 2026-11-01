@@ -163,48 +163,6 @@ def make_service(real: RealPrices | None = None) -> MarketService:
     return MarketService(clock, MarketEngine(START), Store(":memory:"), history_days=5, real=real)
 
 
-def test_reanchor_makes_prices_equal_the_targets_now() -> None:
-    engine = MarketEngine(START)
-    engine.advance(START + timedelta(days=2, minutes=37))
-    t = engine.time
-    targets = np.array([s.price * 1.3 for s in engine.specs])
-    engine.reanchor(targets)
-    assert engine.time == engine.origin == t and not engine.backfilled
-    for q, target in zip(engine.quotes.values(), targets):
-        assert q.last == pytest.approx(target, rel=1e-12)
-
-
-def test_sync_uses_saved_prices_keeps_the_account_and_rebuilds_history() -> None:
-    real = RealPrices(Store(":memory:"), KEYS)
-    svc = make_service(real)
-    real.store = svc.store
-    asyncio.run(svc.build_history())
-    order = svc.broker.place("AAPL", "buy", 1, "market")
-    others = {s: q.last for s, q in svc.engine.quotes.items()}
-    real.record({"SPY": (772.31, date(2026, 10, 28)), "AAPL": (270.0, date(2026, 10, 28))}, ["SPY", "AAPL"])
-
-    async def sync() -> dict:
-        status = await svc.sync_real_prices()
-        assert svc.building_history  # the history is generated again
-        q = svc.engine.quotes
-        assert q["SPY"].last == pytest.approx(772.31) and q["AAPL"].last == pytest.approx(270.0)
-        assert q["XOM"].last == pytest.approx(others["XOM"])  # no real price yet: unchanged
-        await svc._history_task
-        return status
-
-    status = asyncio.run(sync())
-    assert status["available"] == 2
-    assert svc.broker.orders[order.id].status == "filled"  # the account is kept
-    days = svc.history.stored_days()
-    assert len(days) == 5 and max(days) < svc.engine.time.date() and svc.engine.backfilled
-
-
-def test_sync_needs_saved_prices() -> None:
-    svc = make_service(RealPrices(Store(":memory:"), KEYS))
-    with pytest.raises(ValueError):
-        asyncio.run(svc.sync_real_prices())
-
-
 def test_new_markets_start_from_saved_real_prices() -> None:
     real = RealPrices(Store(":memory:"), KEYS)
     svc = make_service(real)

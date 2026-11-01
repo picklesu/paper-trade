@@ -47,6 +47,12 @@ export function calendarDate(day: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+/** "Oct 30, 2026" for a YYYY-MM-DD day. */
+export function calendarDateYear(day: string): string {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 export function marketTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-US', { timeZone: MARKET_TZ, hour12: false })
 }

@@ -459,32 +459,6 @@ class MarketService:
             prices.append(spec.price if price is None else price)
         return np.array(prices)
 
-    async def sync_real_prices(self) -> dict:
-        """Continue the market from now as a new one whose prices are the saved
-        real ones (symbols without one keep their current price). The account
-        and orders are kept; the history is generated again to end here."""
-        if self._jumping:
-            raise BusyError
-        if self.building_history:
-            raise BusyError("price history is still being built; try again in a moment")
-        saved = self.real.saved if self.real else {}
-        if not saved:
-            raise ValueError("no real prices have been fetched yet")
-        self.sync()
-        quotes = self.engine.quotes
-        prices = np.array([saved[s].price if s in saved else quotes[s].last for s in self.symbols])
-        self._jumping = True
-        try:
-            self.engine.reanchor(prices)
-            self.history.clear()
-            self.save()
-            self.timeline += 1
-        finally:
-            self._jumping = False
-            self.start_history()
-            self.publish_all()
-        return self.real_prices_status()
-
     async def refresh_real_prices(self, older_than: timedelta | None = timedelta(0)) -> None:
         """Fetch every symbol's real price (one request, in a worker thread) unless
         the last fetch was more recent than `older_than` (None: unless the

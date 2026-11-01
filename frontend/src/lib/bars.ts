@@ -111,7 +111,7 @@ export interface HaltMarker {
 }
 
 /** One marker per circuit-breaker halt, on the bar it began in (halts before the first bar are left out). */
-export function haltMarkers(bars: Bar[], halts: { start: number; resume: number | null; level: number }[], interval: Interval): HaltMarker[] {
+export function haltMarkers(bars: Bar[], halts: { start: number; resume: number | null; level: number; estimated?: boolean }[], interval: Interval): HaltMarker[] {
   if (!bars.length) return []
   const end = bars[bars.length - 1][0] + barSeconds(interval) // the last bar's span: a halt after it isn't on the chart
   const out: HaltMarker[] = []
@@ -124,7 +124,8 @@ export function haltMarkers(bars: Bar[], halts: { start: number; resume: number 
       if (bars[mid][0] <= h.start) lo = mid
       else hi = mid - 1
     }
-    out.push({ time: bars[lo][0], text: h.resume === null ? `Halt L${h.level} (closed)` : `Halt L${h.level}` })
+    const text = h.resume === null && !h.estimated ? `Halt L${h.level} (closed)` : `Halt L${h.level}`
+    out.push({ time: bars[lo][0], text: h.estimated ? `${text} est.` : text })
   }
   return out.sort((a, b) => a.time - b.time)
 }

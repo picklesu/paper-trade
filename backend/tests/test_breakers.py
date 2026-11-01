@@ -161,3 +161,54 @@ def test_the_service_lists_todays_halt_only_once_it_has_begun() -> None:
     engine.advance(session_open(day) + timedelta(minutes=first, seconds=5))
     found = svc.halts(lo, hi)
     assert len(found) >= 1 and found[0]["level"] == 1
+
+
+def test_a_real_day_gets_an_estimated_halt_without_freezing_prices() -> None:
+    from datetime import date
+
+    from paper_trade.market.realbars import RealBars
+    from paper_trade.pricehistory import Bar
+
+    day0 = date(2020, 3, 11)  # a Wednesday; the next session falls 9%
+    names = [s.symbol for s in engine_mod.SYMBOLS]
+    bars = {"SPY": [Bar(day0, 100.0, 101.0, 99.0, 100.0, 1_000_000), Bar(date(2020, 3, 12), 95.0, 95.5, 90.0, 91.0, 5_000_000)]}
+    engine = MarketEngine(session_open(date(2020, 3, 11)), seed=3, real=RealBars(names, bars), prices=np.array([100.0 if n == "SPY" else s.price for n, s in zip(names, engine_mod.SYMBOLS)]))
+    engine.advance(session_open(date(2020, 3, 12)))
+    sk = engine._skeleton(date(2020, 3, 12))
+    assert not sk.halts and sk.halted is not None and not sk.halted.any()  # real prices aren't frozen
+    found = engine.halts_of(date(2020, 3, 12))
+    assert [(h["level"], h["estimated"]) for h in found] == [(1, True)]
+    assert np.exp(sk.low[:, engine.symbol_index("SPY")].min()) == pytest.approx(90.0, rel=1e-6)  # the real low stands
+
+
+def real_engine(bars_by_day, day):
+    from paper_trade.market.realbars import RealBars
+
+    names = [s.symbol for s in engine_mod.SYMBOLS]
+    first = bars_by_day[0].day
+    engine = MarketEngine(
+        session_open(first), seed=3, real=RealBars(names, {"SPY": bars_by_day}),
+        prices=np.array([bars_by_day[0].close if n == "SPY" else s.price for n, s in zip(names, engine_mod.SYMBOLS)]),
+    )
+    engine.advance(session_open(day))
+    return engine
+
+
+def test_estimated_halts_follow_the_2013_rule_and_never_freeze_or_close_real_days() -> None:
+    from datetime import date
+
+    from paper_trade.pricehistory import Bar
+
+    def crash(day0: date, day1: date, low: float):
+        return [Bar(day0, 100.0, 101.0, 99.0, 100.0, 1_000_000), Bar(day1, 95.0, 95.5, low, low + 1, 5_000_000)]
+
+    # before the rule: nothing is marked
+    old = real_engine(crash(date(2008, 10, 8), date(2008, 10, 9), 90.0), date(2008, 10, 9))
+    assert old.halts_of(date(2008, 10, 9)) == []
+    # a 21% fall on a real day: marked, but as a pause, not as the market closing; prices stay real
+    deep = real_engine(crash(date(2020, 3, 11), date(2020, 3, 12), 78.0), date(2020, 3, 12))
+    levels = [(h["level"], h["estimated"], h["resume"] is not None) for h in deep.halts_of(date(2020, 3, 12))]
+    assert levels[-1] == (3, True, True) and all(est for _, est, _ in levels)
+    sk = deep._skeleton(date(2020, 3, 12))
+    assert not sk.halted.any() and not sk.halts  # no freezing
+    assert deep.halt is None and not deep.halted_at(date(2020, 3, 12), 60 * 200)  # trading and orders go on

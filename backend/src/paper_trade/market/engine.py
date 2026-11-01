@@ -117,6 +117,7 @@ SHOCK_IN_CRISIS = 0.4  # a triggered shock's extra volatility is this share of t
 # halt at 7% and at 13% (not after 3:25 PM), and no more trading that day at 20%.
 BREAKER_LEVELS = (0.07, 0.13, 0.20)
 HALT_MINUTES = 15
+BREAKER_RULE_FROM = date(2013, 2, 4)  # today's rule (7/13/20% of the S&P 500); before it halts keyed off the Dow at 10/20/30%
 BREAKER_LAST_MINUTE = 355  # a level 1 or 2 halt can't begin once the session is this many minutes old (3:25 PM)
 SHOCK_DROP = 0.025  # the market's log drop at the open, per unit of excess
 SHOCK_REBOUND = 0.06  # annual drift per unit of excess, while it lasts
@@ -300,6 +301,7 @@ class _Skeleton:
     scale: float = 1.0  # the volatility multiple a shock adds (1: none)
     halted: np.ndarray | None = None  # (M,) minutes trading is halted (prices frozen, no volume)
     halts: tuple = ()  # (first halted minute, minute trading resumes (M: not today), level) for each halt
+    noted_halts: tuple = ()  # on a replayed real day: the halts the real market had (found from the pinned path; nothing is frozen)
     vix: np.ndarray | None = None  # (14,) the volatility index at each half hour and the close (None: no SPY)
 
 
@@ -1182,8 +1184,13 @@ class MarketEngine:
             move = np.abs(close - open_)
         halted = np.zeros(_M, dtype=bool)
         halts: list[tuple[int, int, int]] = []
-        if real_day is None and self._spy is not None:
-            halts = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy])
+        noted: list[tuple[int, int, int]] = []
+        if self._spy is not None:
+            found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy], BREAKER_LAST_MINUTE if real_day is None else _M)
+            if real_day is None:
+                halts = found
+            elif day >= BREAKER_RULE_FROM and real_day.has[self._spy]:
+                noted = found  # real prices aren't frozen; the breaker is only marked (the time of day is the generated path's, so the 3:25 PM cutoff doesn't apply)
         if halts:  # a market-wide halt: every price freezes where it stood, then trading resumes
             open_, high, low, close = open_.copy(), high.copy(), low.copy(), close.copy()
             for first, resume, _ in halts:
@@ -1265,12 +1272,13 @@ class MarketEngine:
             scale=scale,
             halted=halted,
             halts=tuple(halts),
+            noted_halts=tuple(noted),
         )
         sk.vix = self._vix_samples(sk, start)
         return sk
 
     @staticmethod
-    def _halts(prev_log: float, spy_low: np.ndarray) -> list[tuple[int, int, int]]:
+    def _halts(prev_log: float, spy_low: np.ndarray, last_minute: int = BREAKER_LAST_MINUTE) -> list[tuple[int, int, int]]:
         """The circuit-breaker halts of a session from SPY's minute lows (log prices) and its
         previous close: (first halted minute, minute trading resumes, level). A level is
         crossed once; one crossed while trading is open halts from the next minute."""
@@ -1282,7 +1290,7 @@ class MarketEngine:
                 break
             k = m + int(hit[0])
             last = level == len(BREAKER_LEVELS) - 1
-            if not last and k >= BREAKER_LAST_MINUTE:  # too late in the session for a pause: only the last level counts
+            if not last and k >= last_minute:  # too late in the session for a pause: only the last level counts
                 level = len(BREAKER_LEVELS) - 1
                 continue
             first = k + 1
@@ -1307,19 +1315,25 @@ class MarketEngine:
 
     def halts_of(self, day: date) -> list[dict]:
         """The circuit-breaker halts of a session: when each began (Unix seconds), when trading
-        resumed (None: not that day) and its level."""
+        resumed (None: not that day), its level, and whether it is an estimate (a real day's
+        halt, placed on the generated path inside the real bar)."""
         out = []
         if day not in self._starts:  # a day the market hasn't reached (or no longer keeps)
             return out
-        for first, resume, level in self._skeleton(day).halts:
-            opened = session_open(day)
-            out.append(
-                {
-                    "start": int((opened + timedelta(minutes=first)).timestamp()),
-                    "resume": None if resume >= _M else int((opened + timedelta(minutes=resume)).timestamp()),
-                    "level": level,
-                }
-            )
+        sk = self._skeleton(day)
+        opened = session_open(day)
+        for real, found in ((False, sk.halts), (True, sk.noted_halts)):
+            for first, resume, level in found:
+                if real and resume >= _M:  # a real day never closed early: the estimate is a pause like the others
+                    resume = min(first + HALT_MINUTES, _M)
+                out.append(
+                    {
+                        "start": int((opened + timedelta(minutes=first)).timestamp()),
+                        "resume": None if resume >= _M and not real else int((opened + timedelta(minutes=min(resume, _M))).timestamp()),
+                        "level": level,
+                        "estimated": real,
+                    }
+                )
         return out
 
     def halted_at(self, day: date, second: int) -> bool:

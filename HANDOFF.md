@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed, and all fetching moved out of the app into `./server.sh update` (see "Fetching real data" under Pick up here). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
+_Last updated: 2026-11-01. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed, and all fetching moved out of the app into `./server.sh update` (see "Fetching real data" under Pick up here). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.** The proposal was made on 2026-11-01 (three-state regime-switching model fitted offline on SPY plus macro series; start state from the real last day; fold in the simulated-VIX floor of about 11.8 vs real 9–10; 8f and 8g as separate PRs) and **is waiting on the user's answers to those three points.**_
 
 ## Where things stand
 
@@ -37,6 +37,9 @@ _Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8
 | 8e-1. Replay the real past: prices, volume, closures, dividends, backfill (the user approved the design and the 8e-1/8e-2 split) | Merged; the user restarts to test | #47 |
 | 8e-2. Volatility/options follow the real VIX; past earnings dates inferred | Merged; the user restarts to test | #48 |
 | Fix (user's report): Back clears the shock error and the shock view explains the real past up front; Sync reworded ("latest real prices", no button in the real past); a backfill's bridging scale no longer rescales the real days (MODEL_VERSION 8) | Merged; the user restarts to test | #49 |
+| README trimmed to the essentials (feature summary, optional keys, run/test, condensed roadmap) | Merged | #51 |
+| Removed "Sync to latest real prices" (redundant with real-history replay); added the Last real day shortcut | Merged | #52 |
+| All API fetching moved out of the app into `./server.sh update [prices\|history\|options]` (`update.py`); Real data dialog, `/api/real-prices*`, `/api/real-history/*` and background fetch tasks removed | Merged; the user restarts and runs `update` when wanted | #53 |
 
 `main` is clean and up to date with GitHub.
 
@@ -56,6 +59,7 @@ dialog, no `/api/real-prices*` or `/api/real-history/*` endpoints, and no backgr
 (Tiingo allows 50 an hour: a full first download is 40). Tests never read the keys (`tests/conftest.py`). Older notes
 below that describe background tasks, `refresh_*`, `update_real_history`, `sync_real_prices` or the Real data dialog
 describe what existed before this change.
+**Small cleanup left over:** the data classes still carry retry/progress bookkeeping nothing reads now (`OptionData.seconds_until_due`, `RETRY_AFTER`, `progress`/`running`, the `*_retry` store keys, `due()`'s retry hold); remove it and its tests in a tidy-up PR.
 
 **The real-history plan (the user's request after 20 simulated years of SPY went $125 → $300; discussed
 and agreed 2026-10-31; one PR per step, stop after each for the user to test):**

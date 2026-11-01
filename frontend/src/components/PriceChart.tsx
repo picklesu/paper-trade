@@ -17,6 +17,7 @@ import {
   applyTick,
   type Bar,
   bucketStart,
+  barSeconds,
   fillMarkers,
   formatBarTime,
   haltMarkers,
@@ -404,7 +405,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     const load = () => {
       const last = barsRef.current[barsRef.current.length - 1]?.[0]
       if (last === undefined) return
-      fetchHalts(firstBar, last + 7 * 86400)
+      fetchHalts(firstBar, last + barSeconds(intervalRef.current))
         .then((list) => {
           if (!cancelled) setHalts((old) => (JSON.stringify(old) === JSON.stringify(list) ? old : list))
         })
@@ -417,11 +418,11 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [firstBar, clock.timeline, clock.paused])
+  }, [firstBar, loaded?.key, clock.paused])
 
   // Your fills and the halts on the chart.
   const fills = useMemo(() => fillMarkers(bars, orders, symbol), [bars, orders, symbol])
-  const haltMarks = useMemo(() => haltMarkers(bars, halts), [bars, halts])
+  const haltMarks = useMemo(() => haltMarkers(bars, halts, interval), [bars, halts, interval])
   useEffect(() => {
     const marks = [
       ...fills.map((m) => ({

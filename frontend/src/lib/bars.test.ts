@@ -101,15 +101,23 @@ describe('fillMarkers and dividends', () => {
 describe('haltMarkers', () => {
   const bars: Bar[] = [at(0), at(30), at(60)].map((t) => [t, 1, 2, 0.5, 1.5, 10])
   it('puts each halt on the bar it began in and says when the day was closed', () => {
-    const marks = haltMarkers(bars, [
-      { start: at(40), resume: at(55), level: 1 },
-      { start: at(61), resume: null, level: 3 },
-      { start: at(-10), resume: at(5), level: 2 },
-    ])
+    const marks = haltMarkers(
+      bars,
+      [
+        { start: at(40), resume: at(55), level: 1 },
+        { start: at(61), resume: null, level: 3 },
+        { start: at(-10), resume: at(5), level: 2 },
+      ],
+      '30m',
+    )
     expect(marks).toEqual([
       { time: at(30), text: 'Halt L1' },
       { time: at(60), text: 'Halt L3 (closed)' },
     ])
-    expect(haltMarkers([], [{ start: at(1), resume: null, level: 3 }])).toEqual([])
+    expect(haltMarkers([], [{ start: at(1), resume: null, level: 3 }], '30m')).toEqual([])
+  })
+  it('leaves out halts after the last bar, which are not on the chart yet', () => {
+    expect(haltMarkers(bars, [{ start: at(95), resume: null, level: 1 }], '30m')).toEqual([])
+    expect(haltMarkers(bars, [{ start: at(95), resume: null, level: 1 }], '1D')).toHaveLength(1) // inside a daily bar's span
   })
 })

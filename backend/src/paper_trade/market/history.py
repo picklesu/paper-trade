@@ -59,7 +59,9 @@ def _row(t: datetime | float, b) -> Bar:
     ts = t.timestamp() if isinstance(t, datetime) else t
     return [int(ts), round(float(b[0]), 2), round(float(b[1]), 2), round(float(b[2]), 2), round(float(b[3]), 2), int(b[4])]
 
+
 BREAKER_FIRST_LEVEL = BREAKER_LEVELS[0]
+HALT_LOOKBACK_DAYS = 14  # far enough back to find the session before `start` over holidays
 
 
 def week_start(d: date) -> date:
@@ -152,7 +154,7 @@ class History:
         stop = min(end, today - timedelta(days=1))
         rows = self.db.execute(
             "SELECT day, i, l, c FROM bars30 WHERE symbol = 'SPY' AND day >= ? AND day <= ? ORDER BY day, i",
-            ((start - timedelta(days=7)).isoformat(), stop.isoformat()),
+            ((start - timedelta(days=HALT_LOOKBACK_DAYS)).isoformat(), stop.isoformat()),
         ).fetchall()
         lows: dict[str, float] = {}
         closes: dict[str, float] = {}
@@ -163,7 +165,7 @@ class History:
         previous = None  # the previous stored session's close
         for day_s in sorted(lows):
             day = date.fromisoformat(day_s)
-            if previous is not None and day >= start and lows[day_s] <= previous * (1 - BREAKER_FIRST_LEVEL) * 1.0001:
+            if previous is not None and day >= start and lows[day_s] <= previous * (1 - BREAKER_FIRST_LEVEL) * 1.01:  # a cheap filter; the engine decides
                 out += self.engine.halts_of(day)
             previous = closes[day_s]
         return out

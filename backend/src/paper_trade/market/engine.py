@@ -1309,6 +1309,8 @@ class MarketEngine:
         """The circuit-breaker halts of a session: when each began (Unix seconds), when trading
         resumed (None: not that day) and its level."""
         out = []
+        if day not in self._starts:  # a day the market hasn't reached (or no longer keeps)
+            return out
         for first, resume, level in self._skeleton(day).halts:
             opened = session_open(day)
             out.append(

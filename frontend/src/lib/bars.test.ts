@@ -116,6 +116,9 @@ describe('haltMarkers', () => {
     ])
     expect(haltMarkers([], [{ start: at(1), resume: null, level: 3 }], '30m')).toEqual([])
   })
+  it('says when a real day\'s halt time is an estimate', () => {
+    expect(haltMarkers(bars, [{ start: at(40), resume: at(55), level: 1, estimated: true }], '30m')).toEqual([{ time: at(30), text: 'Halt L1 est.' }])
+  })
   it('leaves out halts after the last bar, which are not on the chart yet', () => {
     expect(haltMarkers(bars, [{ start: at(95), resume: null, level: 1 }], '30m')).toEqual([])
     expect(haltMarkers(bars, [{ start: at(95), resume: null, level: 1 }], '1D')).toHaveLength(1) // inside a daily bar's span

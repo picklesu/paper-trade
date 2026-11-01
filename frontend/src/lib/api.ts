@@ -165,6 +165,8 @@ export interface HaltEvent {
   start: number
   resume: number | null
   level: number
+  /** A real day's halt, placed on the generated path inside the real bar (so the time of day is approximate). */
+  estimated?: boolean
 }
 
 export async function fetchHalts(start: number, end: number): Promise<HaltEvent[]> {

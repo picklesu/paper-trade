@@ -180,7 +180,7 @@ def test_a_newer_saved_real_price_beats_an_older_close() -> None:
 def test_a_reset_waits_until_some_history_is_downloaded() -> None:
     svc = make_service(PriceHistory(Store(":memory:"), "k", fetch=lambda s, k: SPY))
     past = datetime(2006, 1, 3, 15, 0, tzinfo=UTC)
-    with pytest.raises(ValueError, match="still downloading"):
+    with pytest.raises(ValueError, match="aren.t downloaded yet"):
         asyncio.run(svc.goto(past))
     svc.price_history.record("SPY", SPY)
     assert asyncio.run(svc.goto(past))[0] == "reset"

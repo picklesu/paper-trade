@@ -58,18 +58,21 @@ def update_history(hist: PriceHistory, symbols: list[str], say: Say = print) -> 
         return {"prices": added, "problems": ["TIINGO_API_KEY missing: add it to backend/.env"]}
     hist.store.delete("daily_history_retry")  # you asked: no waiting out an earlier rate limit
     stopped = False
-    first = [s for s in symbols if s not in hist.fetched and s not in hist.store.get("daily_history_skipped", {})]
+    first = hist.due(symbols)
     for symbol in first:
         try:
             bars = hist.fetch(symbol)
         except FetchStop as e:
             hist.failed(str(e))
-            problems.append(f"{e} (run the update again later; what is saved is kept)")
+            problems.append(f"{e} (Tiingo allows 50 requests an hour; run the update again later, what is saved is kept)")
             stopped = True
             break
         except FetchError as e:
             hist.skip(symbol, str(e))
             problems.append(f"{symbol}: {e}")
+            continue
+        except Exception as e:  # a malformed answer: carry on with the others
+            problems.append(f"{symbol}: unexpected answer ({e!r})")
             continue
         hist.record(symbol, bars)
         added[symbol] = len(bars)
@@ -90,6 +93,9 @@ def update_history(hist: PriceHistory, symbols: list[str], say: Say = print) -> 
             except FetchError as e:
                 problems.append(f"{symbol}: {e}")
                 continue
+            except Exception as e:
+                problems.append(f"{symbol}: unexpected answer ({e!r})")
+                continue
             try:
                 n = hist.record_new(symbol, bars, whole)
             except FetchError as e:
@@ -108,23 +114,28 @@ def update_macro(economy: Macro, say: Say = print) -> dict:
     problems: list[str] = []
     if not economy.configured:
         return {"macro": added, "problems": ["FRED_API_KEY missing: add it to backend/.env"]}
-    economy.store.delete("macro_retry")
-    first = [s for s in macro_mod.SERIES if s not in economy.fetched]
+    economy.store.delete("macro_retry")  # you asked: no waiting out an earlier rate limit
+    stopped = False
+    first = economy.due()
     for series in first:
         try:
             rows = economy.fetch(series)
         except FetchStop as e:
             economy.failed(str(e))
             problems.append(str(e))
+            stopped = True
             break
         except FetchError as e:  # this series only: carry on with the others
             problems.append(f"{series}: {e}")
+            continue
+        except Exception as e:
+            problems.append(f"{series}: unexpected answer ({e!r})")
             continue
         economy.record(series, rows)
         added[series] = len(rows)
         say(f"{series}: downloaded {len(rows)} readings")
         time.sleep(MACRO_PAUSE_SECONDS)
-    else:
+    if not stopped:
         for series in sorted(set(economy.fetched) - set(first)):
             before = economy.last_day(series)
             if before is None:
@@ -137,6 +148,9 @@ def update_macro(economy: Macro, say: Say = print) -> dict:
                 break
             except FetchError as e:
                 problems.append(f"{series}: {e}")
+                continue
+            except Exception as e:
+                problems.append(f"{series}: unexpected answer ({e!r})")
                 continue
             economy.record(series, rows)
             if n := sum(1 for d, _ in rows if d > before):
@@ -153,6 +167,9 @@ def update_options(od: OptionData, symbols: list[str], say: Say = print) -> list
     if not od.configured:
         return ["Alpaca keys missing: option fits need APCA_API_KEY_ID and APCA_API_SECRET_KEY in backend/.env"]
     problems: list[str] = []
+    due = od.due(symbols)
+    if due:
+        od.attempt(len(due))  # first: it clears the status, and the notes below must survive
     if od.rate_due() and od.earnings_key:
         try:
             day, rate = fetch_treasury_rate(od.earnings_key)
@@ -162,12 +179,10 @@ def update_options(od: OptionData, symbols: list[str], say: Say = print) -> list
         else:
             od.record_rate(day, rate)
             say(f"Interest rate: {rate:.2%} ({day})")
-    due = od.due(symbols)
     if not due:
         say("Option fits: all less than a day old")
         return problems
     assert od.creds
-    od.attempt(len(due))
     try:
         now = datetime.now(UTC)
         try:
@@ -230,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         store.close()
     for p in problems:
         print(f"Problem: {p}")
-    print("Done." + (" Restart the server (./server.sh restart) to use the new data." if not problems else " Some things failed (above); what was fetched is saved."))
+    print("Done." + (" Some things failed (above); what was fetched is saved." if problems else "") + " Restart the server (./server.sh restart) to use the new data.")
     return 1 if problems else 0
 
 

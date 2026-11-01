@@ -333,8 +333,7 @@ class MarketService:
         hist = self.price_history
         if action == "reset" and hist and hist.configured and not hist.fetched:
             # Prices of that time aren't downloaded yet: a market started now would open at today's prices.
-            problem = hist.status(self.symbols)["last_error"]
-            raise ValueError("real prices from the past are still downloading; try again in a few minutes" + (f" ({problem})" if problem else ""))
+            raise ValueError("real prices from the past aren't downloaded yet: run ./server.sh update history, then restart the server")
         if action == "rewind":
             # Match orders up to now first, so what gets rolled back is complete.
             self.sync()

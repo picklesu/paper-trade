@@ -134,6 +134,11 @@ VIX_BASE2 = 70.0  # the sim's index squared is about this plus VIX_SLOPE times t
 VIX_SLOPE = 295.0  # (measured over seeds; real days set the multiple from the real VIX, so the sim index follows)
 VIX_BIAS = 1.106  # the sim index ran this much above the real one over 2007-2012 once set from it (the day's own move adds to it)
 EARNINGS_PER_YEAR = 4
+# Volume follows the market's variance more gently than volatility does: real SPY trades about
+# 50-60M in quiet markets and 150M+ in crises. With the regime model's calm state at a third of
+# average variance, the old square-root link left calm days at about a third of normal volume.
+VOLUME_ELASTICITY = 0.3
+VOLUME_LEVEL = 1.3  # puts the long-run average volume at about each spec's daily volume (measured over 6 seeds x 20 years)
 EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
 
 # GJR-GARCH(1,1) on daily variance, as a multiple of normal (averaging 1). GAMMA is
@@ -168,7 +173,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 10  # 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 11  # 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -1197,7 +1202,7 @@ class MarketEngine:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
             activity[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
         noise = draws.volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
-        level = self._daily_volume * math.sqrt(h) * scale * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
+        level = self._daily_volume * VOLUME_LEVEL * h**VOLUME_ELASTICITY * scale * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
         shape = self._volume_shape * self._volume_mults[regimes]
         volume = np.floor(level / _M * shape[:, None] * activity * noise)
         if real_day is not None:  # the real day's volume, spread over the minutes

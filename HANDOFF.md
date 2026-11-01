@@ -44,6 +44,7 @@ _Last updated: 2026-11-01. Phases 8d (real daily data), the on-request update, 8
 | 8f. The future model: a long-lived regime (calm / correction / crisis) sets the market's drift, volatility level and selloff odds; starts from the regime filtered from the real past; VIX floor now about 9.8; top bar shows the regime | PR open; the user restarts to test | |
 | Circuit breakers (user's report: a triggered shock took SPY from about $720 to $590 in a day): NYSE-style market-wide halts, and a smaller shock multiple in a crisis | PR open; the user restarts to test | |
 | State labels renamed Calm / Choppy / Crisis (the middle state is a volatility state: in real history 15% of its weeks were within 3% of a high); the Shock tag hides once its extra volatility is under `SHOCK_VISIBLE` (0.13, a typical week's change in volatility from other factors; it used to stay over a year) | PR open | |
+| Fix (user's report: SPY volume 10-15M for months in a calm stretch): volume follows the variance as `h**0.3 × 1.3` (`VOLUME_ELASTICITY`, `VOLUME_LEVEL`), not its square root; calm SPY median 41M, choppy 66M, crisis 128M (`MODEL_VERSION` 11) | PR open | |
 
 `main` is clean and up to date with GitHub.
 

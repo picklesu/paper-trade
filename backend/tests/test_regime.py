@@ -120,3 +120,19 @@ def test_option_and_index_inputs_use_the_variance_in_force() -> None:
     engine = MarketEngine(START, seed=8)
     sk = engine._skeleton(START.date())
     assert sk.variance == pytest.approx(engine._starts[START.date()].variance * engine._state_variance[sk.state] / engine._state_variance[engine._starts[START.date()].state])
+
+
+def test_volume_stays_near_normal_in_calm_markets() -> None:
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    engine = MarketEngine(START, seed=41, specs=specs)
+    volume, state = [], []
+    for day in engine.backfill_iter(252 * 8):
+        sk = engine._skeleton(day)
+        volume.append(sk.volume[:, 0].sum())
+        state.append(sk.state)
+    volume, state = np.array(volume), np.array(state)
+    normal = specs[0].daily_volume
+    assert 0.8 < volume.mean() / normal < 1.4  # about the spec's daily volume on average
+    assert (state == 0).sum() > 200  # the sample has calm days
+    assert np.median(volume[state == 0]) > 0.5 * normal  # a calm market doesn't trade a third of normal
+    assert np.median(volume[state == 2]) > 1.5 * np.median(volume[state == 0]) if (state == 2).sum() > 20 else True

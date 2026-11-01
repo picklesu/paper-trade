@@ -150,6 +150,11 @@ body {
 .regime-crisis {
   color: var(--down);
 }
+.regime-halt {
+  color: var(--down);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--down) 15%, transparent);
+}
 .regime-shock {
   color: var(--down);
   font-weight: 600;

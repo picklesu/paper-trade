@@ -24,6 +24,7 @@ function Shell() {
         regime={tick?.regime ?? null}
         shock={tick?.shock}
         shockPending={tick?.shock_pending}
+        halt={tick?.halt}
         progress={progress}
         account={tick?.account ?? null}
       />

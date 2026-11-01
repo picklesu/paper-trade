@@ -42,6 +42,7 @@ import numpy as np
 
 from paper_trade.market import options
 from paper_trade.market.calendar import (
+    MARKET_TZ,
     SESSION_SECONDS,
     add_trading_days,
     market_day,
@@ -524,6 +525,9 @@ class Broker:
         if c and c.underlying not in self.engine.quotes:
             raise OrderError(f"Unknown symbol {c.underlying}")
         underlying = c.underlying if c else symbol
+        if replacing is None and (halt := self.engine.halt) is not None:  # changing a resting order is allowed
+            when = f" until {datetime.fromisoformat(halt['resumes']).astimezone(MARKET_TZ):%-I:%M %p}" if halt["resumes"] else " for the rest of the day"
+            raise OrderError(f"Trading is halted{when} (market-wide circuit breaker, level {halt['level']})")
         if not self.listed(underlying, None):
             raise OrderError(f"{underlying} wasn't trading yet")
         if type not in ("market", "limit", "stop", "stop_limit"):
@@ -832,9 +836,9 @@ class Broker:
             c = Contract.parse(o.symbol)
             if c:
                 fill = o.limit_price
-                if k == 0:  # gapped through at the open: the better price
-                    spot = self.engine.price_at(day, 0, self.engine.symbol_index(c.underlying))
-                    q = self._quote_at(c, day, 0, spot)
+                if self.engine.reopens_at(day, k):  # gapped through at the open or a reopening: the better price
+                    spot = self.engine.price_at(day, k, self.engine.symbol_index(c.underlying))
+                    q = self._quote_at(c, day, k, spot)
                     fill = min(fill, q["ask"]) if o.side == "buy" else max(fill, q["bid"])
                 self._fill(o, fill, t)
                 self._save(o)
@@ -847,7 +851,7 @@ class Broker:
             else:
                 # A resting limit fills at its price, or better if the open gapped through it.
                 fill = o.limit_price
-                if k == 0:
+                if self.engine.reopens_at(day, k):
                     bid, ask = bid_ask(price, spread)
                     fill = min(fill, ask) if o.side == "buy" else max(fill, bid)
                 self._fill(o, fill, t)
@@ -937,6 +941,9 @@ class Broker:
         cal = self.calibration(c.underlying)
         inputs = self.engine.option_inputs(day, col)
         mid = self._next_mid_fill(o, c, day, lo, hi, inputs, cal)
+        while mid is not None and self.engine.halted_at(day, mid):  # nothing trades during a halt: the next chance after it
+            after = self.engine.next_trading_second(day, mid)
+            mid = None if after is None else self._next_mid_fill(o, c, day, after, hi, inputs, cal)
         if mid is not None:
             hi = mid  # a touch before it comes first
         high, low = self.engine.minute_range(day, col)
@@ -952,6 +959,8 @@ class Broker:
         else:
             near = q.max(axis=0) >= limit * (1 - MATCH_MARGIN) - 0.01
         for m in minutes[near]:
+            if self.engine.halted_at(day, int(60 * m)):
+                continue
             a, b = max(lo, 60 * m), min(hi, 60 * m + 59)
             spots = self.engine.minute_prices(day, int(m), col)[a - 60 * m : b - 60 * m + 1]
             p = options.price(self.engine, c.underlying, c.expiry, c.strike, day, np.arange(a, b + 1), spots, cal, inputs)

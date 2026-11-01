@@ -1,6 +1,6 @@
 import type { ConnectionStatus } from '../lib/stream'
 import { direction, dollars, signedDollars } from '../lib/format'
-import type { Account, ClockState, ProgressMessage, Regime } from '../lib/types'
+import type { Account, ClockState, Halt, ProgressMessage, Regime } from '../lib/types'
 import { PanelsMenu } from '../layout/PanelsMenu'
 import { ClockControls } from './ClockControls'
 import { FullscreenButton } from './FullscreenButton'
@@ -11,6 +11,7 @@ interface Props {
   regime: Regime | null
   shock?: number
   shockPending?: boolean
+  halt?: Halt | null
   progress: ProgressMessage | null
   account: Account | null
 }
@@ -21,7 +22,7 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
   disconnected: 'Disconnected',
 }
 
-export function TopBar({ status, clock, regime, shock, shockPending, progress, account }: Props) {
+export function TopBar({ status, clock, regime, shock, shockPending, halt, progress, account }: Props) {
   return (
     <header className="topbar">
       <div className="brand">Paper Trade</div>
@@ -34,7 +35,7 @@ export function TopBar({ status, clock, regime, shock, shockPending, progress, a
           className={account ? direction(account.day_pnl) : undefined}
         />
       </div>
-      <ClockControls clock={clock} regime={regime} shock={shock} shockPending={shockPending} progress={progress} />
+      <ClockControls clock={clock} regime={regime} shock={shock} shockPending={shockPending} halt={halt} progress={progress} />
       <PanelsMenu />
       <FullscreenButton />
       <div className={`conn conn-${status}`} role="status" title={STATUS_LABEL[status]}>

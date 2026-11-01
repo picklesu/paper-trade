@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { updateClock } from '../lib/api'
 import { marketDate, marketTime } from '../lib/format'
-import type { ClockState, ProgressMessage, Regime } from '../lib/types'
+import type { ClockState, Halt, ProgressMessage, Regime } from '../lib/types'
 import { GoToDialog } from './GoToDialog'
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
   shock?: number
   /** A triggered shock that begins at the next open. */
   shockPending?: boolean
+  /** A market-wide circuit-breaker halt in force. */
+  halt?: Halt | null
   progress: ProgressMessage | null
 }
 
@@ -20,7 +22,7 @@ const REGIME_LABEL: Record<Regime, string> = {
   crisis: 'Crisis',
 }
 
-export function ClockControls({ clock, regime, shock = 0, shockPending = false, progress }: Props) {
+export function ClockControls({ clock, regime, shock = 0, shockPending = false, halt = null, progress }: Props) {
   const [showGoto, setShowGoto] = useState(false)
   const disabled = clock === null || progress !== null
   const send = (update: { speed?: number; paused?: boolean }) => {
@@ -68,6 +70,11 @@ export function ClockControls({ clock, regime, shock = 0, shockPending = false, 
             {REGIME_LABEL[regime]}
           </span>
         )
+      )}
+      {!progress && halt && (
+        <span className="regime regime-halt" title={`Market-wide circuit breaker, level ${halt.level}: trading is halted and orders are refused`}>
+          {halt.resumes ? `Halted · resumes ${marketTime(halt.resumes).slice(0, 5)}` : 'Halted · closed for the day'}
+        </span>
       )}
       {!progress && (shock > 0 || shockPending) && (
         <span

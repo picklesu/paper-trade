@@ -166,6 +166,17 @@ describe('App', () => {
     expect(screen.getByText('Crisis')).toBeInTheDocument()
   })
 
+  it('shows a circuit-breaker halt with when trading resumes, and the rest-of-day case', () => {
+    render(<App />)
+    // 15:45 UTC is 10:45 in New York in January.
+    push(tick({ halt: { level: 1, resumes: '2026-01-05T15:45:00+00:00' } }))
+    expect(screen.getByText('Halted · resumes 10:45')).toBeInTheDocument()
+    push(tick({ halt: { level: 3, resumes: null } }))
+    expect(screen.getByText('Halted · closed for the day')).toBeInTheDocument()
+    push(tick({ halt: null }))
+    expect(screen.queryByText(/Halted/)).not.toBeInTheDocument()
+  })
+
   it('shows account totals in the top bar and positions in their panel', () => {
     render(<App />)
     push(tick())

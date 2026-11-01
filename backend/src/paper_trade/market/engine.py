@@ -574,6 +574,12 @@ class MarketEngine:
         return self._skeleton(market_day(self._time)).shock
 
     @property
+    def shock_visible(self) -> float:
+        """The shock to show the user: its extra volatility while that exceeds `SHOCK_VISIBLE`, else 0."""
+        shock = self.shock
+        return shock if shock > SHOCK_VISIBLE else 0.0
+
+    @property
     def shock_pending(self) -> bool:
         """A triggered shock waiting for the next open."""
         return next_trading_day(market_day(self._time)) in self._shocks

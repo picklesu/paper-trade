@@ -256,5 +256,7 @@ def test_the_tick_shows_a_shock_only_while_it_matters(monkeypatch) -> None:
     svc, _ = make_service()
     monkeypatch.setattr(MarketEngine, "shock", property(lambda self: SHOCK_VISIBLE / 2))
     assert svc.snapshot()["shock"] == 0.0  # smaller than a typical week's change in volatility
+    monkeypatch.setattr(MarketEngine, "shock", property(lambda self: SHOCK_VISIBLE))
+    assert svc.snapshot()["shock"] == 0.0  # at the threshold it no longer exceeds it
     monkeypatch.setattr(MarketEngine, "shock", property(lambda self: 0.3))
     assert svc.snapshot()["shock"] == 0.3

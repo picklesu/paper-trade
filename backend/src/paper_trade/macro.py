@@ -17,7 +17,6 @@ from paper_trade.store import Store
 URL = "https://api.stlouisfed.org/fred/series/observations"
 KEY_NAME = "FRED_API_KEY"
 FIRST_DAY = "1985-01-01"
-RETRY_AFTER = timedelta(hours=1)
 
 # name -> what it is (FRED's own series ids)
 SERIES = {
@@ -80,6 +79,7 @@ class Macro:
         self._fetch_since = fetch_since
         self._now = now
         self._db: sqlite3.Connection = store.connection
+        store.delete("macro_retry")  # the app no longer waits out a rate limit
         self._db.execute("CREATE TABLE IF NOT EXISTS macro (series TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, day))")
 
     @property
@@ -91,12 +91,7 @@ class Macro:
         return {k: datetime.fromisoformat(v) for k, v in self.store.get("macro_fetched", {}).items()}
 
     def due(self) -> list[str]:
-        """Series never fetched (nothing, a while after a failure). Later days come
-        only when asked for (`fetch_new`)."""
-        retry = self.store.get("macro_retry")
-        now = self._now()
-        if retry and now < datetime.fromisoformat(retry):
-            return []
+        """Series never fetched. Later days come only when asked for (`fetch_new`)."""
         have = self.fetched
         return [s for s in SERIES if s not in have]
 
@@ -129,8 +124,7 @@ class Macro:
         self.store.set("macro_error", {"message": message, "at": self._now().isoformat()})
 
     def failed(self, message: str) -> None:
-        self.store.set("macro_error", {"message": message, "at": self._now().isoformat()})
-        self.store.set("macro_retry", (self._now() + RETRY_AFTER).isoformat())
+        self.note(message)
 
     def series(self, name: str, start: date | None = None, end: date | None = None) -> list[tuple[date, float]]:
         rows = self._db.execute(

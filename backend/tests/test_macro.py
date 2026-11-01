@@ -35,7 +35,7 @@ def test_monthly_values_count_only_once_published() -> None:
     assert macro.latest("USREC", date(2020, 6, 1)) is None  # named a recession months later
 
 
-def test_series_are_fetched_once_and_wait_after_a_failure() -> None:
+def test_series_are_fetched_once_and_a_failure_is_shown() -> None:
     now = [datetime(2026, 1, 5, tzinfo=UTC)]
     macro = Macro(Store(":memory:"), "k", now=lambda: now[0])
     assert macro.due() == list(SERIES)
@@ -44,9 +44,8 @@ def test_series_are_fetched_once_and_wait_after_a_failure() -> None:
     now[0] += timedelta(days=3)
     assert "DFF" not in macro.due()  # later days come only on request
     macro.failed("down")
-    assert macro.due() == [] and macro.status()["last_error"] == "down"
-    now[0] += timedelta(hours=2)
-    assert macro.due()
+    assert macro.status()["last_error"] == "down"
+    assert macro.due() == [s for s in SERIES if s != "DFF"]  # a failure holds nothing back
 
 
 def test_the_update_saves_each_series_and_stops_on_a_refusal() -> None:
@@ -116,10 +115,10 @@ def test_update_fetches_only_new_days_for_downloaded_series_and_the_rest_in_full
     assert macro.last_day("DFF") == date(2020, 1, 7)
 
 
-def test_an_earlier_rate_limit_does_not_hold_back_a_manual_update() -> None:
+def test_an_earlier_failure_does_not_hold_back_an_update() -> None:
     macro = Macro(Store(":memory:"), "k", fetch=lambda series, key: ROWS)
-    macro.failed("FRED says too many requests")  # the app used to wait an hour
-    assert macro.due() == []
+    macro.failed("FRED says too many requests")
+    assert macro.due() == list(SERIES)
     update.update_macro(macro, say=lambda m: None)
     assert set(macro.fetched) == set(SERIES)
 

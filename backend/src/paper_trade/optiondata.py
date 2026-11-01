@@ -56,7 +56,6 @@ BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
 EARNINGS_URL = "https://www.alphavantage.co/query"
 AV_KEY_NAME = "ALPHAVANTAGE_API_KEY"
 REFRESH_AFTER = timedelta(hours=20)  # a symbol's chain is fetched again after this
-RETRY_AFTER = timedelta(minutes=30)  # after a sync that failed
 BAR_DAYS = 400  # calendar days of daily bars (a year of trading days and some)
 RATE_RESERVE = 20  # requests left in Alpaca's minute below which syncing waits
 LIVE_AFTER = timedelta(hours=1)  # into the session, before today's option volume is used
@@ -310,7 +309,6 @@ class OptionData:
         self.creds = creds
         self.earnings_key = earnings_key
         self._now = now
-        self.progress: tuple[int, int] | None = None  # (done, total) while syncing
 
     @property
     def configured(self) -> bool:
@@ -342,27 +340,14 @@ class OptionData:
         saved, now = self.saved, self._now()
         return [s for s in symbols if s not in saved or now - datetime.fromisoformat(saved[s]["fetched"]) >= REFRESH_AFTER]
 
-    def seconds_until_due(self, symbols: list[str]) -> float:
-        state = self._sync_state()
-        now = self._now()
-        if state.get("retry") and state.get("attempt"):
-            return max(0.0, (datetime.fromisoformat(state["attempt"]) + RETRY_AFTER - now).total_seconds())
-        saved = self.saved
-        if any(s not in saved for s in symbols):
-            return 0.0
-        oldest = min(datetime.fromisoformat(saved[s]["fetched"]) for s in symbols)
-        return max(0.0, (oldest + REFRESH_AFTER - now).total_seconds())
-
-    def attempt(self, total: int) -> None:
-        self.store.set("option_sync", {"attempt": self._now().isoformat(), "error": None, "retry": False})
-        self.progress = (0, total)
+    def attempt(self) -> None:
+        """A sync begins: clear the last problem (and the old attempt/retry fields)."""
+        self.store.set("option_sync", {"error": None})
 
     def record(self, symbol: str, summary: dict) -> None:
         saved = self.saved
         saved[symbol] = summary
         self.store.set("option_calibration", saved)
-        if self.progress:
-            self.progress = (self.progress[0] + 1, self.progress[1])
 
     def note(self, message: str) -> None:
         """Something to show the user that didn't stop the sync."""
@@ -370,12 +355,8 @@ class OptionData:
         self.store.set("option_sync", state | {"error": message})
 
     def failed(self, message: str) -> None:
-        """The sync stopped: show why, and try again after RETRY_AFTER."""
-        state = self._sync_state()
-        self.store.set("option_sync", state | {"error": message, "retry": True})
-
-    def finished(self) -> None:
-        self.progress = None
+        """The sync stopped: show why."""
+        self.note(message)
 
     def status(self, symbols: list[str]) -> dict:
         saved = self.saved
@@ -390,6 +371,5 @@ class OptionData:
             "oldest": min(days) if days else None,
             "newest": max(days) if days else None,
             "fetched": max(fetched) if fetched else None,
-            "running": {"done": self.progress[0], "total": self.progress[1]} if self.progress else None,
             "last_error": state.get("error"),
         }

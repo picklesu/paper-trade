@@ -104,19 +104,16 @@ def test_sessions_for_volume() -> None:
 def test_schedule_and_status() -> None:
     clock = Clock()
     data = od.OptionData(Store(":memory:"), KEYS, now=clock)
-    assert data.due(["A", "B"]) == ["A", "B"] and data.seconds_until_due(["A", "B"]) == 0
-    data.attempt(2)
+    assert data.due(["A", "B"]) == ["A", "B"]
+    data.attempt()
     data.record("A", {"symbol": "A", "fetched": NOW.isoformat(), "as_of": "2026-10-30", "shape": {"rho": []}})
     assert data.due(["A", "B"]) == ["B"]
     data.record("B", {"symbol": "B", "fetched": NOW.isoformat(), "shape": None})
-    assert data.status(["A", "B"])["running"] == {"done": 2, "total": 2}
-    data.finished()
     status = data.status(["A", "B"])
-    assert status["calibrated"] == 1 and status["newest"] == "2026-10-30" and status["running"] is None
-    assert data.seconds_until_due(["A", "B"]) == od.REFRESH_AFTER.total_seconds()
+    assert status["calibrated"] == 1 and status["newest"] == "2026-10-30"
     data.failed("Alpaca says too many requests")
-    assert data.seconds_until_due(["A", "B"]) == od.RETRY_AFTER.total_seconds()
     assert data.status(["A", "B"])["last_error"] == "Alpaca says too many requests"
+    assert data.due(["A", "B"]) == []  # a failure changes nothing else
     clock.t += od.REFRESH_AFTER
     assert data.due(["A", "B"]) == ["A", "B"]
 
@@ -143,7 +140,7 @@ def make_data(monkeypatch, fail_on: str | None = None, broken: str | None = None
 
     def summarize(symbol, creds, ctx, now):
         calls.append(symbol)
-        assert data.progress is not None and ctx.earnings == {}
+        assert ctx.earnings == {}
         if symbol == fail_on:
             raise FetchError("Alpaca says too many requests; the next refresh will try again.")
         if symbol == broken:
@@ -175,7 +172,7 @@ def test_update_calibrates_each_symbol_and_a_restart_reprices_chains(monkeypatch
     assert after["calibration"]["as_of"] == "2026-10-30" and after["calibration"]["premium"] == 1.2
     assert after["call"]["iv"] != before["call"]["iv"]
     status = data.status(NAMES)
-    assert status["calibrated"] == len(NAMES) and status["running"] is None and status["earnings"]
+    assert status["calibrated"] == len(NAMES) and status["earnings"]
     assert data.rate == pytest.approx(0.0418)  # the interest rate was fetched too
     calls.clear()
     update.update_options(data, NAMES, say=lambda m: None)  # nothing due

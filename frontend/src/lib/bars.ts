@@ -129,7 +129,7 @@ export function formatBarTime(t: number, interval: Interval): string {
   if (interval === '1D') {
     return d.toLocaleDateString('en-US', { timeZone: ET, weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
   }
-  const day = d.toLocaleDateString('en-US', { timeZone: ET, weekday: 'short', month: 'short', day: 'numeric' })
+  const day = d.toLocaleDateString('en-US', { timeZone: ET, weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
   const time = d.toLocaleTimeString('en-US', { timeZone: ET, hour: 'numeric', minute: '2-digit' })
   return `${day} ${time}`
 }

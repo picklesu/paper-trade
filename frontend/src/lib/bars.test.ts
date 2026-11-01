@@ -84,7 +84,7 @@ describe('ranges and labels', () => {
   })
 
   it('formats bar times in New York time', () => {
-    expect(formatBarTime(at(60), '5m')).toBe('Wed, Jan 7 10:30 AM')
+    expect(formatBarTime(at(60), '5m')).toBe('Wed, Jan 7, 2026 10:30 AM')
     expect(formatBarTime(OPEN, '1D')).toBe('Wed, Jan 7, 2026')
     expect(formatBarTime(OPEN, '1W')).toBe('Week of Jan 7, 2026')
   })

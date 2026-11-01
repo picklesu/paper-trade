@@ -11,7 +11,9 @@ from datetime import date, timedelta
 
 import numpy as np
 
+from paper_trade.macro import SERIES
 from paper_trade.market.calendar import RULE_HOLIDAYS
+from paper_trade.market.regime import RealRegime, load_params
 from paper_trade.pricehistory import Bar
 
 
@@ -33,8 +35,16 @@ class RealBarsGone(ValueError):
 
 
 class RealBars:
-    def __init__(self, symbols: Sequence[str], bars: dict[str, list[Bar]], vix: Sequence[tuple[date, float]] = ()) -> None:
+    def __init__(
+        self,
+        symbols: Sequence[str],
+        bars: dict[str, list[Bar]],
+        vix: Sequence[tuple[date, float]] = (),
+        macro: dict[str, list[tuple[date, float]]] | None = None,
+    ) -> None:
         self.symbols = tuple(symbols)
+        self._macro = macro
+        self._regime: RealRegime | None | bool = False  # built on first use (False: not yet)
         good = [(d, v) for d, v in vix if isinstance(v, (int, float)) and math.isfinite(v) and v > 0]
         self._vix_days = [d for d, _ in good]
         self._vix = [v for _, v in good]
@@ -51,7 +61,8 @@ class RealBars:
     def from_history(cls, history, symbols: Sequence[str], macro=None) -> "RealBars | None":
         """The saved bars of `symbols` (None while none are saved), and the real VIX from `macro`."""
         bars = {s: history.bars(s) for s in symbols if s in history.fetched}
-        real = cls(symbols, bars, macro.series("VIXCLS") if macro else ())
+        series = {name: macro.series(name) for name in SERIES} if macro else None
+        real = cls(symbols, bars, series["VIXCLS"] if series else (), series)
         return real if real.last_day else None
 
     def day(self, d: date) -> RealDay | None:
@@ -71,6 +82,17 @@ class RealBars:
 
         dividend = np.array([x.dividend if x else 0.0 for x in found])
         return RealDay(has, col("open"), col("high"), col("low"), col("close"), col("volume"), dividend)
+
+    def regime_on(self, d: date) -> tuple[int, np.ndarray] | None:
+        """The long-lived regime state and its macro features as the model's filter finds them
+        from the real returns through `d` (None where SPY or the macro series are missing)."""
+        if self._regime is False:
+            self._regime = None
+            spy = self._bars[self.symbols.index("SPY")] if "SPY" in self.symbols else {}
+            if spy and self._macro:
+                days = sorted(spy)
+                self._regime = RealRegime(load_params(), days, np.array([spy[x].close for x in days]), self._macro)
+        return self._regime.at(d) if self._regime else None
 
     def vix_on_or_before(self, d: date) -> float | None:
         """The real VIX close of the last session on or before `d` (None before it exists)."""

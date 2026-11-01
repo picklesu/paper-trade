@@ -16,8 +16,8 @@ interface Props {
 
 const REGIME_LABEL: Record<Regime, string> = {
   calm: 'Calm',
-  normal: 'Normal',
-  volatile: 'Volatile',
+  correction: 'Correction',
+  crisis: 'Crisis',
 }
 
 export function ClockControls({ clock, regime, shock = 0, shockPending = false, progress }: Props) {
@@ -64,7 +64,7 @@ export function ClockControls({ clock, regime, shock = 0, shockPending = false, 
         </span>
       ) : (
         regime && (
-          <span className={`regime regime-${regime}`} title="Current market volatility">
+          <span className={`regime regime-${regime}`} title="The market's long-lived state: calm, correction or crisis">
             {REGIME_LABEL[regime]}
           </span>
         )

@@ -168,7 +168,7 @@ def calibrate(p, share, yearly_log_return, years=300):
     steps = years * 252 // PERIOD
     q = p
     for it in range(10):
-        q = RegimeParams(p.mean, p.sigma, bias, p.weights, p.center, p.scale, p.period, p.level, p.persistence, p.noise)
+        q = RegimeParams(p.mean, p.sigma, bias, p.weights, p.center, p.scale, p.period, p.level, p.persistence, p.noise, p.share)
         states, _ = simulate_states(q, steps)
         got = np.array([(states == k).mean() for k in range(K)]).clip(1e-3)
         bias = bias + 0.6 * np.log(share / got)[None, :]
@@ -178,7 +178,7 @@ def calibrate(p, share, yearly_log_return, years=300):
     states, _ = simulate_states(q, steps)
     freq = np.array([(states == k).mean() for k in range(K)])
     mean = mean + (yearly_log_return * per - float(freq @ mean))  # one shift keeps the gaps between states
-    return RegimeParams(mean, p.sigma, bias, p.weights, p.center, p.scale, p.period, p.level, p.persistence, p.noise)
+    return RegimeParams(mean, p.sigma, bias, p.weights, p.center, p.scale, p.period, p.level, p.persistence, p.noise, p.share)
 
 
 def main() -> None:
@@ -191,7 +191,7 @@ def main() -> None:
     params, gamma = fit(r, raw)
     X = np.clip(np.nan_to_num((raw - params.center) / params.scale, nan=0.0), -4, 4)
     level, persistence, noise = feature_dynamics(X, gamma)
-    params = RegimeParams(params.mean, params.sigma, params.bias, params.weights, params.center, params.scale, PERIOD, level, persistence, noise)
+    params = RegimeParams(params.mean, params.sigma, params.bias, params.weights, params.center, params.scale, PERIOD, level, persistence, noise, gamma.mean(axis=0))
     params = calibrate(params, gamma.mean(axis=0), float(r.sum() / (len(r) * PERIOD / 252)))
     avg = params.transition(raw).mean(axis=0)  # the fitted odds averaged over history
     ann = np.sqrt(252 / PERIOD)

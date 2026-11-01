@@ -9,6 +9,7 @@ features, the transition odds and the parameter file's reading.
 
 from __future__ import annotations
 
+import bisect
 import json
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -62,6 +63,7 @@ class RegimeParams:
     level: np.ndarray | None = None  # (K, F)
     persistence: np.ndarray | None = None  # (K, F)
     noise: np.ndarray | None = None  # (K, F)
+    share: np.ndarray | None = None  # (K,) long-run share of time in each state (what the fit was calibrated to)
 
     def standardize(self, raw: np.ndarray) -> np.ndarray:
         x = (np.asarray(raw, dtype=float) - self.center) / self.scale
@@ -90,13 +92,26 @@ class RegimeParams:
             "level": self.level.tolist(),
             "persistence": self.persistence.tolist(),
             "noise": self.noise.tolist(),
+            "share": self.share.tolist(),
         }
 
     @staticmethod
     def from_json(d: dict) -> RegimeParams:
         arrays = {k: np.array(d[k], dtype=float) for k in ("mean", "sigma", "bias", "weights", "center", "scale")}
-        dynamics = {k: np.array(d[k], dtype=float) for k in ("level", "persistence", "noise")}
+        dynamics = {k: np.array(d[k], dtype=float) for k in ("level", "persistence", "noise", "share")}
         return RegimeParams(**arrays, period=int(d["period"]), **dynamics)
+
+    @property
+    def variance_multiple(self) -> np.ndarray:
+        """(K,) each state's variance as a multiple of the long-run average (the engine's
+        market variance centers on it, so the average stays 1)."""
+        v = self.sigma**2
+        return v / float(self.share @ v)
+
+    @property
+    def drift_tilt(self) -> np.ndarray:
+        """(K,) each state's annual drift less the long-run average."""
+        return (self.mean - float(self.share @ self.mean)) * (TRADING_DAYS / self.period)
 
     def step(self, state: int, z: np.ndarray, rng: np.random.Generator) -> tuple[int, np.ndarray, float]:
         """One period from `state` with standardized features `z`: the next state, its
@@ -125,3 +140,38 @@ def business_days(start: date, end: date) -> list[date]:
             out.append(d)
         d += timedelta(days=1)
     return out
+
+
+class RealRegime:
+    """The regime through the real past: SPY's real weekly returns, filtered through the
+    model (with the macro picture known at each step), give the state and features at
+    every block end. The future starts from the last one (no look-ahead)."""
+
+    def __init__(self, params: RegimeParams, days: list[date], closes: np.ndarray, series: dict[str, list[tuple[date, float]]]) -> None:
+        period = params.period
+        marks = np.arange(0, len(closes) - period, period)
+        self.ends: list[date] = []
+        self.states = np.zeros(0, dtype=int)
+        self.z = np.zeros((0, len(params.center)))
+        if len(marks) < 2:
+            return
+        r = np.log(closes[marks + period] / closes[marks])
+        starts = [days[m + 1] for m in marks]
+        trans = params.transition(feature_panel(starts, series))
+        logb = -0.5 * ((r[:, None] - params.mean) / params.sigma) ** 2 - np.log(params.sigma)
+        b = np.exp(logb - logb.max(axis=1, keepdims=True))
+        alpha = np.zeros_like(b)
+        a = b[0] / b[0].sum()
+        alpha[0] = a
+        for t in range(1, len(r)):
+            a = (alpha[t - 1] @ trans[t]) * b[t]
+            alpha[t] = a / a.sum()
+        self.ends = [days[m + period] for m in marks]
+        self.states = alpha.argmax(axis=1)
+        after = [d + timedelta(days=1) for d in self.ends]
+        self.z = np.array([params.standardize(row) for row in feature_panel(after, series)])
+
+    def at(self, day: date) -> tuple[int, np.ndarray] | None:
+        """The state and standardized features at the last block end on or before `day`."""
+        k = bisect.bisect_right(self.ends, day) - 1
+        return (int(self.states[k]), self.z[k]) if k >= 0 else None

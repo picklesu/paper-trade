@@ -65,7 +65,7 @@ function tick(overrides: Partial<TickMessage> = {}): TickMessage {
   return {
     type: 'tick',
     clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z', session_open: '2026-01-05T14:30:00Z', timeline: 0, building_history: false },
-    regime: 'normal',
+    regime: 'correction',
     quotes: [quote('SPY', 582, 580), quote('AAPL', 228, 230)],
     account: {
       starting_cash: 100_000,
@@ -154,7 +154,7 @@ describe('App', () => {
 
   it('shows streamed quotes, clock and regime', () => {
     render(<App />)
-    push(tick({ regime: 'volatile' }))
+    push(tick({ regime: 'crisis' }))
 
     expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent('Connected')
     const watchlist = panel('Watchlist')
@@ -163,7 +163,7 @@ describe('App', () => {
     expect(within(watchlist).getByText('-0.87%')).toHaveClass('down')
     // 15:30 UTC is 10:30 in New York in January.
     expect(screen.getByText('10:30:00')).toBeInTheDocument()
-    expect(screen.getByText('Volatile')).toBeInTheDocument()
+    expect(screen.getByText('Crisis')).toBeInTheDocument()
   })
 
   it('shows account totals in the top bar and positions in their panel', () => {
@@ -420,7 +420,7 @@ describe('workspace', () => {
     render(<App />)
     push(tick())
     update.mockClear()
-    push(tick({ regime: 'volatile' }))
+    push(tick({ regime: 'crisis' }))
     push(tick({ regime: 'calm' }))
     // The workspace's own re-renders (a panel opened and its tab updated) mustn't either.
     fireEvent.click(stripTab('Watchlist'))

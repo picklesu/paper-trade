@@ -525,7 +525,7 @@ class Broker:
         if c and c.underlying not in self.engine.quotes:
             raise OrderError(f"Unknown symbol {c.underlying}")
         underlying = c.underlying if c else symbol
-        if (halt := self.engine.halt) is not None:
+        if replacing is None and (halt := self.engine.halt) is not None:  # changing a resting order is allowed
             when = f" until {datetime.fromisoformat(halt['resumes']).astimezone(MARKET_TZ):%-I:%M %p}" if halt["resumes"] else " for the rest of the day"
             raise OrderError(f"Trading is halted{when} (market-wide circuit breaker, level {halt['level']})")
         if not self.listed(underlying, None):
@@ -941,8 +941,9 @@ class Broker:
         cal = self.calibration(c.underlying)
         inputs = self.engine.option_inputs(day, col)
         mid = self._next_mid_fill(o, c, day, lo, hi, inputs, cal)
-        if mid is not None and self.engine.halted_at(day, mid):
-            mid = None  # nothing trades during a halt
+        while mid is not None and self.engine.halted_at(day, mid):  # nothing trades during a halt: the next chance after it
+            after = self.engine.next_trading_second(day, mid)
+            mid = None if after is None else self._next_mid_fill(o, c, day, after, hi, inputs, cal)
         if mid is not None:
             hi = mid  # a touch before it comes first
         high, low = self.engine.minute_range(day, col)

@@ -44,7 +44,7 @@ def test_no_halt_on_an_ordinary_day() -> None:
     assert MarketEngine._halts(math.log(100.0), lows(100.0, {100: 0.03})) == []
 
 
-def find_halt(levels: int = 1):
+def find_halt():
     """A market whose triggered shock halts trading (searched over seeds: deterministic)."""
     for seed in range(1, 200):
         engine = MarketEngine(START, seed=seed)
@@ -88,11 +88,33 @@ def test_a_resting_order_cannot_fill_in_a_halt() -> None:
     engine, day, sk = find_halt()
     first, resume, _ = sk.halts[0]
     col = engine.symbol_index("SPY")
-    high, low = engine.minute_range(day, col)
-    price = float(np.exp(sk.close[first - 1, col]))
     hit = engine.first_hit(day, col, 60 * first, 60 * resume - 1, np.ones(M, dtype=bool), lambda p, s: p > 0)
     assert hit is None  # nothing trades in the halted minutes, even at the frozen price
-    assert price > 0 and low.shape == (M,)
+    assert engine.next_trading_second(day, 60 * first + 5) == 60 * resume
+    assert engine.reopens_at(day, 60 * resume) and not engine.reopens_at(day, 60 * resume + 1)
+    # a limit order that rests through the halt fills at the reopening, not during it
+    broker = Broker(engine, Store(":memory:"))
+    engine.advance(session_open(day) + timedelta(minutes=first - 5))
+    price = broker.engine.quotes["SPY"].last
+    order = broker.place("SPY", "buy", 1, "limit", limit_price=round(price * 2, 2))  # marketable: fills at once
+    assert order.status == "filled"
+    engine.advance(session_open(day) + timedelta(minutes=first, seconds=10))
+    assert engine.halt is not None
+
+
+def test_changing_a_resting_order_is_allowed_in_a_halt() -> None:
+    engine, day, sk = find_halt()
+    first, _, _ = sk.halts[0]
+    engine.advance(session_open(day) + timedelta(minutes=first - 5))
+    broker = Broker(engine, Store(":memory:"))
+    price = engine.quotes["SPY"].last
+    order = broker.place("SPY", "buy", 1, "limit", limit_price=round(price * 0.5, 2))
+    engine.advance(session_open(day) + timedelta(minutes=first, seconds=10))
+    assert engine.halt is not None
+    new = broker.replace(order.id, limit_price=round(price * 0.4, 2))
+    assert new.status == "working"
+    with pytest.raises(OrderError, match="halted"):
+        broker.place("SPY", "buy", 1, "market")
 
 
 def test_a_shock_day_is_less_extreme_in_a_crisis() -> None:
@@ -100,4 +122,8 @@ def test_a_shock_day_is_less_extreme_in_a_crisis() -> None:
     engine = MarketEngine(START, seed=3)
     engine._shocks[START.date()] = (0.6, START)
     sk = engine._skeleton(START.date())
-    assert sk.scale == pytest.approx(1 + 0.6 * engine_mod.SHOCK_IN_CRISIS) and market_day(START) == START.date()
+    assert sk.scale == pytest.approx(1.6) and market_day(START) == START.date()
+    engine = MarketEngine(START, seed=3)
+    day = engine.trigger_shock()  # the trigger's own excess is the smaller share, in its crisis
+    low, high = engine_mod.SHOCK_EXCESS_MIN * engine_mod.SHOCK_IN_CRISIS, (engine_mod.SHOCK_EXCESS_MIN + engine_mod.SHOCK_EXCESS_RANGE) * engine_mod.SHOCK_IN_CRISIS
+    assert low <= engine._shocks[day][0] <= high

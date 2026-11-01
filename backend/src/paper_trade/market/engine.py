@@ -111,7 +111,7 @@ SHOCKS_PER_YEAR = 0.0  # random uncertainty shocks are now the regime model's cr
 SHOCK_EXCESS_MIN = 0.4  # the extra volatility at onset (0.65: about 1.65 times normal), between this
 SHOCK_EXCESS_RANGE = 0.5  # and this much more (it stacks with the regime and GARCH, so the index can reach 100)
 SHOCK_HALF_LIFE_DAYS = 60.0
-SHOCK_IN_CRISIS = 0.4  # a shock's volatility multiple counts this much in a crisis (whose own level already is the stress)
+SHOCK_IN_CRISIS = 0.4  # a triggered shock's extra volatility is this share of the usual (the crisis it starts carries the rest)
 # Market-wide circuit breakers (NYSE Rule 80B), on SPY's fall from the previous close: a 15-minute
 # halt at 7% and at 13% (not after 3:25 PM), and no more trading that day at 20%.
 BREAKER_LEVELS = (0.07, 0.13, 0.20)
@@ -482,7 +482,8 @@ class MarketEngine:
         if day in self._shocks:
             return day
         draw = np.random.default_rng([self._seed, day.toordinal(), _key("shock")]).random()
-        self._shocks[day] = (SHOCK_EXCESS_MIN + SHOCK_EXCESS_RANGE * float(draw), self._time)
+        # A trigger also sends the market into a crisis, whose own level is most of the stress.
+        self._shocks[day] = ((SHOCK_EXCESS_MIN + SHOCK_EXCESS_RANGE * float(draw)) * SHOCK_IN_CRISIS, self._time)
         self._starts = {d: s for d, s in self._starts.items() if d <= today}
         self.starts_version += 1
         self._forget(lambda d: d > today)
@@ -1112,7 +1113,7 @@ class MarketEngine:
             if not after_real:  # the real VIX sets the first simulated day's variance as it is
                 h = float(np.clip(start.variance * self._state_variance[state] / self._state_variance[start.state], *VARIANCE_RANGE))
         state_drift = 0.0 if real_day is not None else self._state_tilt[state]
-        scale = 1 + excess * (SHOCK_IN_CRISIS if state == len(STATES) - 1 else 1.0)
+        scale = 1 + excess
 
         # Each symbol's loadings on them, today.
         h_own = np.ones(n) if start.own_variance is None else start.own_variance
@@ -1295,6 +1296,16 @@ class MarketEngine:
     def halted_at(self, day: date, second: int) -> bool:
         sk = self._skeleton(day)
         return bool(sk.halted is not None and sk.halted[min(second, _S - 1) // 60])
+
+    def next_trading_second(self, day: date, second: int) -> int | None:
+        """The first second at or after `second` when trading is open (None: not today)."""
+        sk = self._skeleton(day)
+        if sk.halted is None:
+            return second
+        for m in range(min(second, _S - 1) // 60, _M):
+            if not sk.halted[m]:
+                return max(second, 60 * m)
+        return None
 
     def reopens_at(self, day: date, second: int) -> bool:
         """Whether `second` is the first of a session or the first after a halt (a gap there fills at the new price)."""

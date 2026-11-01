@@ -26,7 +26,7 @@ APCA_API_SECRET_KEY=your-secret
 ALPHAVANTAGE_API_KEY=your-key        # optional: real earnings dates
 ```
 
-Then `./server.sh restart`. **Go to… → Sync to latest real prices…** starts a new market at each symbol's latest real quote. Real daily history (Tiingo) and economic series (FRED) are downloaded once and saved.
+Then `./server.sh restart`. Real daily history (Tiingo) and economic series (FRED) are downloaded once and saved; **Go to… → Real data… → Update real history** adds the newest days, and **Last real day** jumps to the close of the newest real day the current market replays.
 
 ## Run
 
@@ -52,7 +52,7 @@ cd frontend && npm test
 | Phase | Feature | Status |
 |---|---|---|
 | 0–5 | Skeleton, market engine, sessions, account and orders, order preview, charts, indicators | Done |
-| 5.5–5.9 | Dockable workspace, realistic prices, 40-symbol engine, real-price sync via Alpaca | Done |
+| 5.5–5.9 | Dockable workspace, realistic prices, 40-symbol engine, real quotes via Alpaca | Done |
 | 6 | Watchlists and quotes | Done |
 | 7 | Options chain with Greeks, exchange holidays; prices calibrated to real options | Done |
 | 8a | Option trading, expiration, exercise, assignment | Done |

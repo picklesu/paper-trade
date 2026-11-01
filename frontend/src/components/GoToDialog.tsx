@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Modal } from './Modal'
-import { fetchRealPrices, goto, previewGoto, syncRealPrices, triggerShock, updateRealHistory, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
+import { fetchRealPrices, goto, previewGoto, triggerShock, updateRealHistory, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
 import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
@@ -25,45 +25,33 @@ export function GoToDialog({ clock, onClose }: Props) {
   const [preview, setPreview] = useState<GotoResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Set while offering to sync to real prices.
+  // Set while showing the real data (status of the saved history and option fits).
   const [real, setReal] = useState<RealPricesStatus | 'loading' | null>(null)
 
   // Set while offering to trigger an uncertainty shock.
   const [shockView, setShockView] = useState(false)
 
-  // Counts sync views opened, so a status that arrives after Back is ignored.
-  const syncView = useRef(0)
+  // Counts real-data views opened, so a status that arrives after Back is ignored.
+  const dataView = useRef(0)
 
-  const openSync = async () => {
-    const view = ++syncView.current
+  const openData = async () => {
+    const view = ++dataView.current
     setReal('loading')
     setError(null)
     try {
       const status = await fetchRealPrices()
-      if (view === syncView.current) setReal(status)
+      if (view === dataView.current) setReal(status)
     } catch (err) {
-      if (view !== syncView.current) return
+      if (view !== dataView.current) return
       setError(err instanceof Error ? err.message : String(err))
       setReal(null)
     }
   }
 
-  const closeSync = () => {
-    syncView.current++
+  const closeData = () => {
+    dataView.current++
     setError(null)
     setReal(null)
-  }
-
-  const sync = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      await syncRealPrices()
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setBusy(false)
-    }
   }
 
   // The next session is still in the real past: prices there are real, so there is nothing to shock.
@@ -121,7 +109,7 @@ export function GoToDialog({ clock, onClose }: Props) {
   return (
     <Modal labelledBy="goto-title" onClose={onClose}>
       {real !== null ? (
-        <SyncToReal status={real} busy={busy} onSync={sync} onBack={closeSync} realThrough={inRealPast ? clock.real_through : null} />
+        <RealData status={real} onBack={closeData} realThrough={clock.real_through} />
       ) : shockView ? (
         <>
           <h2 id="goto-title">Trigger an uncertainty shock?</h2>
@@ -133,7 +121,7 @@ export function GoToDialog({ clock, onClose }: Props) {
           </p>
           {inRealPast && (
             <p className="warn-text">
-              This date is in the real past (the real daily prices run through {calendarDate(clock.real_through ?? '')}), where
+              This date is in the real past (the real daily prices run through {calendarDate(clock.real_through ?? '', true)}), where
               prices follow what really happened, so a shock can't be added. Go to a later date first.
             </p>
           )}
@@ -212,6 +200,11 @@ export function GoToDialog({ clock, onClose }: Props) {
                 {s.label}
               </button>
             ))}
+            {clock.real_through && (
+              <button className="ctl" title={`The close of ${calendarDate(clock.real_through, true)}`} onClick={() => setValue(`${clock.real_through}T15:59`)}>
+                Last real day
+              </button>
+            )}
           </div>
           <p className="muted">
             The market is open 9:30 AM–4:00 PM ET, Monday–Friday. Other times go to the next open.
@@ -225,8 +218,8 @@ export function GoToDialog({ clock, onClose }: Props) {
             </button>
           </div>
           <div className="dialog-footer">
-            <button className="link-button" disabled={busy} onClick={openSync}>
-              Sync to latest real prices…
+            <button className="link-button" disabled={busy} onClick={openData}>
+              Real data…
             </button>
             <button className="link-button" disabled={busy} onClick={() => setShockView(true)}>
               Trigger an uncertainty shock…
@@ -241,22 +234,6 @@ export function GoToDialog({ clock, onClose }: Props) {
       )}
     </Modal>
   )
-}
-
-interface SyncProps {
-  status: RealPricesStatus | 'loading'
-  busy: boolean
-  onSync: () => void
-  onBack: () => void
-  /** Set while the market is in the real past (through this day): syncing doesn't apply there. */
-  realThrough?: string | null
-}
-
-/** ", fetched at 2:41 PM" in the computer's own time (it's when, not market time). */
-function fetchedAt(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const t = new Date(iso)
-  return Number.isNaN(t.getTime()) ? '' : `, fetched at ${t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
 }
 
 /** How option prices' calibration to real options stands (it runs by itself once a day). */
@@ -274,7 +251,7 @@ function OptionSync({ status }: { status: OptionDataStatus | undefined }) {
         {status.running
           ? `Option prices: fitting to real options, ${status.running.done} of ${status.running.total} symbols done…`
           : status.calibrated
-            ? `Option prices: fitted to real options for ${status.calibrated} of ${status.total} symbols${days && ` (${days})`}, again daily. Syncing prices doesn't change them.`
+            ? `Option prices: fitted to real options for ${status.calibrated} of ${status.total} symbols${days && ` (${days})`}, again daily.`
             : 'Option prices: not fitted to real options yet; the server fetches them once a day.'}
         {!status.earnings && ' Real earnings dates need an Alpha Vantage key (ALPHAVANTAGE_API_KEY in backend/.env).'}
       </p>
@@ -284,14 +261,13 @@ function OptionSync({ status }: { status: OptionDataStatus | undefined }) {
 }
 
 /** Real daily history is fetched once; this fetches only the days since, when asked. */
-function RealHistory({ status: initial }: { status: RealPricesStatus }) {
+function RealHistory({ status: initial, realThrough }: { status: RealPricesStatus; realThrough?: string | null }) {
   const [status, setStatus] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const history = status.history
   const macro = status.macro
-  if (!history?.configured && !macro?.configured) return null
 
   const update = async () => {
     setBusy(true)
@@ -315,11 +291,25 @@ function RealHistory({ status: initial }: { status: RealPricesStatus }) {
 
   return (
     <div className="option-sync">
-      <p className="muted">
-        Real history: {history?.configured ? `${history.available} of ${history.total} symbols${history.newest ? `, through ${calendarDate(history.newest)}` : ''}` : 'no price key'}
-        {macro?.configured && `; ${macro.available} of ${macro.total} economic series`}. It's fetched once; this adds only the days since.
+      <p>
+        {history?.configured
+          ? history.newest
+            ? `Real prices through ${calendarDate(history.newest, true)} (${history.available} of ${history.total} symbols).`
+            : 'Real prices: none downloaded yet.'
+          : 'Real prices need TIINGO_API_KEY in backend/.env (then restart the server).'}
       </p>
-      <button className="btn" disabled={busy} onClick={update}>
+      <p>
+        {macro?.configured
+          ? `Economic series: ${macro.available} of ${macro.total}.`
+          : 'Economic series need FRED_API_KEY in backend/.env (then restart the server).'}
+      </p>
+      <p className="muted">History is downloaded once; Update adds only the days since.</p>
+      {realThrough && history?.newest && history.newest > realThrough && (
+        <p className="muted">
+          This market replays real days through {calendarDate(realThrough, true)}. Newer days apply to markets started later.
+        </p>
+      )}
+      <button className="btn" disabled={busy || (!history?.configured && !macro?.configured)} onClick={update}>
         {busy ? 'Updating…' : 'Update real history'}
       </button>
       {result && <p className={failed ? 'warn-text' : 'muted'}>{result}</p>}
@@ -327,97 +317,29 @@ function RealHistory({ status: initial }: { status: RealPricesStatus }) {
   )
 }
 
-/** Offer to continue the market from now at the saved real prices. */
-function SyncToReal({ status, busy, onSync, onBack, realThrough }: SyncProps) {
+/** What real data is saved, how to bring in newer days, and how option prices stand. */
+function RealData({ status, onBack, realThrough }: { status: RealPricesStatus | 'loading'; onBack: () => void; realThrough?: string | null }) {
   const back = (
-    <button className="btn" disabled={busy} onClick={onBack}>
+    <button className="btn" onClick={onBack}>
       Back
     </button>
   )
   if (status === 'loading') {
     return (
       <>
-        <h2 id="goto-title">Sync to latest real prices</h2>
-        <p className="muted">Checking real prices…</p>
+        <h2 id="goto-title">Real data</h2>
+        <p className="muted">Checking real data…</p>
         <div className="dialog-actions">{back}</div>
       </>
     )
   }
-  if (!status.configured) {
-    return (
-      <>
-        <h2 id="goto-title">Sync to latest real prices</h2>
-        <p>
-          Real prices come from Alpaca and need its free API keys (from a free paper trading account). Add the lines{' '}
-          <code>APCA_API_KEY_ID=your-key-id</code> and <code>APCA_API_SECRET_KEY=your-secret</code> to{' '}
-          <code>backend/.env</code> and restart the server.
-        </p>
-        <div className="dialog-actions">{back}</div>
-      </>
-    )
-  }
-  const problem = status.last_error && (
-    <p className="warn-text">
-      The last fetch failed: {status.last_error}
-    </p>
-  )
-  if (status.available === 0) {
-    return (
-      <>
-        <h2 id="goto-title">Sync to latest real prices</h2>
-        <p>
-          No real prices yet. The server fetches all {status.total} symbols from Alpaca when it starts and every{' '}
-          {status.refresh_minutes ?? 15} minutes.
-        </p>
-        {problem}
-        <OptionSync status={status.options} />
-        <RealHistory status={status} />
-        <div className="dialog-actions">{back}</div>
-      </>
-    )
-  }
-  const missing = status.total - status.available
-  const days =
-    status.oldest && status.newest && status.oldest !== status.newest
-      ? `${calendarDate(status.oldest)}–${calendarDate(status.newest)}`
-      : status.newest
-        ? calendarDate(status.newest)
-        : ''
   return (
     <>
-      <h2 id="goto-title">{realThrough ? 'Sync to latest real prices' : 'Sync to latest real prices?'}</h2>
-      {realThrough ? (
-        <>
-          <p>
-            The market is in the real past, where prices already follow the real daily prices (through {calendarDate(realThrough)}). Syncing
-            only applies from the day after that, so there is nothing to do here.
-          </p>
-        </>
-      ) : (
-        <>
-          <p>
-            Latest real quotes are saved for {status.available} of {status.total} symbols{days && ` (${days}${fetchedAt(status.fetched)})`}. This
-            starts a new market at the current simulated time with each symbol priced at its latest real quote
-            {missing > 0 && `; the other ${missing} keep their current price`}.
-          </p>
-          <p className="muted">
-            The real daily prices up to the newest saved day are kept as they were; the days after them are simulated and now
-            end at these quotes, and the 5-year history before now is rebuilt. Your cash, positions and orders are kept; positions are
-            valued at the new prices, and working orders whose stop or limit the move crosses will trigger or fill at them.
-          </p>
-        </>
-      )}
-      {problem}
+      <h2 id="goto-title">Real data</h2>
+      <RealHistory status={status} realThrough={realThrough} />
+      {status.last_error && <p className="warn-text">The last real quote fetch failed: {status.last_error}</p>}
       <OptionSync status={status.options} />
-      <RealHistory status={status} />
-      <div className="dialog-actions">
-        {!realThrough && (
-          <button className="btn primary" disabled={busy} onClick={onSync}>
-            Sync prices
-          </button>
-        )}
-        {back}
-      </div>
+      <div className="dialog-actions">{back}</div>
     </>
   )
 }

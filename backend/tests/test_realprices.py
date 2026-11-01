@@ -163,48 +163,6 @@ def make_service(real: RealPrices | None = None) -> MarketService:
     return MarketService(clock, MarketEngine(START), Store(":memory:"), history_days=5, real=real)
 
 
-def test_reanchor_makes_prices_equal_the_targets_now() -> None:
-    engine = MarketEngine(START)
-    engine.advance(START + timedelta(days=2, minutes=37))
-    t = engine.time
-    targets = np.array([s.price * 1.3 for s in engine.specs])
-    engine.reanchor(targets)
-    assert engine.time == engine.origin == t and not engine.backfilled
-    for q, target in zip(engine.quotes.values(), targets):
-        assert q.last == pytest.approx(target, rel=1e-12)
-
-
-def test_sync_uses_saved_prices_keeps_the_account_and_rebuilds_history() -> None:
-    real = RealPrices(Store(":memory:"), KEYS)
-    svc = make_service(real)
-    real.store = svc.store
-    asyncio.run(svc.build_history())
-    order = svc.broker.place("AAPL", "buy", 1, "market")
-    others = {s: q.last for s, q in svc.engine.quotes.items()}
-    real.record({"SPY": (772.31, date(2026, 10, 28)), "AAPL": (270.0, date(2026, 10, 28))}, ["SPY", "AAPL"])
-
-    async def sync() -> dict:
-        status = await svc.sync_real_prices()
-        assert svc.building_history  # the history is generated again
-        q = svc.engine.quotes
-        assert q["SPY"].last == pytest.approx(772.31) and q["AAPL"].last == pytest.approx(270.0)
-        assert q["XOM"].last == pytest.approx(others["XOM"])  # no real price yet: unchanged
-        await svc._history_task
-        return status
-
-    status = asyncio.run(sync())
-    assert status["available"] == 2
-    assert svc.broker.orders[order.id].status == "filled"  # the account is kept
-    days = svc.history.stored_days()
-    assert len(days) == 5 and max(days) < svc.engine.time.date() and svc.engine.backfilled
-
-
-def test_sync_needs_saved_prices() -> None:
-    svc = make_service(RealPrices(Store(":memory:"), KEYS))
-    with pytest.raises(ValueError):
-        asyncio.run(svc.sync_real_prices())
-
-
 def test_new_markets_start_from_saved_real_prices() -> None:
     real = RealPrices(Store(":memory:"), KEYS)
     svc = make_service(real)
@@ -231,11 +189,11 @@ def test_refresh_fetches_every_symbol_at_once_and_reports_failures() -> None:
     svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
 
     async def run() -> None:
-        await asyncio.gather(svc.refresh_real_prices_if_stale(), svc.refresh_real_prices_if_stale())
+        await asyncio.gather(svc.refresh_real_prices(timedelta(minutes=1)), svc.refresh_real_prices(timedelta(minutes=1)))
         assert len(calls) == 1 and calls[0] == svc.symbols  # the second waited for the first
         assert svc.real_prices_status()["available"] == len(svc.symbols)
         clock.t += timedelta(minutes=1)
-        await svc.refresh_real_prices_if_stale()
+        await svc.refresh_real_prices(timedelta(minutes=1))
         status = svc.real_prices_status()
         assert status["last_error"] == "couldn't reach Alpaca (timed out)"
         assert status["available"] == len(svc.symbols)  # the saved prices stay
@@ -285,41 +243,17 @@ def test_refresher_fetches_at_startup_then_on_schedule(monkeypatch) -> None:
     asyncio.run(run())
 
 
-def test_status_fetches_when_over_a_minute_old_and_waits_at_most_a_moment(monkeypatch) -> None:
-    import time
-
+def test_status_makes_no_request() -> None:
     from paper_trade.api import market as api_mod
 
-    clock = Clock()
     calls = []
-    slow = False
-
-    def fetch(symbols: list[str], creds: Credentials) -> dict:
-        calls.append(clock.t)
-        if slow:
-            time.sleep(0.3)
-        return {s: (100.0, date(2026, 10, 28)) for s in symbols}
-
-    monkeypatch.setattr(api_mod, "STATUS_FETCH_WAIT_SECONDS", 0.05)
     svc = make_service()
-    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
+    svc.real = RealPrices(svc.store, KEYS, fetch=lambda symbols, creds: calls.append(1) or {}, now=Clock())
 
     class Request:
         class app:
             class state:
                 market = svc
 
-    async def run() -> None:
-        assert (await api_mod.real_prices(Request))["available"] == 40
-        await api_mod.real_prices(Request)
-        assert len(calls) == 1  # fresh: not fetched again
-        clock.t += timedelta(minutes=1)
-        nonlocal slow
-        slow = True
-        started = time.monotonic()
-        await api_mod.real_prices(Request)
-        assert time.monotonic() - started < 0.25 and len(calls) == 2  # answered before the fetch finished
-        await asyncio.sleep(0.4)
-        assert svc.real.saved["SPY"].fetched == clock.t  # the fetch finished in the background
-
-    asyncio.run(run())
+    status = asyncio.run(api_mod.real_prices(Request))
+    assert status["available"] == 0 and calls == []  # opening the dialog spends no API call

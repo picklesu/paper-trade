@@ -298,18 +298,10 @@ def test_preview_and_replace_endpoints(client: TestClient) -> None:
     assert resp.status_code == 422 and "Short selling" in resp.json()["detail"]
 
 
-def test_real_prices_status_and_sync(client: TestClient) -> None:
-    from datetime import date
-
+def test_real_prices_status(client: TestClient) -> None:
     status = client.get("/api/real-prices").json()
     assert status["configured"] is False and status["available"] == 0 and status["total"] == 40
-    assert client.post("/api/real-prices/sync").status_code == 422  # nothing fetched yet
-
-    svc = client.app.state.market
-    client.portal.call(svc.real.record, {"SPY": (772.31, date(2026, 10, 28))}, ["SPY"])  # on the app's thread
-    resp = client.post("/api/real-prices/sync")
-    assert resp.status_code == 200 and resp.json()["available"] == 1
-    assert client.get("/api/quotes").json()[0]["last"] == 772.31
+    assert client.post("/api/real-prices/sync").status_code == 404  # syncing was removed
 
 
 def test_watchlist_endpoints_and_stream(client: TestClient) -> None:

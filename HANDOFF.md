@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged. The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
+_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed (cleanup PR: Go to… → Real data… holds Update real history and the option-fit status; a Last real day shortcut was added). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
 
 ## Where things stand
 
@@ -86,8 +86,8 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   After merging, the user restarts; the app then downloads 40 symbols (Tiingo's allowance is 50 an
   hour: if it stops, it retries in an hour and keeps what it has) and the FRED series. A reset to the
   past is refused until the first symbol is saved.
-- **Update on request (after 8d, the user's request):** nothing fetches new days by itself. Go to… → Sync to
-  real prices… → **Update real history** (`POST /api/real-history/update`, `MarketService.update_real_history`)
+- **Update on request (after 8d, the user's request):** nothing fetches new days by itself. Go to… → Real data… →
+  **Update real history** (`POST /api/real-history/update`, `MarketService.update_real_history`)
   asks Tiingo only for the days from each saved symbol's last bar (that bar included, since it may have been
   saved before its close) and FRED only from each series' last value; symbols/series not yet downloaded are
   left to the background fetch. A split among the new days makes it fetch that symbol's whole history again
@@ -103,7 +103,7 @@ and agreed 2026-10-31; one PR per step, stop after each for the user to test):**
   volumes to the real day total. Bad bars are sanitized (high ≥ open/close, low ≤). Checked on the real data:
   185 symbol-days in 2008–09 match exactly; 5-year backfill 4.0 s. `real_through` (saved in the market state)
   is the newest real day *when the market began*: a market keeps its data, `engine.use_real` (called after
-  Update real history) only reaches markets started from then on (reset, sync, rewinds before the history).
+  Update real history) only reaches markets started from then on (reset, rewinds before the history).
   `MODEL_VERSION` 8 (7 in 8e-2, 6 in 8e-1); `from_state` raises `ValueError` if the bars it replayed are gone, and `load_market` then
   continues as a new market. Backfill starts from the real close before the first history day (symbols
   without bars still start at 1.0 and are scaled; real symbols scale 1.0). Calendar: `calendar.set_overrides`
@@ -449,15 +449,12 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     captured before the request). The background task fetches at startup, then
     `seconds_until_refresh` decides: 15 minutes after the last fetch, or 1 minute after a failed
     one (`real_prices_retry`); it checks the wall clock at least every minute, since a sleeping Mac
-    pauses asyncio's clock. GET `/api/real-prices` (the Sync dialog) fetches first when the last
-    fetch is over a minute old, waiting at most 5s (the fetch carries on, shielded). `sync_real_prices()` (POST `/api/real-prices/sync`) calls
-    `engine.reanchor(prices)`:
-    a new market at the current time whose prices **now** equal the targets (previous closes
-    scaled by today's simulated move so far), symbols without a real price keep their current
-    one; clears and rebuilds the history; keeps the account and orders. New markets (going back
+    pauses asyncio's clock. GET `/api/real-prices` (the Real data dialog) fetches first when the last
+    fetch is over a minute old, waiting at most 5s (the fetch carries on, shielded). The old "Sync to latest real prices" (`sync_real_prices`, `engine.reanchor`, POST
+    `/api/real-prices/sync`) was removed once real history replay made it redundant. New markets (going back
     before the history) start from saved real prices (`real_start_prices`). `tests/conftest.py`
-    stops tests from ever reading the keys or calling the service. UI: Go to… → "Sync to real
-    prices…" (a footer link) → confirmation with how many symbols have prices and from when.
+    stops tests from ever reading the keys or calling the service. UI: Go to… → "Real data…" (a footer link):
+    real history through the newest trading day with Update real history, and the option-fit status.
     Alpaca's response format was checked against the official alpaca-py SDK (the docs site blocks
     scripts). Old store keys `real_prices_usage`/`_attempts`/`_pause` from 5.8 are deleted on load.
   - `market/options.py` (7): `expirations(symbol, now)` (dailies for SPY/QQQ/IWM over 10

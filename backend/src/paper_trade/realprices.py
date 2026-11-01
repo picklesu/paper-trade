@@ -38,7 +38,6 @@ SECRET_NAME = "APCA_API_SECRET_KEY"
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 REFRESH_EVERY = timedelta(minutes=15)  # the background refresher's interval
 RETRY_AFTER = timedelta(minutes=1)  # after a failed fetch (offline at startup, a refusal)
-STATUS_REFRESH_AFTER = timedelta(minutes=1)  # opening the Sync dialog fetches if older
 
 log = logging.getLogger(__name__)
 

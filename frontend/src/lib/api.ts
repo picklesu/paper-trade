@@ -121,11 +121,6 @@ export function fetchRealPrices(): Promise<RealPricesStatus> {
   return send('/api/real-prices', 'GET')
 }
 
-/** Continue the market from now at the saved real prices. */
-export function syncRealPrices(): Promise<RealPricesStatus> {
-  return send('/api/real-prices/sync', 'POST')
-}
-
 /** Fetch only the days since the saved real history (Tiingo bars, FRED series). */
 export function updateRealHistory(): Promise<RealHistoryUpdate> {
   return send('/api/real-history/update', 'POST')

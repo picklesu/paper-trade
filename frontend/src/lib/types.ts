@@ -59,6 +59,11 @@ export interface ClockState {
   building_history: boolean
 }
 
+export interface Halt {
+  level: number
+  resumes: string | null
+}
+
 export type Regime = 'calm' | 'correction' | 'crisis'
 
 /** An option contract, as the server describes it. */
@@ -257,6 +262,8 @@ export interface TickMessage {
   shock?: number
   /** A shock was triggered and begins at the next open. */
   shock_pending?: boolean
+  /** A market-wide circuit-breaker halt in force: level 1-3 and when trading resumes (null: not today). */
+  halt?: Halt | null
   quotes: Quote[]
   account: Account
   /** The option chain this client subscribed to (null: no such expiration; absent: none asked for). */

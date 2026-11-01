@@ -419,7 +419,7 @@ starts a new market and resets the account. See `Broker.rewind` / `preview_rewin
     `VARIANCE_RANGE` (0.25, 25) is only a safety net (a cap of 8 biased volatility ~7% low); Student's
     t gaps; quarterly earnings gaps (`_earnings_on`), news jumps **between two minutes** (so no
     jump falls inside a minute), selloffs at the open; intraday volatility shape; volume U-shaped ×
-    regime × √variance × activity (squared standardized move, `ACTIVITY_BASE` 0.7) × news burst ×
+    regime × variance^0.3 × 1.3 (`VOLUME_ELASTICITY`, `VOLUME_LEVEL`; the shock multiple counts in the variance) × activity (squared standardized move, `ACTIVITY_BASE` 0.7) × news burst ×
     earnings; spread factor per minute = market volatility vs normal, clipped to [1, 5]
     (`bid_ask(price, factor)`). Long-run vol and drift match each spec (tests over 10 years).
     **Random draws:** one stream per path keyed by name (`zlib.crc32`), for the skeleton and

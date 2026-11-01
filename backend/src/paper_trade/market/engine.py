@@ -1202,7 +1202,7 @@ class MarketEngine:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
             activity[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
         noise = draws.volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
-        level = self._daily_volume * VOLUME_LEVEL * h**VOLUME_ELASTICITY * scale * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
+        level = self._daily_volume * VOLUME_LEVEL * (h * scale**2) ** VOLUME_ELASTICITY * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
         shape = self._volume_shape * self._volume_mults[regimes]
         volume = np.floor(level / _M * shape[:, None] * activity * noise)
         if real_day is not None:  # the real day's volume, spread over the minutes

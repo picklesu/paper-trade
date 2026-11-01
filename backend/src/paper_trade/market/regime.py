@@ -1,4 +1,5 @@
-"""The market's long-lived regime (8f): calm bull, correction, crisis.
+"""The market's long-lived regime (8f): calm, choppy, crisis (volatility states, not price levels:
+the middle one covers a share of ordinary weeks, with SPY near a high as often as not).
 
 A hidden Markov model on SPY's daily returns whose transition odds depend on the
 macro picture known the day before (yield curve, credit spread, VIX, unemployment
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-STATES = ("calm", "correction", "crisis")
+STATES = ("calm", "choppy", "crisis")
 FEATURES = ("curve", "credit", "vix", "jobs")
 PARAMS_FILE = Path(__file__).with_name("regime_params.json")
 TRADING_DAYS = 252

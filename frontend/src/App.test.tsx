@@ -65,7 +65,7 @@ function tick(overrides: Partial<TickMessage> = {}): TickMessage {
   return {
     type: 'tick',
     clock: { time: '2026-01-05T15:30:00Z', speed: 1, paused: false, speeds: [1, 10, 60, 600], origin: '2026-01-05T14:30:00Z', session_open: '2026-01-05T14:30:00Z', timeline: 0, building_history: false },
-    regime: 'correction',
+    regime: 'choppy',
     quotes: [quote('SPY', 582, 580), quote('AAPL', 228, 230)],
     account: {
       starting_cash: 100_000,

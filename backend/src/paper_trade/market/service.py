@@ -134,7 +134,7 @@ class MarketService:
             "type": "tick",
             "clock": self.clock_state(),
             "regime": self.engine.regime,
-            "shock": round(self.engine.shock, 2),
+            "shock": round(self.engine.shock_visible, 2),
             "shock_pending": self.engine.shock_pending,
             "halt": self.engine.halt,
             "quotes": self.listed_quotes(),

@@ -17,7 +17,7 @@ def test_transition_odds_are_probabilities_and_the_averages_are_neutral() -> Non
     assert p.shape == (3, 3) and np.allclose(p.sum(axis=1), 1) and (p >= 0).all()
     assert PARAMS.share @ PARAMS.variance_multiple == pytest.approx(1.0)
     assert PARAMS.share @ PARAMS.drift_tilt == pytest.approx(0.0, abs=1e-12)
-    assert PARAMS.sigma[0] < PARAMS.sigma[1] < PARAMS.sigma[2]  # ordered calm, correction, crisis
+    assert PARAMS.sigma[0] < PARAMS.sigma[1] < PARAMS.sigma[2]  # ordered calm, choppy, crisis
 
 
 def test_missing_features_count_as_average() -> None:

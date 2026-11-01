@@ -99,7 +99,7 @@ NEWS_SIZE = 2.5
 # by its beta).
 CRASHES_PER_YEAR = 1.0  # on average; the regime scales it (CRASH_BY_STATE)
 STATE_LEVEL_ADJ = (0.95, 0.95, 1.8)  # measured over seeds x 30 years: a crisis is short, so its variance falls short of the fitted level
-CRASH_BY_STATE = (0.3, 1.2, 4.0)  # selloff odds relative to the average in calm / correction / crisis
+CRASH_BY_STATE = (0.3, 1.2, 4.0)  # selloff odds relative to the average in calm / choppy / crisis
 CRASH_MIN = 0.015
 CRASH_EXTRA = 0.015
 # Uncertainty shocks (Bloom 2009): volatility jumps by a multiple of its normal level
@@ -111,6 +111,7 @@ SHOCKS_PER_YEAR = 0.0  # random uncertainty shocks are now the regime model's cr
 SHOCK_EXCESS_MIN = 0.4  # the extra volatility at onset (0.65: about 1.65 times normal), between this
 SHOCK_EXCESS_RANGE = 0.5  # and this much more (it stacks with the regime and GARCH, so the index can reach 100)
 SHOCK_HALF_LIFE_DAYS = 60.0
+SHOCK_VISIBLE = 0.13  # the top bar shows a shock while its extra volatility exceeds this: a typical week's change in volatility from other factors (measured within a state)
 SHOCK_IN_CRISIS = 0.4  # a triggered shock's extra volatility is this share of the usual (the crisis it starts carries the rest)
 # Market-wide circuit breakers (NYSE Rule 80B), on SPY's fall from the previous close: a 15-minute
 # halt at 7% and at 13% (not after 3:25 PM), and no more trading that day at 20%.
@@ -167,7 +168,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 10  # 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / correction / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 10  # 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -367,7 +368,7 @@ class MarketEngine:
         mean_response = OWN_GARCH_ALPHA + OWN_GARCH_GAMMA / 2
         self._own_omega = np.maximum(1 - OWN_GARCH_BETA - mean_response * (1 + own_jump_shock), 0.01)
 
-        # The long-lived regime (calm / correction / crisis): its variance level, drift tilt
+        # The long-lived regime (calm / choppy / crisis): its variance level, drift tilt
         # and selloff odds, centered so the long-run averages stay (up to the hand-tuned
         # STATE_LEVEL_ADJ, which lifts the average variance by about 7%).
         self._macro: RegimeParams = load_params()
@@ -564,13 +565,19 @@ class MarketEngine:
 
     @property
     def regime(self) -> str:
-        """The market's long-lived regime today (calm, correction or crisis)."""
+        """The market's long-lived regime today (calm, choppy or crisis)."""
         return STATES[self._skeleton(market_day(self._time)).state]
 
     @property
     def shock(self) -> float:
         """The extra volatility an uncertainty shock adds today (0: none)."""
         return self._skeleton(market_day(self._time)).shock
+
+    @property
+    def shock_visible(self) -> float:
+        """The shock to show the user: its extra volatility while that exceeds `SHOCK_VISIBLE`, else 0."""
+        shock = self.shock
+        return shock if shock > SHOCK_VISIBLE else 0.0
 
     @property
     def shock_pending(self) -> bool:

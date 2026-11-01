@@ -98,3 +98,25 @@ def test_the_index_can_fall_to_the_real_lows() -> None:
     engine._starts[START.date()].variance = engine_mod.VARIANCE_RANGE[0]
     index = engine._skeleton(START.date()).vix[0]
     assert 8.5 < index < 11.5  # the real index has bottomed at 9-10; it used to stop near 11.8
+
+
+def test_a_trigger_sends_the_market_into_a_crisis_even_over_a_stronger_leftover_shock() -> None:
+    engine = MarketEngine(START, seed=4)
+    day = START.date()
+    engine._shocks[day] = (0.01, START)
+    engine._starts[day].shock = 0.5  # an earlier shock still fading, stronger than the trigger
+    assert engine._skeleton(day).state == len(STATES) - 1
+
+
+def test_a_backfill_keeps_the_regime_chain() -> None:
+    engine = MarketEngine(START, seed=6)
+    list(engine.backfill_iter(80))
+    starts = [engine._starts[d] for d in sorted(engine._starts) if d < START.date()]
+    assert {s.phase for s in starts} == set(range(PARAMS.period))  # the period counter ran on
+    assert all(s.z is not None for s in starts[1:])
+
+
+def test_option_and_index_inputs_use_the_variance_in_force() -> None:
+    engine = MarketEngine(START, seed=8)
+    sk = engine._skeleton(START.date())
+    assert sk.variance == pytest.approx(engine._starts[START.date()].variance * engine._state_variance[sk.state] / engine._state_variance[engine._starts[START.date()].state])

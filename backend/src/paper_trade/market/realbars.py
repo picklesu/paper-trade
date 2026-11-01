@@ -87,11 +87,12 @@ class RealBars:
         """The long-lived regime state and its macro features as the model's filter finds them
         from the real returns through `d` (None where SPY or the macro series are missing)."""
         if self._regime is False:
-            self._regime = None
             spy = self._bars[self.symbols.index("SPY")] if "SPY" in self.symbols else {}
+            built = None
             if spy and self._macro:
                 days = sorted(spy)
-                self._regime = RealRegime(load_params(), days, np.array([spy[x].close for x in days]), self._macro)
+                built = RealRegime(load_params(), days, np.array([spy[x].close for x in days]), self._macro)
+            self._regime = built  # only after a successful build: a failure isn't remembered as "no regime"
         return self._regime.at(d) if self._regime else None
 
     def vix_on_or_before(self, d: date) -> float | None:

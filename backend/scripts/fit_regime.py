@@ -25,7 +25,7 @@ L2 = 1.0
 PERIOD = 5  # sessions per step: weekly returns, so regimes last months, not days
 # Persistence prior: this many pseudo-days of staying put per state (daily returns alone
 # would otherwise flip states every few days, fitting noise instead of regimes).
-STICKY = float(__import__('os').environ.get('STICKY', 40))
+STICKY = 40.0  # the committed parameters used this; `--sticky` overrides it
 
 
 def load(db: str) -> tuple[list[date], np.ndarray, np.ndarray, dict]:
@@ -100,7 +100,6 @@ def fit(r, raw, iterations=150):
     scale = np.nanstd(raw, axis=0)
     X = np.clip(np.nan_to_num((raw - center) / scale, nan=0.0), -4, 4)
     vol = np.array([np.abs(r[max(0, t - 4) : t + 1]).mean() for t in range(len(r))])
-    q = np.quantile(vol, [1 / 3 * 1.5 / 1.5, 0.85])
     init = np.digitize(vol, [np.quantile(vol, 0.6), np.quantile(vol, 0.92)])
     mean = np.array([r[init == k].mean() for k in range(K)])
     sigma = np.array([r[init == k].std() for k in range(K)])
@@ -182,10 +181,13 @@ def calibrate(p, share, yearly_log_return, years=300):
 
 
 def main() -> None:
+    global STICKY
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)
     ap.add_argument("--out", default=str(PARAMS_FILE))
+    ap.add_argument("--sticky", type=float, default=STICKY, help="pseudo-weeks of staying put per state")
     args = ap.parse_args()
+    STICKY = args.sticky
     days, r, raw, _ = load(args.db)
     print(f"{len(r)} SPY days {days[0]} to {days[-1]}")
     params, gamma = fit(r, raw)

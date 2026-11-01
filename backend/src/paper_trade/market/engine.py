@@ -284,6 +284,7 @@ class _Skeleton:
     shock: float = 0.0  # the uncertainty shock in force this session (extra volatility)
     shock_onset: bool = False  # it began at this session's open
     state: int = 0  # the long-lived regime in force this session
+    variance: float = 1.0  # the market variance multiple in force at the open (the state's level included)
     vix: np.ndarray | None = None  # (14,) the volatility index at each half hour and the close (None: no SPY)
 
 
@@ -358,13 +359,15 @@ class MarketEngine:
         self._own_omega = np.maximum(1 - OWN_GARCH_BETA - mean_response * (1 + own_jump_shock), 0.01)
 
         # The long-lived regime (calm / correction / crisis): its variance level, drift tilt
-        # and selloff odds; the average over its long-run shares leaves the totals as before.
+        # and selloff odds, centered so the long-run averages stay (up to the hand-tuned
+        # STATE_LEVEL_ADJ, which lifts the average variance by about 7%).
         self._macro: RegimeParams = load_params()
         self._state_variance = self._macro.variance_multiple * np.array(STATE_LEVEL_ADJ)
         crash_by = np.array(CRASH_BY_STATE)
         self._state_crash = crash_by / float(self._macro.share @ crash_by)
         # The fitted drifts are what prices did (log returns, after volatility drag and
-        # selloffs), and the engine takes both off again, so they are added back here.
+        # selloffs), and the engine takes both off again, so they are added back here. The
+        # tilts average to zero over the long-run shares, so each symbol keeps its spec's drift.
         self._state_tilt = (
             self._macro.drift_tilt
             + 0.5 * MARKET_VOL**2 * (self._state_variance - float(self._macro.share @ self._state_variance))
@@ -579,8 +582,9 @@ class MarketEngine:
         r = self._regime_index()
         own = start.own_variance if start.own_variance is not None else np.ones(len(self.specs))
         rho2 = self._rho**2
-        var = rho2 * start.variance * self._market_mults[r] ** 2 + (1 - rho2) * own * self._own_mults[r] ** 2
-        return np.sqrt(var) * (1 + self._skeleton(day).shock)
+        sk = self._skeleton(day)
+        var = rho2 * sk.variance * self._market_mults[r] ** 2 + (1 - rho2) * own * self._own_mults[r] ** 2
+        return np.sqrt(var) * (1 + sk.shock)
 
     def option_inputs(self, day: date, col: int) -> "OptionInputs":
         """What a session's option prices for one symbol depend on besides its
@@ -601,7 +605,7 @@ class MarketEngine:
         own = 1.0 if start.own_variance is None else float(start.own_variance[col])
         rho2 = float(self._rho[col] ** 2)
         market_mults, own_mults = self._market_mults**regime_weight, self._own_mults**regime_weight
-        by_regime = np.sqrt(rho2 * start.variance * market_mults**2 + (1 - rho2) * own * own_mults**2) * (1 + sk.shock)
+        by_regime = np.sqrt(rho2 * sk.variance * market_mults**2 + (1 - rho2) * own * own_mults**2) * (1 + sk.shock)
         # Second s follows the regime of minute (s-1)//60; the open, the previous session's.
         regimes = np.concatenate([[start.regime], sk.regimes])
         return OptionInputs(
@@ -731,7 +735,7 @@ class MarketEngine:
                 close = self._real.close_before(i, day)
                 if close is not None:
                     prices[i] = close
-        start = _DayStart(prices, self._normal, self._vix_variance(previous_trading_day(day)) or 1.0)
+        start = self._start_at(prices, day)
         unit: dict[date, _DayStart] = {}
         try:
             while day < origin_day:
@@ -747,7 +751,7 @@ class MarketEngine:
         scale = self._starts[origin_day].prev_close / start.prev_close
         self._starts.update(
             {
-                d: _DayStart(s.prev_close * self.backfill_scale_on(d, scale), s.regime, s.variance, s.own_variance, s.shock)
+                d: _DayStart(s.prev_close * self.backfill_scale_on(d, scale), s.regime, s.variance, s.own_variance, s.shock, s.state, s.z, s.phase)
                 for d, s in unit.items()
             }
         )
@@ -917,13 +921,7 @@ class MarketEngine:
         if prices is None:
             prices = np.array([s.price for s in self.specs])
         origin_day = market_day(self.origin)
-        before = previous_trading_day(origin_day)
-        variance = self._vix_variance(before)
-        found = self._real.regime_on(min(before, self._real_through)) if self._real and self._real_through else None
-        state, z = found if found is not None else (0, None)
-        self._starts: dict[date, _DayStart] = {
-            origin_day: _DayStart(prices, self._normal, variance or float(self._state_variance[state]), None, 0.0, state, z, 0)
-        }
+        self._starts: dict[date, _DayStart] = {origin_day: self._start_at(prices, origin_day)}
         self._real_earnings: dict[int, list[date]] = {}
         self._shocks: dict[date, tuple[float, datetime]] = {}  # shocks the user triggered: onset session -> (excess, when)
         self._vix_inputs: dict[date, tuple[_Skeleton, OptionInputs]] = {}
@@ -934,6 +932,15 @@ class MarketEngine:
         self.backfilled = False
         # Bumped whenever session start states change, so savers can skip the large part.
         self.starts_version = getattr(self, "starts_version", 0) + 1
+
+    def _start_at(self, prices: np.ndarray, day: date) -> _DayStart:
+        """The state before `day`'s session: the real VIX's variance and the regime the real
+        past's filter found, else the calm level and a calm regime."""
+        before = previous_trading_day(day)
+        found = self._real.regime_on(min(before, self._real_through)) if self._real and self._real_through else None
+        state, z = found if found is not None else (0, None)
+        variance = self._vix_variance(before) or float(self._state_variance[state])
+        return _DayStart(prices, self._normal, variance, None, 0.0, state, z, 0)
 
     def _new_seed(self) -> int:
         self._seeds_used += 1
@@ -1090,9 +1097,11 @@ class MarketEngine:
                 p = macro.transition(z * macro.scale + macro.center)[state]
                 state = min(int(np.searchsorted(np.cumsum(p), draws.regime_u)), len(p) - 1)
                 z = np.clip(macro.level[state] + macro.persistence[state] * z + macro.noise[state] * draws.regime_z, -4.0, 4.0)
-            if began and forced is not None:
+            if forced is not None:  # the user's trigger begins this session
                 state = len(STATES) - 1
-            h = float(np.clip(start.variance * self._state_variance[state] / self._state_variance[start.state], *VARIANCE_RANGE))
+            after_real = self._real_through is not None and previous_trading_day(day) <= self._real_through
+            if not after_real:  # the real VIX sets the first simulated day's variance as it is
+                h = float(np.clip(start.variance * self._state_variance[state] / self._state_variance[start.state], *VARIANCE_RANGE))
         state_drift = 0.0 if real_day is not None else self._state_tilt[state]
 
         # Each symbol's loadings on them, today.
@@ -1216,6 +1225,7 @@ class MarketEngine:
             shock=excess,
             shock_onset=began,
             state=state,
+            variance=h,
         )
         sk.vix = self._vix_samples(sk, start)
         return sk

@@ -133,15 +133,6 @@ def stationary(p: np.ndarray) -> np.ndarray:
     return s / s.sum()
 
 
-def business_days(start: date, end: date) -> list[date]:
-    out, d = [], start
-    while d <= end:
-        if d.weekday() < 5:
-            out.append(d)
-        d += timedelta(days=1)
-    return out
-
-
 class RealRegime:
     """The regime through the real past: SPY's real weekly returns, filtered through the
     model (with the macro picture known at each step), give the state and features at

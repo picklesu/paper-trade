@@ -6,6 +6,9 @@
 #   ./server.sh restart   stop, then start
 #   ./server.sh status    show what's running
 #   ./server.sh logs      follow both log files (Ctrl+C to stop following)
+#   ./server.sh update [prices|history|options]
+#                         fetch real data from the APIs and save it (the app itself never
+#                         fetches); restart afterwards to use it
 #
 # Written for the bash 3.2 that ships with macOS.
 set -uo pipefail
@@ -129,6 +132,10 @@ cmd_off() {
   stop_one backend
 }
 
+cmd_update() {
+  (cd "$ROOT/backend" && uv run python -m paper_trade.update "$@")
+}
+
 cmd_status() {
   local name
   for name in backend frontend; do
@@ -147,9 +154,10 @@ case "${1:-}" in
   off | stop) cmd_off ;;
   restart) cmd_off && cmd_on ;;
   status) cmd_status ;;
+  update) shift; cmd_update "$@" ;;
   logs) tail -n 20 -f "$RUN/backend.log" "$RUN/frontend.log" ;;
   *)
-    echo "Usage: ./server.sh on | off | restart | status | logs"
+    echo "Usage: ./server.sh on | off | restart | status | logs | update [prices|history|options]"
     exit 2
     ;;
 esac

@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 import numpy as np
 import pytest
 
+from paper_trade import update
 from paper_trade.market.clock import SimClock
 from paper_trade.market.engine import MarketEngine
 from paper_trade.market.service import MarketService
@@ -100,21 +101,11 @@ def test_requests_check_certificates_with_the_os_trust_store(monkeypatch) -> Non
     assert seen["context"] is tls_context() and isinstance(seen["context"], truststore.SSLContext)
 
 
-def test_schedule_and_old_alpha_vantage_keys() -> None:
-    clock = Clock()
+def test_old_alpha_vantage_keys_are_cleaned_up() -> None:
     store = Store(":memory:")
     store.set("real_prices_usage", {"day": "2026-10-28", "count": 3})
-    real = RealPrices(store, KEYS, now=clock)
-    assert store.get("real_prices_usage") is None  # cleaned up
-    assert real.seconds_until_refresh() == 0  # never fetched
-    real.attempt()
-    real.record({"SPY": (1.0, date(2026, 10, 28))}, ["SPY"])
-    assert real.seconds_until_refresh() == 15 * 60
-    clock.t += timedelta(minutes=1)
-    real.attempt()
-    real.fetch_failed("couldn't reach Alpaca")
-    assert real.seconds_until_refresh() == 60  # a failure retries in a minute
-    assert real.status(["SPY"])["refresh_minutes"] == 15
+    RealPrices(store, KEYS)
+    assert store.get("real_prices_usage") is None
 
 
 def test_credentials_from_env_file(tmp_path, monkeypatch) -> None:
@@ -134,13 +125,9 @@ def test_record_saves_prices_and_notes_missing_symbols() -> None:
     clock = Clock()
     store = Store(":memory:")
     real = RealPrices(store, KEYS, now=clock)
-    assert real.stale(timedelta(minutes=1))
-    real.attempt()
     real.record({"SPY": (772.31, date(2026, 10, 28))}, ["SPY", "XOM"])
     assert real.status(["SPY", "XOM"])["last_error"] == "no price for XOM"
-    assert not real.stale(timedelta(minutes=1))
     clock.t += timedelta(minutes=1)
-    assert real.stale(timedelta(minutes=1))
 
     real.record({}, ["SPY"])
     assert real.status(["SPY"])["last_error"] == "Alpaca sent no prices"
@@ -150,12 +137,6 @@ def test_record_saves_prices_and_notes_missing_symbols() -> None:
     assert status["fetched"] == clock.t.isoformat()
     # Saved prices survive a restart.
     assert RealPrices(store, KEYS).saved["SPY"].price == 780.0
-
-
-def test_nothing_is_fetched_without_keys() -> None:
-    svc = make_service(RealPrices(Store(":memory:"), None))
-    asyncio.run(svc.refresh_real_prices())
-    assert svc.real_prices_status()["configured"] is False
 
 
 def make_service(real: RealPrices | None = None) -> MarketService:
@@ -175,7 +156,7 @@ def test_new_markets_start_from_saved_real_prices() -> None:
     assert svc.engine.quotes["XOM"].prev_close == next(s.price for s in svc.engine.specs if s.symbol == "XOM")
 
 
-def test_refresh_fetches_every_symbol_at_once_and_reports_failures() -> None:
+def test_update_fetches_every_symbol_at_once_and_reports_failures() -> None:
     calls = []
 
     def fetch(symbols: list[str], creds: Credentials) -> dict:
@@ -184,76 +165,42 @@ def test_refresh_fetches_every_symbol_at_once_and_reports_failures() -> None:
             raise FetchError("couldn't reach Alpaca (timed out)")
         return {s: (100.0, date(2026, 10, 28)) for s in symbols}
 
-    svc = make_service()
-    clock = Clock()
-    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
-
-    async def run() -> None:
-        await asyncio.gather(svc.refresh_real_prices(timedelta(minutes=1)), svc.refresh_real_prices(timedelta(minutes=1)))
-        assert len(calls) == 1 and calls[0] == svc.symbols  # the second waited for the first
-        assert svc.real_prices_status()["available"] == len(svc.symbols)
-        clock.t += timedelta(minutes=1)
-        await svc.refresh_real_prices(timedelta(minutes=1))
-        status = svc.real_prices_status()
-        assert status["last_error"] == "couldn't reach Alpaca (timed out)"
-        assert status["available"] == len(svc.symbols)  # the saved prices stay
-
-    asyncio.run(run())
+    names = [s.symbol for s in make_service().engine.specs]
+    real = RealPrices(Store(":memory:"), KEYS, fetch=fetch, now=Clock())
+    assert update.update_prices(real, names, say=lambda m: None) == []
+    assert len(calls) == 1 and calls[0] == names  # one request for all of them
+    assert real.status(names)["available"] == len(names)
+    problems = update.update_prices(real, names, say=lambda m: None)
+    assert problems == ["real prices: couldn't reach Alpaca (timed out)"]
+    status = real.status(names)
+    assert status["last_error"] == "couldn't reach Alpaca (timed out)" and status["available"] == len(names)  # the saved prices stay
 
 
-def test_refresher_fetches_at_startup_then_on_schedule(monkeypatch) -> None:
-    from paper_trade.market import service as service_mod
-
-    monkeypatch.setattr(service_mod, "REAL_PRICES_CHECK_SECONDS", 0.001)
-    clock = Clock()
-    calls = []
-
-    def fetch(symbols: list[str], creds: Credentials) -> dict:
-        calls.append(clock.t)
-        if len(calls) == 1:
-            raise FetchError("couldn't reach Alpaca (offline)")
-        return {s: (100.0, date(2026, 10, 28)) for s in symbols}
-
-    svc = make_service()
-    svc.real = RealPrices(svc.store, KEYS, fetch=fetch, now=clock)
-    svc.real.attempt()  # a fetch just before a restart doesn't stop the one at startup
-
-    async def run() -> None:
-        async def settle() -> None:
-            for _ in range(20):
-                await asyncio.sleep(0.002)
-
-        task = asyncio.create_task(svc._refresh_real_prices())
-        await settle()
-        assert len(calls) == 1  # at startup; it failed
-        clock.t += timedelta(seconds=59)
-        await settle()
-        assert len(calls) == 1
-        clock.t += timedelta(seconds=1)
-        await settle()
-        assert len(calls) == 2  # retried a minute later
-        clock.t += timedelta(minutes=14)
-        await settle()
-        assert len(calls) == 2
-        clock.t += timedelta(minutes=1)
-        await settle()
-        assert len(calls) == 3  # then every 15 minutes
-        task.cancel()
-
-    asyncio.run(run())
+def test_update_without_keys_says_what_to_add() -> None:
+    problems = update.update_prices(RealPrices(Store(":memory:"), None), ["SPY"], say=lambda m: None)
+    assert "APCA_API_KEY_ID" in problems[0]
 
 
-def test_status_makes_no_request() -> None:
-    from paper_trade.api import market as api_mod
+def test_the_app_makes_no_requests_and_has_no_real_data_endpoints(monkeypatch) -> None:
+    from paper_trade.market.service import MarketService as Service
 
     calls = []
-    svc = make_service()
-    svc.real = RealPrices(svc.store, KEYS, fetch=lambda symbols, creds: calls.append(1) or {}, now=Clock())
+    real = RealPrices(Store(":memory:"), KEYS, fetch=lambda symbols, creds: calls.append(1) or {})
+    svc = Service(SimClock(start=START, real_time=lambda: 0.0), MarketEngine(START), real.store, 5, real)
 
-    class Request:
-        class app:
-            class state:
-                market = svc
+    async def run() -> None:
+        svc.start()
+        await asyncio.sleep(0.05)
+        await svc.stop()
 
-    status = asyncio.run(api_mod.real_prices(Request))
-    assert status["available"] == 0 and calls == []  # opening the dialog spends no API call
+    asyncio.run(run())
+    assert calls == []
+
+
+def test_the_update_command_reports_missing_keys_and_exits_nonzero(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("PAPER_TRADE_DB", str(tmp_path / "t.db"))
+    assert update.main([]) == 1  # the tests' fixture hides every key
+    out = capsys.readouterr().out
+    for name in ("APCA_API_KEY_ID", "TIINGO_API_KEY", "FRED_API_KEY"):
+        assert name in out
+    assert update.main(["prices"]) == 1

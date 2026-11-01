@@ -6,6 +6,9 @@ from pathlib import Path
 
 from paper_trade.trading.orders import Order
 
+# backend/paper_trade.db unless PAPER_TRADE_DB says otherwise.
+DEFAULT_DB = Path(__file__).resolve().parents[2] / "paper_trade.db"
+
 
 class Store:
     def __init__(self, path: str | Path) -> None:

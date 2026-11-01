@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { Modal } from './Modal'
-import { fetchRealPrices, goto, previewGoto, triggerShock, updateRealHistory, type GotoResult, type OptionDataStatus, type RealPricesStatus } from '../lib/api'
+import { goto, previewGoto, triggerShock, type GotoResult } from '../lib/api'
 import { calendarDate, dollars, marketDateTime, marketStamp, price, shiftInputDays, toMarketInput } from '../lib/format'
 import type { ClockState } from '../lib/types'
 
@@ -25,34 +25,8 @@ export function GoToDialog({ clock, onClose }: Props) {
   const [preview, setPreview] = useState<GotoResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Set while showing the real data (status of the saved history and option fits).
-  const [real, setReal] = useState<RealPricesStatus | 'loading' | null>(null)
-
   // Set while offering to trigger an uncertainty shock.
   const [shockView, setShockView] = useState(false)
-
-  // Counts real-data views opened, so a status that arrives after Back is ignored.
-  const dataView = useRef(0)
-
-  const openData = async () => {
-    const view = ++dataView.current
-    setReal('loading')
-    setError(null)
-    try {
-      const status = await fetchRealPrices()
-      if (view === dataView.current) setReal(status)
-    } catch (err) {
-      if (view !== dataView.current) return
-      setError(err instanceof Error ? err.message : String(err))
-      setReal(null)
-    }
-  }
-
-  const closeData = () => {
-    dataView.current++
-    setError(null)
-    setReal(null)
-  }
 
   // The next session is still in the real past: prices there are real, so there is nothing to shock.
   const today = toMarketInput(clock.time).slice(0, 10)
@@ -108,9 +82,7 @@ export function GoToDialog({ clock, onClose }: Props) {
 
   return (
     <Modal labelledBy="goto-title" onClose={onClose}>
-      {real !== null ? (
-        <RealData status={real} onBack={closeData} realThrough={clock.real_through} />
-      ) : shockView ? (
+      {shockView ? (
         <>
           <h2 id="goto-title">Trigger an uncertainty shock?</h2>
           <p>
@@ -218,9 +190,6 @@ export function GoToDialog({ clock, onClose }: Props) {
             </button>
           </div>
           <div className="dialog-footer">
-            <button className="link-button" disabled={busy} onClick={openData}>
-              Real data…
-            </button>
             <button className="link-button" disabled={busy} onClick={() => setShockView(true)}>
               Trigger an uncertainty shock…
             </button>
@@ -233,114 +202,6 @@ export function GoToDialog({ clock, onClose }: Props) {
         </p>
       )}
     </Modal>
-  )
-}
-
-/** How option prices' calibration to real options stands (it runs by itself once a day). */
-function OptionSync({ status }: { status: OptionDataStatus | undefined }) {
-  if (!status?.configured) return null
-  const days =
-    status.oldest && status.newest && status.oldest !== status.newest
-      ? `${calendarDate(status.oldest)}–${calendarDate(status.newest)}`
-      : status.newest
-        ? calendarDate(status.newest)
-        : ''
-  return (
-    <div className="option-sync">
-      <p className="muted">
-        {status.running
-          ? `Option prices: fitting to real options, ${status.running.done} of ${status.running.total} symbols done…`
-          : status.calibrated
-            ? `Option prices: fitted to real options for ${status.calibrated} of ${status.total} symbols${days && ` (${days})`}, again daily.`
-            : 'Option prices: not fitted to real options yet; the server fetches them once a day.'}
-        {!status.earnings && ' Real earnings dates need an Alpha Vantage key (ALPHAVANTAGE_API_KEY in backend/.env).'}
-      </p>
-      {status.last_error && <p className="warn-text">Option data: {status.last_error}</p>}
-    </div>
-  )
-}
-
-/** Real daily history is fetched once; this fetches only the days since, when asked. */
-function RealHistory({ status: initial, realThrough }: { status: RealPricesStatus; realThrough?: string | null }) {
-  const [status, setStatus] = useState(initial)
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
-  const history = status.history
-  const macro = status.macro
-
-  const update = async () => {
-    setBusy(true)
-    setFailed(false)
-    setResult(null)
-    try {
-      const r = await updateRealHistory()
-      setStatus(r.status)
-      const days = Object.values(r.prices).reduce((a, b) => a + b, 0)
-      const points = Object.values(r.macro).reduce((a, b) => a + b, 0)
-      const added = days + points === 0 ? 'Already up to date.' : `Added ${days} days of prices (${Object.keys(r.prices).length} symbols) and ${points} economic readings.`
-      setResult(r.problems.length ? `${added} Problems: ${r.problems.join('; ')}` : added)
-      setFailed(r.problems.length > 0)
-    } catch (err) {
-      setResult(err instanceof Error ? err.message : String(err))
-      setFailed(true)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="option-sync">
-      <p>
-        {history?.configured
-          ? history.newest
-            ? `Real prices through ${calendarDate(history.newest, true)} (${history.available} of ${history.total} symbols).`
-            : 'Real prices: none downloaded yet.'
-          : 'Real prices need TIINGO_API_KEY in backend/.env (then restart the server).'}
-      </p>
-      <p>
-        {macro?.configured
-          ? `Economic series: ${macro.available} of ${macro.total}.`
-          : 'Economic series need FRED_API_KEY in backend/.env (then restart the server).'}
-      </p>
-      <p className="muted">History is downloaded once; Update adds only the days since.</p>
-      {realThrough && history?.newest && history.newest > realThrough && (
-        <p className="muted">
-          This market replays real days through {calendarDate(realThrough, true)}. Newer days apply to markets started later.
-        </p>
-      )}
-      <button className="btn" disabled={busy || (!history?.configured && !macro?.configured)} onClick={update}>
-        {busy ? 'Updating…' : 'Update real history'}
-      </button>
-      {result && <p className={failed ? 'warn-text' : 'muted'}>{result}</p>}
-    </div>
-  )
-}
-
-/** What real data is saved, how to bring in newer days, and how option prices stand. */
-function RealData({ status, onBack, realThrough }: { status: RealPricesStatus | 'loading'; onBack: () => void; realThrough?: string | null }) {
-  const back = (
-    <button className="btn" onClick={onBack}>
-      Back
-    </button>
-  )
-  if (status === 'loading') {
-    return (
-      <>
-        <h2 id="goto-title">Real data</h2>
-        <p className="muted">Checking real data…</p>
-        <div className="dialog-actions">{back}</div>
-      </>
-    )
-  }
-  return (
-    <>
-      <h2 id="goto-title">Real data</h2>
-      <RealHistory status={status} realThrough={realThrough} />
-      {status.last_error && <p className="warn-text">The last real quote fetch failed: {status.last_error}</p>}
-      <OptionSync status={status.options} />
-      <div className="dialog-actions">{back}</div>
-    </>
   )
 }
 

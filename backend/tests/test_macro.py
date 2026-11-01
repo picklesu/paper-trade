@@ -1,16 +1,12 @@
-import asyncio
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from paper_trade.macro import SERIES, Macro, parse_observations
-from paper_trade.market.clock import SimClock
-from paper_trade.market.engine import MarketEngine
-from paper_trade.market.service import MarketService
+from paper_trade import update
 from paper_trade.realprices import FetchError, FetchStop
 from paper_trade.store import Store
 
-START = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
 ROWS = [(date(2020, 1, 2), 1.55), (date(2020, 1, 3), 1.54), (date(2020, 1, 6), 1.56)]
 
 
@@ -53,8 +49,7 @@ def test_series_are_fetched_once_and_wait_after_a_failure() -> None:
     assert macro.due()
 
 
-def test_the_background_fetch_saves_each_series_and_stops_on_a_refusal(monkeypatch) -> None:
-    monkeypatch.setattr("paper_trade.market.service.MACRO_PAUSE_SECONDS", 0)
+def test_the_update_saves_each_series_and_stops_on_a_refusal() -> None:
     calls = []
 
     def fetch(series, key):
@@ -64,16 +59,10 @@ def test_the_background_fetch_saves_each_series_and_stops_on_a_refusal(monkeypat
         return ROWS
 
     macro = Macro(Store(":memory:"), "k", fetch=fetch)
-    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5, macro=macro)
-
-    async def run() -> None:
-        task = asyncio.create_task(svc._refresh_macro())
-        await asyncio.sleep(0.2)
-        task.cancel()
-
-    asyncio.run(run())
+    result = update.update_macro(macro, say=lambda m: None)
     assert calls == ["DFF", "DGS3MO"] and set(macro.fetched) == {"DFF"}
-    assert "rejected" in macro.status()["last_error"] and svc.real_prices_status()["macro"]["available"] == 1
+    assert "rejected" in macro.status()["last_error"] and macro.status()["available"] == 1
+    assert result["macro"] == {"DFF": 3} and "rejected" in result["problems"][0]
 
 
 def test_a_network_block_is_not_reported_as_a_rejected_key() -> None:
@@ -84,24 +73,15 @@ def test_a_network_block_is_not_reported_as_a_rejected_key() -> None:
     assert "rejected the API keys" in str(_refusal(403, b'{"message": "forbidden"}', "FRED"))
 
 
-def test_one_failing_series_does_not_block_the_others(monkeypatch) -> None:
-    monkeypatch.setattr("paper_trade.market.service.MACRO_PAUSE_SECONDS", 0)
-
+def test_one_failing_series_does_not_block_the_others() -> None:
     def fetch(series, key):
         if series == "DGS3MO":
             raise FetchError("FRED answered 500")
         return ROWS
 
     macro = Macro(Store(":memory:"), "k", fetch=fetch)
-    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5, macro=macro)
-
-    async def run() -> None:
-        task = asyncio.create_task(svc._refresh_macro())
-        await asyncio.sleep(0.2)
-        task.cancel()
-
-    asyncio.run(run())
-    assert set(macro.fetched) == set(SERIES) - {"DGS3MO"} and "DGS3MO" in macro.status()["last_error"]
+    result = update.update_macro(macro, say=lambda m: None)
+    assert set(macro.fetched) == set(SERIES) - {"DGS3MO"} and "DGS3MO" in result["problems"][0]
 
 
 def test_a_bad_fred_key_is_a_stop_with_a_hint() -> None:
@@ -121,22 +101,28 @@ def test_fetch_new_asks_only_for_days_from_the_last_saved_one() -> None:
     assert macro.series("DFF")[-2:] == rows and len(macro.series("DFF")) == 4  # the last day was replaced, not doubled
 
 
-def test_update_fetches_only_new_days_and_leaves_unfetched_series_alone() -> None:
+def test_update_fetches_only_new_days_for_downloaded_series_and_the_rest_in_full() -> None:
     asked = []
 
     def since(series, key, day):
         asked.append((series, day))
         return [(date(2020, 1, 7), 1.58)]
 
-    macro = Macro(Store(":memory:"), "k", fetch_since=since)
+    macro = Macro(Store(":memory:"), "k", fetch=lambda series, key: ROWS, fetch_since=since)
     macro.record("DFF", ROWS)
-    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5, macro=macro)
-    result = asyncio.run(svc.update_real_history())
-    assert asked == [("DFF", date(2020, 1, 6))] and result["macro"] == {"DFF": 1} and result["problems"] == []
-    assert result["prices"] == {} and svc.real_prices_status()["history"]["updated"]["problems"] == []
+    result = update.update_macro(macro, say=lambda m: None)
+    assert asked == [("DFF", date(2020, 1, 6))] and result["problems"] == []
+    assert result["macro"]["DFF"] == 1 and set(macro.fetched) == set(SERIES)  # the others were downloaded in full
+    assert macro.last_day("DFF") == date(2020, 1, 7)
+
+
+def test_an_earlier_rate_limit_does_not_hold_back_a_manual_update() -> None:
+    macro = Macro(Store(":memory:"), "k", fetch=lambda series, key: ROWS)
+    macro.failed("FRED says too many requests")  # the app used to wait an hour
+    assert macro.due() == []
+    update.update_macro(macro, say=lambda m: None)
+    assert set(macro.fetched) == set(SERIES)
 
 
 def test_update_without_keys_says_what_to_add() -> None:
-    svc = MarketService(SimClock(start=START), MarketEngine(START), Store(":memory:"), history_days=5)
-    with pytest.raises(ValueError, match="TIINGO_API_KEY"):
-        asyncio.run(svc.update_real_history())
+    assert "FRED_API_KEY" in update.update_macro(Macro(Store(":memory:"), None))["problems"][0]

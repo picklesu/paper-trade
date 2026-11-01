@@ -298,10 +298,9 @@ def test_preview_and_replace_endpoints(client: TestClient) -> None:
     assert resp.status_code == 422 and "Short selling" in resp.json()["detail"]
 
 
-def test_real_prices_status(client: TestClient) -> None:
-    status = client.get("/api/real-prices").json()
-    assert status["configured"] is False and status["available"] == 0 and status["total"] == 40
-    assert client.post("/api/real-prices/sync").status_code == 404  # syncing was removed
+def test_the_app_has_no_endpoints_that_fetch_real_data(client: TestClient) -> None:
+    for method, path in (("get", "/api/real-prices"), ("post", "/api/real-prices/sync"), ("post", "/api/real-history/update")):
+        assert getattr(client, method)(path).status_code in (404, 405)
 
 
 def test_watchlist_endpoints_and_stream(client: TestClient) -> None:

@@ -458,13 +458,6 @@ class MarketEngine:
         previous closes at `prices` (default: the specs')."""
         self._reset(t, self._new_seed(), prices)
 
-    def use_real(self, real: RealBars | None) -> None:
-        """Newly fetched bars (never fewer). Only markets started from now on replay up to their newest
-        day; this market keeps `real_through` (the sessions it already played stay)."""
-        if real is not None:
-            self._real = real
-            self._real_earnings.clear()
-
     # ----- current state -----------------------------------------------------
 
     @property

@@ -15,12 +15,9 @@ from paper_trade.market.realbars import RealBars, RealBarsGone
 from paper_trade.market.engine import HISTORY_DAYS, MODEL_VERSION, MarketEngine
 from paper_trade.market.service import MarketService
 from paper_trade.market.symbols import SYMBOLS
-from paper_trade.store import Store
+from paper_trade.store import DEFAULT_DB, Store
 
 log = logging.getLogger(__name__)
-
-# backend/paper_trade.db unless PAPER_TRADE_DB says otherwise.
-DEFAULT_DB = Path(__file__).resolve().parents[2] / "paper_trade.db"
 
 
 def load_market(store: Store, seed: int, real: RealBars | None = None) -> tuple[SimClock, MarketEngine]:

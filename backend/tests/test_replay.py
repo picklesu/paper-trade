@@ -204,16 +204,6 @@ def test_load_market_replays_real_bars_and_keeps_a_markets_own_data() -> None:
     assert older._real_through == bars["SPY"][-1].day
 
 
-def test_updated_bars_reach_new_markets_only() -> None:
-    bars = real_bars()
-    engine = engine_with(bars)
-    through = engine._real_through
-    engine.use_real(RealBars(NAMES, real_bars(days=12)))
-    assert engine._real_through == through
-    engine.reset(START)
-    assert engine._real_through == real_bars(days=12)["SPY"][-1].day
-
-
 def test_a_path_far_from_the_real_range_turns_back_instead_of_going_flat() -> None:
     bars = real_bars()
     engine = engine_with(bars)

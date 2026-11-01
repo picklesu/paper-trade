@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed (cleanup PR: Go to… → Real data… holds Update real history and the option-fit status; a Last real day shortcut was added). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
+_Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8e-1 (replay the real past), 8e-2 (real volatility) and the shock/sync fix (#49) are merged; the sync option was then removed, and all fetching moved out of the app into `./server.sh update` (see "Fetching real data" under Pick up here). The user restarts and tests them; **8f (the future model) is next: propose its design and get the user's go-ahead before building.**_
 
 ## Where things stand
 
@@ -41,6 +41,21 @@ _Last updated: 2026-10-31. Phases 8d (real daily data), the on-request update, 8
 `main` is clean and up to date with GitHub.
 
 ## Pick up here
+
+**Fetching real data (changed after 8e; the user's request): the app never calls an API.** Everything that
+fetches lives in `backend/src/paper_trade/update.py` and runs on demand: `./server.sh update [prices|history|options]`
+(default all). `update_prices` (Alpaca quotes, one request), `update_history` (Tiingo: symbols not yet downloaded in
+full, then only the days since each last bar; a split refetches that symbol), `update_macro` (FRED likewise),
+`update_options` (the Treasury rate, then Alpaca option chains fitted per symbol when older than 20 hours). They save into
+the same SQLite tables as before (the data classes `RealPrices`, `PriceHistory`, `Macro`, `OptionData` are unchanged apart from
+the removed scheduling); a manual run ignores earlier rate-limit holds; a rate limit stops the step and says to run it
+again later. The server reads the saved data **at startup**, so restart after an update. The app has no sync, no Real data
+dialog, no `/api/real-prices*` or `/api/real-history/*` endpoints, and no background fetch tasks; `engine.use_real` is gone
+(RealBars is built once at startup). The Go to… dialog keeps a **Last real day** shortcut (the market's `real_through`).
+**Sandbox warning:** the sandbox's `backend/.env` holds live keys, so running `update` there spends real requests
+(Tiingo allows 50 an hour: a full first download is 40). Tests never read the keys (`tests/conftest.py`). Older notes
+below that describe background tasks, `refresh_*`, `update_real_history`, `sync_real_prices` or the Real data dialog
+describe what existed before this change.
 
 **The real-history plan (the user's request after 20 simulated years of SPY went $125 → $300; discussed
 and agreed 2026-10-31; one PR per step, stop after each for the user to test):**

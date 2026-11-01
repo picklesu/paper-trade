@@ -160,6 +160,21 @@ export async function fetchBars(symbol: string, interval: Interval, end?: number
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
+/** A market-wide circuit-breaker halt: when it began and when trading resumed (Unix seconds; null: not that day). */
+export interface HaltEvent {
+  start: number
+  resume: number | null
+  level: number
+}
+
+export async function fetchHalts(start: number, end: number): Promise<HaltEvent[]> {
+  const params = new URLSearchParams({ start: new Date(start * 1000).toISOString(), end: new Date(end * 1000).toISOString() })
+  const list = await send<unknown>(`/api/halts?${params}`, 'GET')
+  return Array.isArray(list)
+    ? list.filter((h): h is HaltEvent => isObject(h) && typeof h.start === 'number' && typeof h.level === 'number')
+    : []
+}
+
 export async function fetchSymbols(): Promise<SymbolInfo[]> {
   const list = await send<unknown>('/api/symbols', 'GET')
   return Array.isArray(list) ? list.filter((s): s is SymbolInfo => isObject(s) && typeof s.symbol === 'string') : []

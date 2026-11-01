@@ -127,3 +127,37 @@ def test_a_shock_day_is_less_extreme_in_a_crisis() -> None:
     day = engine.trigger_shock()  # the trigger's own excess is the smaller share, in its crisis
     low, high = engine_mod.SHOCK_EXCESS_MIN * engine_mod.SHOCK_IN_CRISIS, (engine_mod.SHOCK_EXCESS_MIN + engine_mod.SHOCK_EXCESS_RANGE) * engine_mod.SHOCK_IN_CRISIS
     assert low <= engine._shocks[day][0] <= high
+
+
+def test_past_halts_are_found_from_the_stored_bars() -> None:
+    from paper_trade.market.history import History
+
+    engine, day, sk = find_halt()
+    history = History(Store(":memory:").connection, engine)
+    # Run the market past the halt day, recording each finished session.
+    engine.advance(session_open(day) + timedelta(days=3))
+    with history.batch():
+        for k in range(0, (engine.time.date() - START.date()).days + 1):
+            day_k = START.date() + timedelta(days=k)
+            if day_k.weekday() < 5 and day_k < engine.time.date() and day_k in engine._starts:
+                history.record(day_k)
+    found = history.halts_between(START.date(), engine.time.date())
+    assert [h["level"] for h in found] == [level for _, _, level in sk.halts]
+    first = sk.halts[0]
+    assert found[0]["start"] == int((session_open(day) + timedelta(minutes=first[0])).timestamp())
+    assert history.halts_between(day + timedelta(days=1), engine.time.date()) == []  # none after it
+
+
+def test_the_service_lists_todays_halt_only_once_it_has_begun() -> None:
+    from paper_trade.market.clock import SimClock
+    from paper_trade.market.service import MarketService
+
+    engine, day, sk = find_halt()
+    first = sk.halts[0][0]
+    svc = MarketService(SimClock(start=engine.time), engine, Store(":memory:"), history_days=5)
+    engine.advance(session_open(day) + timedelta(minutes=first - 3))
+    lo, hi = session_open(day) - timedelta(hours=1), session_open(day) + timedelta(hours=7)
+    assert svc.halts(lo, hi) == []  # not yet
+    engine.advance(session_open(day) + timedelta(minutes=first, seconds=5))
+    found = svc.halts(lo, hi)
+    assert len(found) >= 1 and found[0]["level"] == 1

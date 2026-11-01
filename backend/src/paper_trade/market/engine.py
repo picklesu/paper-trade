@@ -1305,6 +1305,21 @@ class MarketEngine:
                 return {"level": level, "resumes": when}
         return None
 
+    def halts_of(self, day: date) -> list[dict]:
+        """The circuit-breaker halts of a session: when each began (Unix seconds), when trading
+        resumed (None: not that day) and its level."""
+        out = []
+        for first, resume, level in self._skeleton(day).halts:
+            opened = session_open(day)
+            out.append(
+                {
+                    "start": int((opened + timedelta(minutes=first)).timestamp()),
+                    "resume": None if resume >= _M else int((opened + timedelta(minutes=resume)).timestamp()),
+                    "level": level,
+                }
+            )
+        return out
+
     def halted_at(self, day: date, second: int) -> bool:
         sk = self._skeleton(day)
         return bool(sk.halted is not None and sk.halted[min(second, _S - 1) // 60])

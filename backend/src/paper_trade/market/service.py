@@ -128,6 +128,15 @@ class MarketService:
                 out = {"bars": kept, "more": False}
         return out
 
+    def halts(self, start: datetime, end: datetime) -> list[dict]:
+        """Circuit-breaker halts between two times, finished sessions and today's so far."""
+        found = self.history.halts_between(market_day(start), market_day(end))
+        today = market_day(self.engine.time)
+        if market_day(start) <= today <= market_day(end):
+            found += [h for h in self.engine.halts_of(today) if h["start"] <= self.engine.time.timestamp()]
+        lo, hi = start.timestamp(), end.timestamp()
+        return sorted({h["start"]: h for h in found if lo <= h["start"] <= hi}.values(), key=lambda h: h["start"])
+
     def snapshot(self) -> dict:
         quotes = self.engine.quotes
         return {

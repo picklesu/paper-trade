@@ -25,7 +25,7 @@ from paper_trade.market.calendar import (
     session_open,
     session_seconds,
 )
-from paper_trade.market.engine import MarketEngine
+from paper_trade.market.engine import BREAKER_LEVELS, MarketEngine
 
 STORED_MINUTES = 30
 VIX_SYMBOL = "VIX"  # an index stored beside the symbols, in 30-minute bars only
@@ -58,6 +58,8 @@ def aggregate(bars: np.ndarray, k: int) -> np.ndarray:
 def _row(t: datetime | float, b) -> Bar:
     ts = t.timestamp() if isinstance(t, datetime) else t
     return [int(ts), round(float(b[0]), 2), round(float(b[1]), 2), round(float(b[2]), 2), round(float(b[3]), 2), int(b[4])]
+
+BREAKER_FIRST_LEVEL = BREAKER_LEVELS[0]
 
 
 def week_start(d: date) -> date:
@@ -138,6 +140,33 @@ class History:
             self.db.execute("ROLLBACK")
             raise
         self.db.execute("COMMIT")
+
+    def halts_between(self, start: date, end: date) -> list[dict]:
+        """Circuit-breaker halts on stored sessions from `start` to `end`. A halt needs SPY to fall
+        at least 7% below the previous close, so only such days (found from the stored bars,
+        whose lows keep the dip) are regenerated to read their halts off."""
+        if not any(s.symbol == "SPY" for s in self.engine.specs):
+            return []
+        self.flush()
+        today = market_day(self.engine.time)
+        stop = min(end, today - timedelta(days=1))
+        rows = self.db.execute(
+            "SELECT day, i, l, c FROM bars30 WHERE symbol = 'SPY' AND day >= ? AND day <= ? ORDER BY day, i",
+            ((start - timedelta(days=7)).isoformat(), stop.isoformat()),
+        ).fetchall()
+        lows: dict[str, float] = {}
+        closes: dict[str, float] = {}
+        for day_s, _, low, close in rows:
+            lows[day_s] = min(lows.get(day_s, low), low)
+            closes[day_s] = close  # the last bar's close (rows run in order)
+        out: list[dict] = []
+        previous = None  # the previous stored session's close
+        for day_s in sorted(lows):
+            day = date.fromisoformat(day_s)
+            if previous is not None and day >= start and lows[day_s] <= previous * (1 - BREAKER_FIRST_LEVEL) * 1.0001:
+                out += self.engine.halts_of(day)
+            previous = closes[day_s]
+        return out
 
     def stored_days(self) -> set[date]:
         self.flush()

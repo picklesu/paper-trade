@@ -199,7 +199,7 @@ describe('PriceChart settling', () => {
     render(<PriceChart quote={quote} clock={clock} orders={[]} />)
     await waitFor(() => expect(calls.candleData).toHaveLength(2))
     act(() => calls.onRangeChange!({ from: 0, to: 2 })) // a range event fired during the load
-    const older = () => fn.mock.calls.filter(([u]) => String(u).includes('end=')).length
+    const older = () => fn.mock.calls.filter(([u]) => String(u).includes('/api/bars') && String(u).includes('end=')).length
     expect(older()).toBe(0)
     // After settling, the applied view starts at the first bar: load older bars once.
     calls.logicalRange = { from: 0, to: 2 }
@@ -217,7 +217,7 @@ describe('PriceChart races', () => {
     let resolveOlder: (v: unknown) => void = () => {}
     const fn = vi.fn((url: string) => {
       const u = new URL(url, 'http://x')
-      if (u.searchParams.get('symbol') === 'SPY' && u.searchParams.has('end')) {
+      if (u.pathname === '/api/bars' && u.searchParams.get('symbol') === 'SPY' && u.searchParams.has('end')) {
         return new Promise((r) => (resolveOlder = r)) // SPY's older page answers late
       }
       const page = u.searchParams.get('symbol') === 'SPY' ? { bars, more: true } : { bars: [[OPEN, 1, 1, 1, 1, 1]], more: false }
@@ -228,7 +228,7 @@ describe('PriceChart races', () => {
     await waitFor(() => expect(calls.candleData).toHaveLength(2))
     await new Promise((r) => setTimeout(r, 120)) // the fresh view settles
     act(() => calls.onRangeChange!({ from: 0, to: 50 })) // scrolled back: load older SPY bars
-    await waitFor(() => expect(fn.mock.calls.some(([u]) => String(u).includes('end='))).toBe(true))
+    await waitFor(() => expect(fn.mock.calls.some(([u]) => String(u).includes('/api/bars') && String(u).includes('end='))).toBe(true))
 
     rerender(<PriceChart quote={{ ...quote, symbol: 'AAPL' }} clock={clock} orders={[]} />)
     await waitFor(() => expect(calls.candleData).toHaveLength(1))

@@ -99,6 +99,29 @@ export interface FillMarker {
   text: string
 }
 
+export interface HaltMarker {
+  time: number
+  text: string
+}
+
+/** One marker per circuit-breaker halt, on the bar it began in (halts before the first bar are left out). */
+export function haltMarkers(bars: Bar[], halts: { start: number; resume: number | null; level: number }[]): HaltMarker[] {
+  if (!bars.length) return []
+  const out: HaltMarker[] = []
+  for (const h of halts) {
+    if (h.start < bars[0][0]) continue
+    let lo = 0
+    let hi = bars.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (bars[mid][0] <= h.start) lo = mid
+      else hi = mid - 1
+    }
+    out.push({ time: bars[lo][0], text: h.resume === null ? `Halt L${h.level} (closed)` : `Halt L${h.level}` })
+  }
+  return out.sort((a, b) => a.time - b.time)
+}
+
 /** One marker per fill of `symbol`, placed on the bar the fill happened in. */
 export function fillMarkers(bars: Bar[], orders: Order[], symbol: string): FillMarker[] {
   if (!bars.length) return []

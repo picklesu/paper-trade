@@ -395,3 +395,9 @@ def test_the_volatility_index_is_quoted_charted_and_untradable(client: TestClien
     assert reply.status_code == 422 and "index" in reply.json()["detail"]
     lists = client.get("/api/watchlists").json()
     assert "VIX" in next(w for w in lists if w["name"] == "All symbols")["symbols"]
+
+
+def test_halts_endpoint_lists_nothing_on_an_ordinary_stretch_and_rejects_bad_times(client: TestClient) -> None:
+    clock = client.get("/api/clock").json()
+    assert client.get("/api/halts", params={"start": "2026-01-01", "end": clock["time"]}).json() == []
+    assert client.get("/api/halts", params={"start": "nonsense", "end": clock["time"]}).status_code == 422

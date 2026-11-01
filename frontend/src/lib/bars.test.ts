@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyTick, type Bar, bucketStart, fillMarkers, formatBarTime, mergeBars, RANGES, rangeStart, weekKey } from './bars'
+import { applyTick, type Bar, bucketStart, fillMarkers, formatBarTime, haltMarkers, mergeBars, RANGES, rangeStart, weekKey } from './bars'
 import type { Order } from './types'
 
 const OPEN = Date.parse('2026-01-07T14:30:00Z') / 1000 // Wed 9:30 ET
@@ -95,5 +95,29 @@ describe('fillMarkers and dividends', () => {
     const bars: Bar[] = [[1_000, 1, 2, 0.5, 1.5, 10]]
     const order = { symbol: 'KO', status: 'filled', filled_at: new Date(1_500_000).toISOString(), type: 'dividend', side: 'buy', qty: 100, fill_price: 0.5 } as Order
     expect(fillMarkers(bars, [order], 'KO')).toEqual([])
+  })
+})
+
+describe('haltMarkers', () => {
+  const bars: Bar[] = [at(0), at(30), at(60)].map((t) => [t, 1, 2, 0.5, 1.5, 10])
+  it('puts each halt on the bar it began in and says when the day was closed', () => {
+    const marks = haltMarkers(
+      bars,
+      [
+        { start: at(40), resume: at(55), level: 1 },
+        { start: at(61), resume: null, level: 3 },
+        { start: at(-10), resume: at(5), level: 2 },
+      ],
+      '30m',
+    )
+    expect(marks).toEqual([
+      { time: at(30), text: 'Halt L1' },
+      { time: at(60), text: 'Halt L3 (closed)' },
+    ])
+    expect(haltMarkers([], [{ start: at(1), resume: null, level: 3 }], '30m')).toEqual([])
+  })
+  it('leaves out halts after the last bar, which are not on the chart yet', () => {
+    expect(haltMarkers(bars, [{ start: at(95), resume: null, level: 1 }], '30m')).toEqual([])
+    expect(haltMarkers(bars, [{ start: at(95), resume: null, level: 1 }], '1D')).toHaveLength(1) // inside a daily bar's span
   })
 })

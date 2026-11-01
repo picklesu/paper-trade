@@ -106,6 +106,13 @@ async def trigger_shock(request: Request) -> dict:
     return {"day": day.isoformat(), "clock": svc.clock_state()}
 
 
+@router.get("/halts")
+async def get_halts(request: Request, start: str, end: str) -> list[dict]:
+    """Market-wide circuit-breaker halts between two times: when each began, when trading resumed, its level."""
+    svc = market(request)
+    return svc.halts(parse_market_time(start), parse_market_time(end))
+
+
 @router.get("/bars")
 async def get_bars(request: Request, symbol: str, interval: str = "5m", end: str | None = None, count: int = 500) -> dict:
     """Chart bars: up to `count` before `end` (default now, including the live bar), oldest first."""

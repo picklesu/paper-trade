@@ -12,13 +12,15 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchBars } from '../lib/api'
+import { fetchBars, fetchHalts, type HaltEvent } from '../lib/api'
 import {
   applyTick,
   type Bar,
   bucketStart,
+  barSeconds,
   fillMarkers,
   formatBarTime,
+  haltMarkers,
   formatTick,
   type Interval,
   INTERVAL_LABEL,
@@ -50,6 +52,7 @@ interface Props {
 
 const UP = '#22c55e'
 const DOWN = '#ef4444'
+const HALT = '#f59e0b'
 const PAGE = 500
 const FINE_BARS = new Set<Interval>(['1m', '5m', '15m'])
 const RESYNC_MS = 1500
@@ -105,6 +108,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   const interval: Interval = index && FINE_BARS.has(chosenInterval) ? '30m' : chosenInterval
   const [preset, setPreset] = useState<RangePreset | null>(RANGES[1])
   const [bars, setBars] = useState<Bar[]>([])
+  const [halts, setHalts] = useState<HaltEvent[]>([])
   const [hover, setHover] = useState<Bar | null>(null)
   // What finished loading (or failed), so "loading" is simply "not the current view yet".
   const [loaded, setLoaded] = useState<{ key: string; error: string | null } | null>(null)
@@ -393,19 +397,51 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
     return () => window.clearInterval(id)
   }, [symbol, clock.paused])
 
-  // Your fills on the chart.
-  const fills = useMemo(() => fillMarkers(bars, orders, symbol), [bars, orders, symbol])
+  // Circuit-breaker halts in the loaded range (market-wide; checked again now and then while time runs).
+  const firstBar = bars[0]?.[0]
   useEffect(() => {
-    markers.current?.setMarkers(
-      fills.map((m) => ({
+    if (firstBar === undefined) return // no bars, so no markers either
+    let cancelled = false
+    const load = () => {
+      const last = barsRef.current[barsRef.current.length - 1]?.[0]
+      if (last === undefined) return
+      fetchHalts(firstBar, last + barSeconds(intervalRef.current))
+        .then((list) => {
+          if (!cancelled) setHalts((old) => (JSON.stringify(old) === JSON.stringify(list) ? old : list))
+        })
+        .catch(() => {})
+    }
+    load()
+    if (clock.paused) return () => void (cancelled = true)
+    const id = window.setInterval(load, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [firstBar, loaded?.key, clock.paused])
+
+  // Your fills and the halts on the chart.
+  const fills = useMemo(() => fillMarkers(bars, orders, symbol), [bars, orders, symbol])
+  const haltMarks = useMemo(() => haltMarkers(bars, halts, interval), [bars, halts, interval])
+  useEffect(() => {
+    const marks = [
+      ...fills.map((m) => ({
         time: m.time as UTCTimestamp,
-        position: m.side === 'buy' ? 'belowBar' : 'aboveBar',
+        position: (m.side === 'buy' ? 'belowBar' : 'aboveBar') as 'belowBar' | 'aboveBar',
         color: m.side === 'buy' ? UP : DOWN,
-        shape: m.side === 'buy' ? 'arrowUp' : 'arrowDown',
+        shape: (m.side === 'buy' ? 'arrowUp' : 'arrowDown') as 'arrowUp' | 'arrowDown',
         text: m.text,
       })),
-    )
-  }, [fills])
+      ...haltMarks.map((m) => ({
+        time: m.time as UTCTimestamp,
+        position: 'aboveBar' as const,
+        color: HALT,
+        shape: 'square' as const,
+        text: m.text,
+      })),
+    ]
+    markers.current?.setMarkers(marks.sort((a, b) => a.time - b.time))
+  }, [fills, haltMarks])
 
   const intervals = index ? INTERVALS.filter((iv) => !FINE_BARS.has(iv)) : INTERVALS
 

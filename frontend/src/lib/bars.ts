@@ -99,6 +99,36 @@ export interface FillMarker {
   text: string
 }
 
+/** How long a bar of this size covers, in seconds (a daily bar spans its day, a weekly one its week). */
+export function barSeconds(interval: Interval): number {
+  const minutes = INTRADAY_MINUTES[interval]
+  return minutes ? minutes * 60 : interval === '1W' ? 7 * 86400 : 86400
+}
+
+export interface HaltMarker {
+  time: number
+  text: string
+}
+
+/** One marker per circuit-breaker halt, on the bar it began in (halts before the first bar are left out). */
+export function haltMarkers(bars: Bar[], halts: { start: number; resume: number | null; level: number }[], interval: Interval): HaltMarker[] {
+  if (!bars.length) return []
+  const end = bars[bars.length - 1][0] + barSeconds(interval) // the last bar's span: a halt after it isn't on the chart
+  const out: HaltMarker[] = []
+  for (const h of halts) {
+    if (h.start < bars[0][0] || h.start >= end) continue
+    let lo = 0
+    let hi = bars.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (bars[mid][0] <= h.start) lo = mid
+      else hi = mid - 1
+    }
+    out.push({ time: bars[lo][0], text: h.resume === null ? `Halt L${h.level} (closed)` : `Halt L${h.level}` })
+  }
+  return out.sort((a, b) => a.time - b.time)
+}
+
 /** One marker per fill of `symbol`, placed on the bar the fill happened in. */
 export function fillMarkers(bars: Bar[], orders: Order[], symbol: string): FillMarker[] {
   if (!bars.length) return []

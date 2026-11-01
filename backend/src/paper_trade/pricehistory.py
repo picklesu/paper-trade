@@ -13,7 +13,7 @@ first real close is brought back by the symbol's expected return instead.
 import math
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -23,7 +23,6 @@ from paper_trade.store import Store
 URL = "https://api.tiingo.com/tiingo/daily/{symbol}/prices"
 KEY_NAME = "TIINGO_API_KEY"
 FIRST_DAY = "1980-01-01"
-RETRY_AFTER = timedelta(hours=1)  # after a failed fetch (the free plan's hourly limit)
 DAYS_PER_YEAR = 365.25
 
 
@@ -129,10 +128,7 @@ class PriceHistory:
         return set(self.store.get("daily_history", {}))
 
     def due(self, symbols: list[str]) -> list[str]:
-        """Symbols whose history hasn't been fetched yet (nothing, a while after a failure)."""
-        retry = self.store.get("daily_history_retry")
-        if retry and self._now() < datetime.fromisoformat(retry):
-            return []
+        """Symbols whose history hasn't been fetched yet."""
         have = self.fetched | set(self.store.get("daily_history_skipped", {}))
         return [s for s in symbols if s not in have]
 
@@ -183,7 +179,6 @@ class PriceHistory:
 
     def failed(self, message: str) -> None:
         self.store.set("daily_history_error", {"message": message, "at": self._now().isoformat()})
-        self.store.set("daily_history_retry", (self._now() + RETRY_AFTER).isoformat())
 
     def close_on_or_before(self, symbol: str, day: date) -> tuple[date, float] | None:
         row = self._db.execute(

@@ -62,14 +62,12 @@ def test_before_the_first_close_it_is_brought_back_by_the_drift() -> None:
     assert back_cast(100, date(2026, 1, 1), date(2016, 1, 1), 0.07) == pytest.approx(100 / 2.0137, rel=1e-3)
 
 
-def test_due_symbols_and_a_pause_after_a_failure() -> None:
+def test_due_symbols_and_a_failure_is_shown() -> None:
     hist = history({"SPY": SPY})
     assert hist.due(["SPY", "QQQ"]) == ["QQQ"]
     hist.failed("too many requests")
-    assert hist.due(["SPY", "QQQ"]) == []
-    assert hist.status(["SPY", "QQQ"])["last_error"] == "too many requests"
-    hist._now = lambda: datetime(2100, 1, 1, tzinfo=UTC)
     assert hist.due(["SPY", "QQQ"]) == ["QQQ"]
+    assert hist.status(["SPY", "QQQ"])["last_error"] == "too many requests"
 
 
 def test_history_is_kept_between_runs(tmp_path) -> None:
@@ -164,8 +162,8 @@ def test_a_symbol_tiingo_doesn_t_know_is_skipped_but_a_rate_limit_stops() -> Non
     hist = PriceHistory(Store(":memory:"), "k", fetch=fetch)
     update.update_history(hist, NAMES, say=lambda m: None)
     assert "QQQ" in hist.fetched and "SPY" not in hist.fetched and "SPY" not in hist.due(NAMES)
-    assert "IWM" not in hist.fetched and hist.due(NAMES) == []  # stopped at the rate limit
-    # Running the update again doesn't wait out the hour, and a skipped symbol stays skipped.
+    assert "IWM" not in hist.fetched and "IWM" in hist.due(NAMES)  # stopped at the rate limit
+    # Running the update again goes on at once, and a skipped symbol stays skipped.
     update.update_history(PriceHistory(hist.store, "k", fetch=lambda s, k: SPY, fetch_since=lambda s, k, d: []), NAMES, say=lambda m: None)
     assert "IWM" in hist.fetched and "SPY" not in hist.fetched
 

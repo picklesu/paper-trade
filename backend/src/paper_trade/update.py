@@ -56,7 +56,6 @@ def update_history(hist: PriceHistory, symbols: list[str], say: Say = print) -> 
     problems: list[str] = []
     if not hist.configured:
         return {"prices": added, "problems": ["TIINGO_API_KEY missing: add it to backend/.env"]}
-    hist.store.delete("daily_history_retry")  # you asked: no waiting out an earlier rate limit
     stopped = False
     first = hist.due(symbols)
     for symbol in first:
@@ -114,7 +113,6 @@ def update_macro(economy: Macro, say: Say = print) -> dict:
     problems: list[str] = []
     if not economy.configured:
         return {"macro": added, "problems": ["FRED_API_KEY missing: add it to backend/.env"]}
-    economy.store.delete("macro_retry")  # you asked: no waiting out an earlier rate limit
     stopped = False
     first = economy.due()
     for series in first:
@@ -169,7 +167,7 @@ def update_options(od: OptionData, symbols: list[str], say: Say = print) -> list
     problems: list[str] = []
     due = od.due(symbols)
     if due:
-        od.attempt(len(due))  # first: it clears the status, and the notes below must survive
+        od.attempt()  # first: it clears the status, and the notes below must survive
     if od.rate_due() and od.earnings_key:
         try:
             day, rate = fetch_treasury_rate(od.earnings_key)
@@ -183,37 +181,34 @@ def update_options(od: OptionData, symbols: list[str], say: Say = print) -> list
         say("Option fits: all less than a day old")
         return problems
     assert od.creds
+    now = datetime.now(UTC)
     try:
-        now = datetime.now(UTC)
+        bars = fetch_bars(symbols, od.creds, now)
+    except FetchError as e:
+        od.failed(f"daily bars: {e}")
+        return [*problems, f"daily bars: {e}"]
+    earnings = None
+    if od.earnings_key:
         try:
-            bars = fetch_bars(symbols, od.creds, now)
+            earnings = fetch_earnings(od.earnings_key, symbols, now.astimezone(MARKET_TZ).date())
         except FetchError as e:
-            od.failed(f"daily bars: {e}")
-            return [*problems, f"daily bars: {e}"]
-        earnings = None
-        if od.earnings_key:
-            try:
-                earnings = fetch_earnings(od.earnings_key, symbols, now.astimezone(MARKET_TZ).date())
-            except FetchError as e:
-                od.note(f"earnings dates: {e}")
-                problems.append(f"earnings dates: {e}")
-        context = Context(now, bars, earnings)
-        for n, symbol in enumerate(due, start=1):
-            try:
-                summary = summarize(symbol, od.creds, context, datetime.now(UTC))
-            except FetchError as e:
-                od.failed(f"{symbol}'s options: {e}")
-                problems.append(f"{symbol}'s options: {e}")
-                break
-            except Exception as e:
-                # Keep it from being retried straight away; the defaults apply.
-                summary = {"symbol": symbol, "fetched": datetime.now(UTC).isoformat(), "shape": None}
-                od.note(f"{symbol}'s options couldn't be calibrated")
-                problems.append(f"{symbol}'s options couldn't be calibrated ({e})")
-            od.record(symbol, summary)
-            say(f"Option fits: {n} of {len(due)} ({symbol})")
-    finally:
-        od.finished()
+            od.note(f"earnings dates: {e}")
+            problems.append(f"earnings dates: {e}")
+    context = Context(now, bars, earnings)
+    for n, symbol in enumerate(due, start=1):
+        try:
+            summary = summarize(symbol, od.creds, context, datetime.now(UTC))
+        except FetchError as e:
+            od.failed(f"{symbol}'s options: {e}")
+            problems.append(f"{symbol}'s options: {e}")
+            break
+        except Exception as e:
+            # Keep it from being retried straight away; the defaults apply.
+            summary = {"symbol": symbol, "fetched": datetime.now(UTC).isoformat(), "shape": None}
+            od.note(f"{symbol}'s options couldn't be calibrated")
+            problems.append(f"{symbol}'s options couldn't be calibrated ({e})")
+        od.record(symbol, summary)
+        say(f"Option fits: {n} of {len(due)} ({symbol})")
     return problems
 
 

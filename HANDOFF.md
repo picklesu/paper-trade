@@ -59,7 +59,7 @@ dialog, no `/api/real-prices*` or `/api/real-history/*` endpoints, and no backgr
 (Tiingo allows 50 an hour: a full first download is 40). Tests never read the keys (`tests/conftest.py`). Older notes
 below that describe background tasks, `refresh_*`, `update_real_history`, `sync_real_prices` or the Real data dialog
 describe what existed before this change.
-**Small cleanup left over:** the data classes still carry retry/progress bookkeeping nothing reads now (`OptionData.seconds_until_due`, `RETRY_AFTER`, `progress`/`running`, the `*_retry` store keys, `due()`'s retry hold); remove it and its tests in a tidy-up PR.
+**Cleanup done (fetch bookkeeping removed):** no retry holds (`*_retry` store keys), `RETRY_AFTER`, `OptionData.seconds_until_due`/`progress`/`finished`/`running`. A failure is only shown (`last_error`). Notes below that mention an hour's wait or retries describe the old app.
 
 **The real-history plan (the user's request after 20 simulated years of SPY went $125 → $300; discussed
 and agreed 2026-10-31; one PR per step, stop after each for the user to test):**

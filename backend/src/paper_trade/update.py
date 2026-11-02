@@ -18,8 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from paper_trade import macro as macro_mod
-from paper_trade import intraday as intraday_mod
 from paper_trade import optiondata, pricehistory, realprices
+from paper_trade.intraday import SYMBOLS as INTRADAY_SYMBOLS
 from paper_trade.intraday import Intraday
 from paper_trade.macro import Macro
 from paper_trade.market.calendar import MARKET_TZ
@@ -217,11 +217,11 @@ def update_options(od: OptionData, symbols: list[str], say: Say = print) -> list
 
 
 def update_intraday(minutes: Intraday, say: Say = print) -> list[str]:
-    """One-minute bars for the profile symbols (resumes where it stopped; a rate limit stops it)."""
+    """One-minute bars for the profile symbols (a year at a time, each saved; run it again to resume after a rate limit)."""
     if not minutes.configured:
         return ["intraday: no Alpaca keys (APCA_API_KEY_ID, APCA_API_SECRET_KEY in backend/.env)"]
     problems = []
-    for symbol in intraday_mod.SYMBOLS:
+    for symbol in INTRADAY_SYMBOLS:
         say(f"{symbol} minutes...")
         try:
             added = minutes.update(symbol, datetime.now(UTC))

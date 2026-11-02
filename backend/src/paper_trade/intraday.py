@@ -5,13 +5,14 @@ Alpaca's consolidated (SIP) minute bars, from 2016. The app never reads these: t
 by `./server.sh update intraday`.
 
 A day is stored as 391 slots: minute 0 is the 9:30 bar (it holds the opening cross) and
-minute 390 is the 16:00 bar, which holds the closing cross and the prints just after it.
-Pre- and after-market bars are dropped. A slot with no trades has volume 0 and close 0.
+minute 390 is the 16:00 bar, which holds the closing cross. Pre- and after-market bars (16:01 on)
+are dropped. A slot with no trades has volume 0 and close 0. Closes are float32 (about 7 digits): they\nare for relative moves, not prices.
 """
 
 import struct
 import urllib.parse
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, time
 
 from paper_trade.market.calendar import MARKET_TZ
@@ -25,7 +26,7 @@ FIRST_DAY = date(2016, 1, 4)  # Alpaca's free history starts around here
 # One fund per kind, big and small stocks: enough to fit profiles by tier.
 SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "NVDA", "JPM", "KO", "GS")
 
-Fetch = Callable[[str, date, datetime, Credentials], dict[date, tuple[list[int], list[float]]]]
+Fetch = Callable[[str, date, datetime, Credentials, datetime], dict[date, tuple[list[int], list[float]]]]
 
 
 def slot_of(timestamp: str) -> tuple[date, int] | None:
@@ -50,11 +51,12 @@ def parse_minutes(bars: list[dict]) -> dict[date, tuple[list[int], list[float]]]
 
 
 def fetch_minutes(
-    symbol: str, since: date, now: datetime, creds: Credentials, limit: RateLimit = LIMIT
+    symbol: str, since: date, now: datetime, creds: Credentials, limit: RateLimit = LIMIT, until: datetime | None = None
 ) -> dict[date, tuple[list[int], list[float]]]:
-    """Every regular-session minute of `symbol` from `since` until the SIP delay before `now`.
-    Days with fewer than half the minutes (early closes are kept; thin glitches are not) are dropped."""
-    end = (now - SIP_DELAY).astimezone(UTC).isoformat().replace("+00:00", "Z")
+    """Every regular-session minute of `symbol` from `since` until `until`, which is at most the
+    SIP delay before `now`. Days with under a quarter of the minutes traded (early closes have
+    about half; glitches fewer) are dropped."""
+    end = min(until or now, now - SIP_DELAY).astimezone(UTC).isoformat().replace("+00:00", "Z")
     rows: list[dict] = []
     token = None
     while True:
@@ -76,7 +78,7 @@ def fetch_minutes(
         if not (token := body.get("next_page_token")):
             break
     days = parse_minutes(rows)
-    return {d: v for d, v in days.items() if sum(1 for x in v[0] if x) >= SLOTS // 2}
+    return {d: v for d, v in days.items() if sum(1 for x in v[0] if x) >= SLOTS // 4}
 
 
 class Intraday:
@@ -101,21 +103,43 @@ class Intraday:
         return date.fromisoformat(row[0]) if row and row[0] else None
 
     def update(self, symbol: str, now: datetime) -> int:
-        """Fetch the days after the last saved one (that day again: it may have been saved
-        before its close) and save them; returns how many days were saved."""
+        """Fetch the days from the last saved one (again: it may have been saved before its
+        close) a year at a time, saving each year before asking for the next, so a rate limit
+        or a dropped connection keeps what came before. Returns how many days were saved."""
         if self.creds is None:
             raise FetchError("no Alpaca keys: add APCA_API_KEY_ID and APCA_API_SECRET_KEY to backend/.env")
-        last = self.last_day(symbol)
-        days = self._fetch(symbol, last or FIRST_DAY, now, self.creds)
-        # today's session is not finished: keep only finished days
-        cutoff = (now - SIP_DELAY).astimezone(MARKET_TZ)
-        done = {d: v for d, v in days.items() if d < cutoff.date() or (d == cutoff.date() and cutoff.time() > time(16, 2))}
-        for day, (volumes, closes) in sorted(done.items()):
-            self._db.execute(
-                "INSERT OR REPLACE INTO intraday (symbol, day, volume, close) VALUES (?, ?, ?, ?)",
-                (symbol, day.isoformat(), struct.pack(f"<{SLOTS}I", *volumes), struct.pack(f"<{SLOTS}f", *closes)),
-            )
-        return len(done)
+        start = self.last_day(symbol) or FIRST_DAY
+        local = now.astimezone(MARKET_TZ)
+        saved = 0
+        while start <= local.date():
+            until = datetime(start.year + 1, 1, 1, tzinfo=UTC)
+            days = self._fetch(symbol, start, now, self.creds, until)
+            # today's session counts once its closing bar is in (the feed runs 20 minutes behind)
+            done = {d: v for d, v in days.items() if d < local.date() or local.time() >= time(16, 30)}
+            self._save(symbol, done)
+            saved += len(done)
+            start = until.date()
+        return saved
+
+    def _save(self, symbol: str, days: dict[date, tuple[list[int], list[float]]]) -> None:
+        top = 2**32 - 1  # a stored volume is an unsigned 32-bit count
+        with self._transaction():
+            for day, (volumes, closes) in sorted(days.items()):
+                volumes = [min(max(v, 0), top) for v in volumes]
+                self._db.execute(
+                    "INSERT OR REPLACE INTO intraday (symbol, day, volume, close) VALUES (?, ?, ?, ?)",
+                    (symbol, day.isoformat(), struct.pack(f"<{SLOTS}I", *volumes), struct.pack(f"<{SLOTS}f", *closes)),
+                )
+
+    @contextmanager
+    def _transaction(self):
+        self._db.execute("BEGIN")
+        try:
+            yield
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._db.execute("COMMIT")
 
     def days(self, symbol: str) -> list[tuple[date, list[int], list[float]]]:
         rows = self._db.execute("SELECT day, volume, close FROM intraday WHERE symbol = ? ORDER BY day", (symbol,)).fetchall()

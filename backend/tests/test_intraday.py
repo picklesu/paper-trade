@@ -50,22 +50,48 @@ def test_fetch_pages_and_drops_thin_days(monkeypatch) -> None:
     assert "page_token=t" in urls[1] and "timeframe=1Min" in urls[0] and "feed=sip" in urls[0]
 
 
-def test_update_saves_finished_days_and_resumes(monkeypatch) -> None:
-    store = Store(":memory:")
-    calls = []
-
-    def fake(symbol, since, now, creds):
-        calls.append(since)
+def fake_days(*days: date):
+    def fetch(symbol, since, now, creds, until):
         v = [3] * SLOTS
-        return {date(2026, 10, 21): (v, [1.0] * SLOTS), date(2026, 11, 2): (v, [1.0] * SLOTS)}
+        return {d: (v, [1.0] * SLOTS) for d in days if since <= d < until.date()}
 
-    minutes = Intraday(store, CREDS, fake)
-    assert minutes.update("SPY", NOW) == 1  # Nov 2 is still being traded (10:00 New York)
+    return fetch
+
+
+def test_update_saves_finished_days_and_resumes() -> None:
+    store = Store(":memory:")
+    minutes = Intraday(store, CREDS, fake_days(date(2025, 3, 3), date(2026, 10, 21), date(2026, 11, 2)))
+    assert minutes.update("SPY", NOW) == 2  # Nov 2 is still being traded (10:00 New York)
     assert minutes.last_day("SPY") == date(2026, 10, 21)
+    assert minutes.update("SPY", NOW) == 1  # resumes from the last day
+    after_close = datetime(2026, 11, 2, 21, 45, tzinfo=UTC)  # 16:45 New York
+    assert minutes.update("SPY", after_close) == 2
+    assert minutes.last_day("SPY") == date(2026, 11, 2)
+    (day, volumes, closes), *_ = minutes.days("SPY")
+    assert (day, sum(volumes), closes[0]) == (date(2025, 3, 3), 3 * SLOTS, 1.0)
+
+
+def test_an_error_keeps_the_years_already_saved() -> None:
+    inner = fake_days(date(2024, 5, 1), date(2026, 10, 21))
+
+    def fetch(symbol, since, now, creds, until):
+        if since.year >= 2025:
+            raise FetchError("rate limited")
+        return inner(symbol, since, now, creds, until)
+
+    minutes = Intraday(Store(":memory:"), CREDS, fetch)
+    with pytest.raises(FetchError):
+        minutes.update("SPY", NOW)
+    assert minutes.last_day("SPY") == date(2024, 5, 1)
+
+
+def test_an_out_of_range_volume_is_clamped_not_a_crash() -> None:
+    def fetch(symbol, since, now, creds, until):
+        return {date(2026, 10, 21): ([-5] + [2**33] + [0] * (SLOTS - 2), [1.0] * SLOTS)} if since.year == 2026 else {}
+
+    minutes = Intraday(Store(":memory:"), CREDS, fetch)
     minutes.update("SPY", NOW)
-    assert calls == [intraday.FIRST_DAY, date(2026, 10, 21)]
-    (day, volumes, closes), = minutes.days("SPY")
-    assert (day, sum(volumes), closes[0]) == (date(2026, 10, 21), 3 * SLOTS, 1.0)
+    assert minutes.days("SPY")[0][1][:2] == [0, 2**32 - 1]
 
 
 def test_update_without_keys_says_so() -> None:

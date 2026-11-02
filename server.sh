@@ -6,7 +6,7 @@
 #   ./server.sh restart   stop, then start
 #   ./server.sh status    show what's running
 #   ./server.sh logs      follow both log files (Ctrl+C to stop following)
-#   ./server.sh update [prices|history|options]
+#   ./server.sh update [prices|history|options|intraday]
 #                         fetch real data from the APIs and save it (the app itself never
 #                         fetches); restart afterwards to use it
 #
@@ -157,7 +157,7 @@ case "${1:-}" in
   update) shift; cmd_update "$@" ;;
   logs) tail -n 20 -f "$RUN/backend.log" "$RUN/frontend.log" ;;
   *)
-    echo "Usage: ./server.sh on | off | restart | status | logs | update [prices|history|options]"
+    echo "Usage: ./server.sh on | off | restart | status | logs | update [prices|history|options|intraday]"
     exit 2
     ;;
 esac

@@ -102,3 +102,7 @@ def test_update_without_keys_says_so() -> None:
 
 def test_the_default_update_leaves_intraday_out() -> None:
     assert "intraday" not in update.STEPS and "intraday" in update.ALL_STEPS
+
+
+def test_every_market_symbol_is_fetched() -> None:
+    assert len(intraday.SYMBOLS) == 40 and {"SPY", "KO", "XLE", "TLT"} <= set(intraday.SYMBOLS)

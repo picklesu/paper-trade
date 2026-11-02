@@ -15,6 +15,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, time
 
+from paper_trade.market import symbols as market_symbols
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.optiondata import BARS_URL, LIMIT, SIP_DELAY, RateLimit
 from paper_trade.realprices import Credentials, FetchError, auth_headers, request_json
@@ -23,8 +24,9 @@ from paper_trade.store import Store
 SLOTS = 391  # 9:30 through 16:00, one-minute bars
 OPEN_MINUTE = 9 * 60 + 30
 FIRST_DAY = date(2016, 1, 4)  # Alpaca's free history starts around here
-# One fund per kind, big and small stocks: enough to fit profiles by tier.
-SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "NVDA", "JPM", "KO", "GS")
+# Every symbol: closing and opening shares differ a lot between stocks (7% to 30% of the day
+# in the last five minutes), so each gets its own profile.
+SYMBOLS = tuple(spec.symbol for spec in market_symbols.SYMBOLS)
 
 Fetch = Callable[[str, date, datetime, Credentials, datetime], dict[date, tuple[list[int], list[float]]]]
 

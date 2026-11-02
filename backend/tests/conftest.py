@@ -1,6 +1,6 @@
 import pytest
 
-from paper_trade import macro, optiondata, pricehistory, realprices
+from paper_trade import intraday, macro, optiondata, pricehistory, realprices
 from paper_trade import update
 
 
@@ -20,6 +20,7 @@ def no_real_prices(monkeypatch):
     monkeypatch.setattr(pricehistory, "fetch_bars", refuse)
     monkeypatch.setattr(macro, "fetch_series", refuse)
     monkeypatch.setattr(optiondata, "fetch_earnings", refuse)
+    monkeypatch.setattr(intraday, "request_json", refuse)
     monkeypatch.setattr(optiondata, "fetch_treasury_rate", refuse)
     for name in ("fetch_bars", "fetch_earnings", "fetch_treasury_rate", "summarize"):  # imported by name there
         monkeypatch.setattr(update, name, refuse)

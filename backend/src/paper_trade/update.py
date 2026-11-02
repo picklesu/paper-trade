@@ -7,6 +7,7 @@ want newer data, then restart the server (it reads the data at startup).
     ./server.sh update prices     Alpaca's latest quotes
     ./server.sh update history    Tiingo's daily bars and FRED's economic series
     ./server.sh update options    Alpaca's option chains (fitted), the interest rate
+    ./server.sh update intraday   Alpaca's one-minute bars (volume profile fitting; not in the default run)
 """
 
 import argparse
@@ -18,6 +19,8 @@ from pathlib import Path
 
 from paper_trade import macro as macro_mod
 from paper_trade import optiondata, pricehistory, realprices
+from paper_trade.intraday import SYMBOLS as INTRADAY_SYMBOLS
+from paper_trade.intraday import Intraday
 from paper_trade.macro import Macro
 from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.market.symbols import SYMBOLS
@@ -31,6 +34,7 @@ MACRO_PAUSE_SECONDS = 1  # between FRED requests (it allows 120 a minute)
 
 Say = Callable[[str], None]
 STEPS = ("prices", "history", "options")
+ALL_STEPS = (*STEPS, "intraday")  # intraday is large (about 2000 requests): only when asked for
 
 
 def update_prices(real: RealPrices, symbols: list[str], say: Say = print) -> list[str]:
@@ -212,6 +216,24 @@ def update_options(od: OptionData, symbols: list[str], say: Say = print) -> list
     return problems
 
 
+def update_intraday(minutes: Intraday, say: Say = print) -> list[str]:
+    """One-minute bars for the profile symbols (a year at a time, each saved; run it again to resume after a rate limit)."""
+    if not minutes.configured:
+        return ["intraday: no Alpaca keys (APCA_API_KEY_ID, APCA_API_SECRET_KEY in backend/.env)"]
+    problems = []
+    for symbol in INTRADAY_SYMBOLS:
+        say(f"{symbol} minutes...")
+        try:
+            added = minutes.update(symbol, datetime.now(UTC))
+        except FetchError as e:
+            problems.append(f"{symbol}'s minutes: {e}")
+            if isinstance(e, FetchStop):
+                break
+            continue
+        say(f"{symbol}: {added} days saved")
+    return problems
+
+
 def run(store: Store, steps: tuple[str, ...] = STEPS, say: Say = print) -> list[str]:
     """Run the chosen steps against the store; returns every problem found."""
     symbols = [s.symbol for s in SYMBOLS]
@@ -224,12 +246,14 @@ def run(store: Store, steps: tuple[str, ...] = STEPS, say: Say = print) -> list[
         problems += update_macro(Macro(store, macro_mod.fred_key()), say)["problems"]
     if "options" in steps:
         problems += update_options(OptionData(store, creds, optiondata.av_key()), symbols, say)
+    if "intraday" in steps:
+        problems += update_intraday(Intraday(store, creds), say)
     return problems
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="update", description="Fetch real data and save it for the app.")
-    parser.add_argument("steps", nargs="*", choices=STEPS, help="what to fetch (default: all)")
+    parser.add_argument("steps", nargs="*", choices=ALL_STEPS, help="what to fetch (default: prices, history, options)")
     args = parser.parse_args(argv)
     steps = tuple(args.steps) or STEPS
     path = Path(os.environ.get("PAPER_TRADE_DB") or DEFAULT_DB)

@@ -70,6 +70,7 @@ from paper_trade.market.calendar import (
 )
 from paper_trade.market.realbars import RealBars, RealBarsGone, RealDay
 from paper_trade.market.regime import STATES, RegimeParams, load_params
+from paper_trade.market.volume_profile import VolumeProfiles
 from paper_trade.market.symbols import SYMBOLS, SymbolSpec
 
 TRADING_DAYS_PER_YEAR = 252
@@ -174,7 +175,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 11  # 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 12  # 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -275,6 +276,7 @@ class _Draws:
     shock_size: float = 0.0  # uniform: how big
     regime_u: float = 0.5  # picks the regime's next state
     regime_z: np.ndarray | None = None  # unit normals for the macro features' next values
+    volume_score: np.ndarray | None = None  # (N,) unit normals: how close-heavy each symbol's volume is today
 
 
 @dataclass
@@ -395,7 +397,6 @@ class MarketEngine:
         self._normal = next(i for i, r in enumerate(REGIMES) if r[0] == "normal")
         share = _stationary(self._p_switch)  # long-run share of time in each regime
         mults = np.array([r[1] for r in REGIMES])
-        self._volume_mults = mults / (share @ mults)
         self._market_mults = mults / math.sqrt(share @ mults**2)
         self._own_mults = np.sqrt(mults) / math.sqrt(share @ mults)
         tilt = np.array([r[3] for r in REGIMES])
@@ -405,9 +406,8 @@ class MarketEngine:
         # is the gap, rows 1.. the session, shaped through the day.
         self._gap_weight = math.sqrt(GAP_SHARE)
         self._second_weight = math.sqrt((1 - GAP_SHARE) / (_S - 1)) * _intraday_shape()  # rows 1..S-1
-        x = (np.arange(_M) + 0.5) / _M
-        volume_shape = 1 + 2 * (2 * x - 1) ** 2
-        self._volume_shape = volume_shape / volume_shape.mean()
+        self._volume = VolumeProfiles(specs)
+        assert self._volume.minutes == _M
 
         self._seed = seed
         self._seeds_used = 0
@@ -981,6 +981,7 @@ class MarketEngine:
         between = np.empty((_M, p))
         extremes = np.empty((_M, n, 2))
         volume_noise = np.empty((_M, n))
+        volume_score = np.zeros(n)
         news_minute = np.full(n, -1)
         news_size = np.zeros(n)
         earnings = np.zeros(n)
@@ -1004,6 +1005,7 @@ class MarketEngine:
                     news_minute[i] = rng.integers(0, _M - 1)
                 news_size[i] = rng.standard_t(JUMP_DF) * jump_scale
                 earnings[i] = rng.standard_t(JUMP_DF) * jump_scale
+                volume_score[i] = rng.standard_normal()  # last in the stream, so the draws above are unchanged
         return _Draws(
             gap,
             within,
@@ -1021,6 +1023,7 @@ class MarketEngine:
             shock_size,
             regime_u,
             regime_z,
+            volume_score,
         )
 
     def _draws(self, day: date) -> _Draws:
@@ -1210,8 +1213,8 @@ class MarketEngine:
             activity[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
         noise = draws.volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
         level = self._daily_volume * VOLUME_LEVEL * (h * scale**2) ** VOLUME_ELASTICITY * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
-        shape = self._volume_shape * self._volume_mults[regimes]
-        volume = np.floor(level / _M * shape[:, None] * activity * noise)
+        shape = self._volume.shape(state, draws.volume_score)
+        volume = np.floor(level / _M * shape * activity * noise)
         if real_day is not None:  # the real day's volume, spread over the minutes
             volume = _pin_volume(volume, real_day)
         volume[halted] = 0

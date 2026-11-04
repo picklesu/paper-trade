@@ -496,7 +496,9 @@ def test_volatility_is_highest_after_the_open(ten_years) -> None:
 def test_volume_follows_price_moves(ten_years) -> None:
     corr = np.nanmean(ten_years["volume_corr"], axis=0)
     spy = ten_years["engine"].symbol_index("SPY")
-    assert (np.delete(corr, spy) > 0.3).all()  # SPY's moves are all market, so it varies less
+    # SPY's moves are all market, so it varies less. The fitted profiles put volume at the close,
+    # where moves are small, so the whole-day correlation is lower than with the old U shape (0.14-0.30, was above 0.3).
+    assert (np.delete(corr, spy) > 0.1).all()
 
 
 def test_spreads_widen_at_the_open(ten_years) -> None:

@@ -69,7 +69,7 @@ cd frontend && npm test
 | 8c–8d | Real historical start prices and real daily data (Tiingo, FRED) | Done |
 | 8e | Replay the real past; volatility and option prices follow the real VIX | Done |
 | 8f | A regime-switching future model (calm / choppy / crisis) fitted to the real history | Done |
-| 8f+ | Intraday volume that follows real minute patterns by regime (fetch and fit done; engine next) | In progress |
+| 8f+ | Intraday volume that follows real minute patterns by regime (fetch, fit and engine done) | In progress |
 | 8g | Walk-forward checks of the future model against what really happened | |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |

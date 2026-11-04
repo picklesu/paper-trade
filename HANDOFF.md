@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-11-02. Everything through #64 and #66 is merged; **PR #65 (the volume-profile fit script) is open, not yet code-reviewed or merged.** Since #62: the intraday volume profile work below. The user restarts and tests merged work. **Next: finish the intraday volume profile (steps 2-4 below), then 8g (walk-forward validation of the future model, a separate PR: propose its design and get the user's go-ahead first; a proposal was given and discussed in the session of 2026-11-02, the user asked how reliable it is and whether it could overfit to the past, answer below).** `MODEL_VERSION` is 11._
+_Last updated: 2026-11-04. Everything through #64 and #66 is merged. **PR #65 (volume-profile fit on all 40 symbols) is code-reviewed and fixed but NOT merged: GitHub Actions was down on 2026-11-04, so CI never finished; merge it once `gh pr checks 65` is green (local: 411 backend tests pass).** The user has run `./server.sh update intraday` for all 40 symbols. **Next: the engine PR (step 3 below, `MODEL_VERSION` 12), branched off `volume-profile-fit` (or `main` after #65 merges); then 8g (walk-forward validation, a separate PR: propose its design and get the user's go-ahead first; the proposal is below).** `MODEL_VERSION` is 11._
 
 ## Where things stand
 
@@ -49,7 +49,7 @@ _Last updated: 2026-11-02. Everything through #64 and #66 is merged; **PR #65 (t
 | Estimated halt markers on real days from 2013 (user's report: no markers in 2020) | Merged | #62 |
 | Intraday volume profile, step 1: `./server.sh update intraday` (Alpaca SIP one-minute bars, 2016 on, into the `intraday` table; 391 slots a day, the 16:00 bar holds the closing cross) | Merged | #64 |
 | Intraday volume profile: the fetch covers all 40 symbols (was 8) | Merged; **the user is to run `./server.sh update intraday` for the other 32 (about 8,000 requests, 40 min; resumes after a rate limit)** | #66 |
-| Intraday volume profile, step 2: `scripts/fit_intraday_volume.py` and `market/volume_profile.json` (fitted on the first 8 symbols) | **Open, not reviewed or merged** | #65 |
+| Intraday volume profile, step 2: `backend/scripts/fit_intraday_volume.py` and `market/volume_profile.json` (all 40 symbols; tiers from `SYMBOLS`, funds = no earnings) | **Open: reviewed and fixed, CI pending (Actions outage); merge when green** | #65 |
 
 `main` is clean and up to date with GitHub.
 
@@ -63,8 +63,8 @@ _Last updated: 2026-11-02. Everything through #64 and #66 is merged; **PR #65 (t
 **Findings so far (8 symbols):** symbol matters most; regime least. Held-out error of 5-minute blocks' log share: old U-shape 0.402, fitted 0.218 (about +-47%, a factor of 1.6 per block; with the day's dominant mode known exactly it only falls to 0.13-0.25, so it is near the floor: minute volume is just noisy). The state tilt adds nothing out of sample (0.218 both) and the test period has no crisis. Crisis days since 2016 are only 45 (spring 2020, all one episode; April 2025 is labeled choppy); crisis closes lighter (SPY closing 5m 10.5% vs 12.9% calm; JPM 19% vs 26%). State explains only 1-5% of the day-to-day variation in closing share; the mode explains 14-30%. Day range and relative volume add a little (R2 up to about 4 points) and were left out. 1D bars: Tiingo's daily volume is more than the minute bars' regular-session sum (SPY 2026-10-22: 54.1M vs 44.5M, 82%; extended hours), so the profile uses shares of the regular-session total.
 
 **Next steps:**
-1. The user runs `./server.sh update intraday` (the other 32 symbols), tells Claude it finished.
-2. Update the fit script: fit all 40 (replace the hard-coded `TIERS` with fund vs stock from the symbol list, tier average only as a fallback), rerun (`--db backend/paper_trade.db`, read-only), commit the new `volume_profile.json` to #65, code-review #65, merge.
+1. ~~Fetch the other 32 symbols~~ done (2026-11-04).
+2. ~~Fit all 40, review #65~~ done; only the merge is left (needs green CI). Held out (fit before 2023, score after): mean error 0.411 for the old U-shape, 0.218 for the symbol's average, 0.217 by state (state still adds nothing out of sample). Closing-5m share varies widely by symbol (TSLA 7%, SPY 12%, AAPL 18-24%, COST 28%, KO 28%). The data is only stored and fitted: the app does not read it until step 3, so there is nothing to see in the UI yet.
 3. Step 3, the engine PR (`MODEL_VERSION` 12): replace `_volume_shape` (engine.py around line 409) and `_volume_mults` with the symbol's profile for the day's regime state (the engine has the state on real days from `RealBars.regime_on` and on simulated days from `_DayStart.state`), draw a day mode score `N(0, mode_sd)` per symbol and day (keyed stream, so adding a symbol leaves others unchanged), keep the activity and news terms and the real-day pin (`_pin_volume`); check the minute noise (`VOLUME_NOISE` 0.5 against the fitted `minute_sd`; the activity term also adds scatter), the day total unchanged. Check, not tune to: the simulated spread, e.g. how often SPY's last 5 minutes exceed 15% of the day, the shares at the open and the close, against the real days; and 2026-10-22's last 5m.
 4. Optional: label intraday candles on replayed days as simulated (the user has not asked for it yet).
 

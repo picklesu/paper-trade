@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 from fit_regime import load
 
+from paper_trade.market.symbols import SYMBOLS
 from paper_trade.market.regime import STATES, RealRegime, load_params
 
 OUT = Path(__file__).resolve().parents[1] / "src/paper_trade/market/volume_profile.json"
@@ -30,7 +31,11 @@ BLOCK = 5  # minutes per block when comparing states and finding the day-to-day 
 BLOCKS = MINUTES // BLOCK
 PRIOR_DAYS = 100  # days of a state's own data that outweigh its neighbour state's tilt
 SPLIT = date(2023, 1, 1)  # the held-out check fits before and scores after
-TIERS = {"fund": ("SPY", "QQQ", "IWM"), "stock": ("AAPL", "NVDA", "JPM", "KO", "GS")}
+# Funds report no earnings; the tier average is only a fallback for a symbol with no minute bars.
+TIERS = {
+    "fund": tuple(s.symbol for s in SYMBOLS if s.earnings is None),
+    "stock": tuple(s.symbol for s in SYMBOLS if s.earnings is not None),
+}
 
 
 def blocks(x: np.ndarray) -> np.ndarray:

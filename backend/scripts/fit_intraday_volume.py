@@ -77,7 +77,7 @@ def fit_symbol(S: np.ndarray, st: np.ndarray) -> dict:
         if n == 0:
             tilt = prev
         else:
-            own = np.log(blocks(S[st == k].mean(axis=0)) / bb)
+            own = np.log(np.maximum(blocks(S[st == k].mean(axis=0)), 1e-12) / np.maximum(bb, 1e-12))
             w = 1.0 if k == 0 else n / (n + PRIOR_DAYS)
             tilt = w * own + (1 - w) * prev
         tilts.append(tilt)
@@ -114,6 +114,8 @@ def fit_symbol(S: np.ndarray, st: np.ndarray) -> dict:
 
 def tier_average(fits: dict[str, dict], names: tuple[str, ...]) -> dict:
     have = [fits[n] for n in names if n in fits]
+    if not have:
+        return {}
     out = {"days": [sum(f["days"][k] for f in have) for k in range(len(STATES))]}
     out["profile"] = normalize(np.mean([f["profile"] for f in have], axis=0)).round(7).tolist()
     for key in ("mode", "mode_sd", "mode_share", "minute_sd", "minute_ar1", "zero_minutes"):
@@ -131,9 +133,12 @@ def held_out(data: dict[str, tuple[list[date], np.ndarray, np.ndarray]]) -> None
     the symbol's average profile, and the profile for the day's regime state."""
     print(f"\nHeld out: fit before {SPLIT}, score after (mean squared error of 5-minute blocks' log share; closing share = last 5 minutes)")
     print(f"{'':6s} {'U-shape':>9s} {'average':>9s} {'by state':>9s}   closing share: real  U-shape  average  by state")
-    totals = np.zeros(3)
+    totals, scored = np.zeros(3), 0
     for symbol, (days, S, st) in data.items():
         before = np.array([d < SPLIT for d in days])
+        if before.sum() < 250 or (~before).sum() < 60:
+            print(f"{symbol:6s} skipped: too few days before or after {SPLIT}")
+            continue
         fit = fit_symbol(S[before], st[before])
         prof = np.array(fit["profile"])
         test, ts = S[~before], st[~before]
@@ -142,9 +147,10 @@ def held_out(data: dict[str, tuple[list[date], np.ndarray, np.ndarray]]) -> None
         for p in (np.tile(u_shape(), (len(test), 1)), np.tile(average, (len(test), 1)), prof[ts]):
             err.append(float(np.mean((np.log(np.maximum(blocks(test), 1e-6)) - np.log(blocks(p))) ** 2)))
         totals += err
+        scored += 1
         close = [float(test[:, -5:].sum(axis=1).mean()), float(u_shape()[-5:].sum()), float(average[-5:].sum()), float(prof[ts][:, -5:].sum(axis=1).mean())]
         print(f"{symbol:6s} {err[0]:9.3f} {err[1]:9.3f} {err[2]:9.3f}   {close[0]:18.3f} {close[1]:8.3f} {close[2]:8.3f} {close[3]:8.3f}")
-    print(f"{'mean':6s} {totals[0] / len(data):9.3f} {totals[1] / len(data):9.3f} {totals[2] / len(data):9.3f}")
+    print(f"{'mean':6s} {totals[0] / max(scored, 1):9.3f} {totals[1] / max(scored, 1):9.3f} {totals[2] / max(scored, 1):9.3f}")
 
 
 def main() -> None:
@@ -167,8 +173,8 @@ def main() -> None:
               f"  mode {f['mode_share']:.0%} (sd {f['mode_sd']})  minute sd {f['minute_sd']} ar1 {f['minute_ar1']} zeros {f['zero_minutes']:.1%}")
     held_out(data)
     out = {"states": list(STATES), "minutes": MINUTES, "block": BLOCK, "symbols": fits,
-           "tiers": {t: tier_average(fits, names) for t, names in TIERS.items()}}
-    Path(args.out).write_text(json.dumps(out, separators=(",", ":")))
+           "tiers": {t: a for t, names in TIERS.items() if (a := tier_average(fits, names))}}
+    Path(args.out).write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))
     print("saved", args.out)
 
 

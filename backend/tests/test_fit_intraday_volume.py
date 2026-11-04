@@ -50,3 +50,7 @@ def test_the_day_to_day_mode_points_at_the_close_when_days_differ_there() -> Non
 def test_the_old_u_shape_gives_the_close_almost_nothing() -> None:
     u = fit.u_shape()
     assert abs(u.sum() - 1) < 1e-9 and u[-5:].sum() < 0.03
+
+
+def test_tier_average_of_nothing_is_empty() -> None:
+    assert fit.tier_average({}, ("SPY",)) == {}

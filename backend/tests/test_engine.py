@@ -675,3 +675,28 @@ def test_the_index_rises_in_a_shock(monkeypatch) -> None:
     shocked = engine.vix_quote()["last"]
     assert shocked > 1.4 * calm
     assert shocked == pytest.approx(engine._skeleton(day).vix[-1], rel=0.02)
+
+
+def test_volume_shape_has_mean_one_and_follows_the_state() -> None:
+    from paper_trade.market.regime import STATES
+    from paper_trade.market.volume_profile import VolumeProfiles
+
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "KO"))
+    vp = VolumeProfiles(specs, 390, STATES)
+    for state in range(len(STATES)):
+        shape = vp.shape(state, np.array([0.0, 1.5]))
+        assert shape.shape == (390, 2) and np.allclose(shape.mean(axis=0), 1.0)
+    calm = vp.shape(0, np.zeros(2))
+    assert calm[-5:, 1].sum() > 2 * calm[-5:, 0].sum()  # KO closes far heavier than SPY
+    assert vp.shape(0, np.array([0.0, 2.0]))[-5:, 1].sum() > calm[-5:, 1].sum()  # a positive score is a heavier close
+
+
+def test_volume_draws_stay_put_when_a_symbol_is_added() -> None:
+    few = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "KO"))
+    more = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "KO", "AAPL"))
+    a, b = MarketEngine(START, seed=2, specs=few), MarketEngine(START, seed=2, specs=more)
+    da, db = a._random(2, START.date()), b._random(2, START.date())
+    ka = [s.symbol for s in few]
+    for sym in ka:
+        assert da.volume_score[a.symbol_index(sym)] == db.volume_score[b.symbol_index(sym)]
+        assert np.array_equal(da.volume_noise[:, a.symbol_index(sym)], db.volume_noise[:, b.symbol_index(sym)])

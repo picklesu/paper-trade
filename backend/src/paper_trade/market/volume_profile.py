@@ -20,14 +20,19 @@ PROFILE_FILE = Path(__file__).with_name("volume_profile.json")
 
 
 class VolumeProfiles:
-    def __init__(self, specs: list[SymbolSpec] | tuple[SymbolSpec, ...], path: Path = PROFILE_FILE) -> None:
+    def __init__(self, specs: list[SymbolSpec] | tuple[SymbolSpec, ...], minutes: int, states: tuple[str, ...], path: Path = PROFILE_FILE) -> None:
         data = json.loads(path.read_text())
-        self.minutes: int = data["minutes"]
+        self.minutes = minutes
         block = data["block"]
+        if data["minutes"] != minutes or tuple(data["states"]) != tuple(states) or minutes % block:
+            raise ValueError(f"{path.name} was fitted for {data['minutes']} minutes and states {data['states']}; refit with scripts/fit_intraday_volume.py")
         fits = []
         for s in specs:
             fit = data["symbols"].get(s.symbol) or data["tiers"]["stock" if s.earnings is not None else "fund"]
             fits.append(fit)
+        for f in fits:
+            if np.shape(f["profile"]) != (len(states), minutes) or len(f["mode"]) * block != minutes:
+                raise ValueError(f"{path.name}: a fit has the wrong shape; refit with scripts/fit_intraday_volume.py")
         # (symbols, states, minutes), each profile summing to 1
         self.profile = np.array([f["profile"] for f in fits])
         # (symbols, minutes): the day-to-day mode in log shares, stretched from blocks to minutes

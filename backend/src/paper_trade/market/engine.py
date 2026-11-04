@@ -70,8 +70,8 @@ from paper_trade.market.calendar import (
 )
 from paper_trade.market.realbars import RealBars, RealBarsGone, RealDay
 from paper_trade.market.regime import STATES, RegimeParams, load_params
-from paper_trade.market.volume_profile import VolumeProfiles
 from paper_trade.market.symbols import SYMBOLS, SymbolSpec
+from paper_trade.market.volume_profile import VolumeProfiles
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -406,8 +406,7 @@ class MarketEngine:
         # is the gap, rows 1.. the session, shaped through the day.
         self._gap_weight = math.sqrt(GAP_SHARE)
         self._second_weight = math.sqrt((1 - GAP_SHARE) / (_S - 1)) * _intraday_shape()  # rows 1..S-1
-        self._volume = VolumeProfiles(specs)
-        assert self._volume.minutes == _M
+        self._volume = VolumeProfiles(specs, _M, STATES)
 
         self._seed = seed
         self._seeds_used = 0
@@ -1203,8 +1202,9 @@ class MarketEngine:
                     part[first:resume] = frozen
             move = np.abs(close - open_)
 
-        # Volume: U-shaped through the day, busier in volatile regimes, on big moves,
-        # after news and on earnings days.
+        # Volume: each symbol's fitted profile for the day's regime state (and a close-heavy or
+        # open-heavy day draw), busier on big moves, after news and on earnings days. The old
+        # per-minute intraday-regime multiplier is gone: the fitted profiles replace it.
         activity = ACTIVITY_BASE + (1 - ACTIVITY_BASE) * np.minimum(
             np.divide(move**2, var, out=np.ones_like(var), where=var > 0), ACTIVITY_CAP
         )

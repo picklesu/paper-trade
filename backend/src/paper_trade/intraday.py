@@ -53,7 +53,7 @@ def parse_minutes(bars: list[dict]) -> dict[date, tuple[list[int], list[float]]]
 
 
 def fetch_minutes(
-    symbol: str, since: date, now: datetime, creds: Credentials, limit: RateLimit = LIMIT, until: datetime | None = None
+    symbol: str, since: date, now: datetime, creds: Credentials, until: datetime | None = None, limit: RateLimit = LIMIT
 ) -> dict[date, tuple[list[int], list[float]]]:
     """Every regular-session minute of `symbol` from `since` until `until`, which is at most the
     SIP delay before `now`. Days with under a quarter of the minutes traded (early closes have

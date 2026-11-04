@@ -45,7 +45,7 @@ def test_fetch_pages_and_drops_thin_days(monkeypatch) -> None:
         return next(pages)
 
     monkeypatch.setattr(intraday, "request_json", fake)
-    days = fetch_minutes("SPY", date(2026, 10, 21), NOW, CREDS, RateLimit())
+    days = fetch_minutes("SPY", date(2026, 10, 21), NOW, CREDS, limit=RateLimit())
     assert list(days) == [date(2026, 10, 21)]  # the day with one minute is dropped
     assert "page_token=t" in urls[1] and "timeframe=1Min" in urls[0] and "feed=sip" in urls[0]
 
@@ -106,3 +106,16 @@ def test_the_default_update_leaves_intraday_out() -> None:
 
 def test_every_market_symbol_is_fetched() -> None:
     assert len(intraday.SYMBOLS) == 40 and {"SPY", "KO", "XLE", "TLT"} <= set(intraday.SYMBOLS)
+
+
+def test_update_calls_the_real_fetch_with_its_arguments_in_order(monkeypatch) -> None:
+    seen = []
+
+    def fake(url, headers, timeout):
+        seen.append(url)
+        return {"bars": {}}, {}
+
+    monkeypatch.setattr(intraday, "request_json", fake)
+    monkeypatch.setattr(intraday.LIMIT, "wait", lambda: None)
+    Intraday(Store(":memory:"), CREDS).update("SPY", NOW)
+    assert seen and "end=" in seen[0]

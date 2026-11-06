@@ -422,8 +422,11 @@ def returns(ten_years: dict, symbol: str) -> np.ndarray:
 
 
 def test_long_run_volatility_matches_spec(ten_years) -> None:
+    # One 10-year path: a crisis in it (about 3% of the time, at 50% volatility) moves its sample
+    # volatility by a few points, so the tolerance is wide; scripts/check_engine_states.py
+    # measures the long-run level over hundreds of years (16.5% before the crisis retune, 16.8% after).
     for spec in ten_years["engine"].specs:
-        assert returns(ten_years, spec.symbol).std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.2)
+        assert returns(ten_years, spec.symbol).std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.3)
 
 
 def test_daily_returns_have_fat_tails(ten_years) -> None:

@@ -99,7 +99,7 @@ NEWS_SIZE = 2.5
 # open by CRASH_MIN plus an exponential amount averaging CRASH_EXTRA (each symbol
 # by its beta).
 CRASHES_PER_YEAR = 1.0  # on average; the regime scales it (CRASH_BY_STATE)
-STATE_LEVEL_ADJ = (0.95, 0.95, 1.8)  # measured over seeds x 30 years: a crisis is short, so its variance falls short of the fitted level
+STATE_LEVEL_ADJ = (0.95, 0.95, 2.4)  # measured over seeds x 30 years (scripts/check_engine_states.py): a crisis is short, so its variance falls short of the fitted level; 2.4 puts its weekly volatility at 51% (history 52%; 1.8 gave 43-47%)
 CRASH_BY_STATE = (0.3, 1.2, 4.0)  # selloff odds relative to the average in calm / choppy / crisis
 CRASH_MIN = 0.015
 CRASH_EXTRA = 0.015
@@ -175,7 +175,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 12  # 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 13  # 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 

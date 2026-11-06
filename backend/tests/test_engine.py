@@ -864,3 +864,24 @@ def test_the_volume_state_survives_save_and_restore() -> None:
     engine.advance(add_trading_seconds(START, 13 * 23_400))
     again.advance(add_trading_seconds(START, 13 * 23_400))
     assert np.array_equal(again._skeleton(last).volume, engine._skeleton(last).volume)
+
+
+def test_order_flow_and_activity_leave_each_stocks_variance_as_it_was(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Paired with the same seeds and the links off: a first version of the activity link inflated a stock's
+    variance by 20-30% (a jump judged against the day's scaled volatility fed the GARCH). Sampling error of
+    the mean ratio here is about 6 percent."""
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("AAPL", "KO"))
+
+    def variance(seed: int) -> np.ndarray:
+        engine = MarketEngine(START, seed=seed, specs=specs)
+        closes = []
+        engine.on_day_complete = lambda d: closes.append(engine._skeleton(d).close[-1].copy())
+        engine.advance(add_trading_seconds(START, 4 * 252 * 23_400))
+        return (np.diff(np.array(closes), axis=0) ** 2).mean(axis=0)
+
+    on = np.array([variance(seed) for seed in range(8)])
+    for name in ("FLOW_SHARE", "VOLUME_VOL_LINK", "VOLUME_VARIANCE_LINK", "VOLUME_COMMON_LINK"):
+        monkeypatch.setattr(engine_mod, name, 0.0)
+    off = np.array([variance(seed) for seed in range(8)])
+    ratio = (on / off).mean(axis=0)
+    assert ((ratio > 0.85) & (ratio < 1.15)).all(), ratio

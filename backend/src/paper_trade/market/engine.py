@@ -308,8 +308,17 @@ class _Draws:
     volume_day: np.ndarray | None = None  # (N, 6): a symbol's day-level volume: white normal, heavy-day uniform and exponential, fast and slow AR normals, order-flow imbalance normal
     volume_burst: np.ndarray | None = None  # (M, N) uniforms: which minutes' volume bursts
     volume_common: np.ndarray | None = None  # (M,) unit normals: the market's minute-to-minute volume swings
-    volume_base: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None  # the noise and bursts before a new epoch took over part of the day (what the day's normalisation uses, so the past never depends on the future)
+    volume_base: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None  # (a second new epoch in the same day leaves this at the first one's: the past still never depends on the future)  # the noise and bursts before a new epoch took over part of the day (what the day's normalisation uses, so the past never depends on the future)
     volume_market: np.ndarray | None = None  # (4,) unit normals for the market's day: fast, slow, white and order-flow imbalance
+
+    def __post_init__(self) -> None:  # draws made by hand (tests) need not set the volume ones
+        n = len(self.earnings)
+        if self.volume_day is None:
+            self.volume_day = np.zeros((n, 6))
+        if self.volume_market is None:
+            self.volume_market = np.zeros(4)
+        if self.volume_common is None:
+            self.volume_common = np.zeros(len(self.u))
 
 
 @dataclass
@@ -441,6 +450,7 @@ class MarketEngine:
         # is the gap, rows 1.. the session, shaped through the day.
         self._gap_weight = math.sqrt(GAP_SHARE)
         self._second_weight = math.sqrt((1 - GAP_SHARE) / (_S - 1)) * _intraday_shape()  # rows 1..S-1
+        self._usual_cum = np.cumsum(np.concatenate([[self._gap_weight**2], self._second_weight**2]))  # (S,) the variance accumulated by each second on a day with the usual regimes
         self._minute_weight = np.add.reduceat(self._second_weight**2, np.arange(0, _S - 1, 60))  # (M,) each minute's usual share of the day's variance
         self._volume = VolumeProfiles(specs, _M, STATES)
 
@@ -1215,13 +1225,11 @@ class MarketEngine:
         # (buyers against sellers) moves the price through the day in proportion to the volume that trades,
         # and a bigger or more one-sided imbalance trades more. Volume does not follow the price.
         volume_state = None  # real days leave the day-level state at zero
-        flow_on = True
         garch_own_sd = own_sd
         activity = self._volume_activity(draws, start.volume_state)
-        if flow_on:
-            volume_state = None if real_day is not None else activity[0]
-            market_load = market_load * activity[2]
-            own_load = own_load * np.where(replayed, 1.0, activity[3])  # a symbol with a real bar is pinned to it; the sector's share stays what it was
+        volume_state = None if real_day is not None else activity[0]
+        market_load = market_load * activity[2]
+        own_load = own_load * np.where(replayed, 1.0, activity[3])  # a symbol with a real bar is pinned to it; the sector's share stays what it was
         shape = self._volume.shape(state, draws.volume_score)
         if m_day < _M:  # an early close trades EARLY_CLOSE_VOLUME of a normal day, in the shape of the open minutes
             shape = shape.copy()
@@ -1236,10 +1244,10 @@ class MarketEngine:
         noise = noise * (shape[:m_day].sum(axis=0) / (shape[:m_day] * reference[:m_day]).sum(axis=0))
         level = self._daily_volume * VOLUME_LEVEL * (h * scale**2) ** VOLUME_ELASTICITY * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
         level = level * holiday_volume
-        if flow_on:
-            market_flow, own_flow = draws.volume_market[3], np.where(replayed, 0.0, draws.volume_day[:, 5])
-            flow = (market_load * market_flow + own_load * own_flow) / np.sqrt(market_load**2 + own_load**2)  # unit variance
-            level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day) * volume_events(day))
+        market_flow, own_flow = draws.volume_market[3], np.where(replayed, 0.0, draws.volume_day[:, 5])
+        spread = np.sqrt(market_load**2 + own_load**2)
+        flow = np.divide(market_load * market_flow + own_load * own_flow, spread, out=np.zeros(n), where=spread > 0)  # unit variance
+        level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day) * volume_events(day))
         news_burst = np.ones((_M, n))
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
@@ -1249,12 +1257,12 @@ class MarketEngine:
         # Variance moves with the minute's volume: a burst of trading is a burst of price movement (the day's
         # variance stays as it was; the symbol's own noise is what follows the volume).
         dv_min = self._minute_weight  # (the usual profile, not the day's regimes: those can change when a new future starts mid-day)
-        minute_var = np.where(replayed, 1.0, raw_noise**VOLUME_VARIANCE_LINK) if flow_on else np.ones((_M, n))
-        ref_var = np.where(replayed, 1.0, reference**VOLUME_VARIANCE_LINK) if flow_on else np.ones((_M, n))
+        minute_var = np.where(replayed, 1.0, raw_noise**VOLUME_VARIANCE_LINK)
+        ref_var = np.where(replayed, 1.0, reference**VOLUME_VARIANCE_LINK)
         minute_var = minute_var * (dv_min[:m_day].sum() / (dv_min[:m_day, None] * ref_var[:m_day]).sum(axis=0))
         # The market's and the sectors' variance follows the market's volume swings (shared, so the factor structure stays).
-        common_var = common**VOLUME_COMMON_LINK if flow_on else np.ones(_M)
-        common_ref = (common if draws.volume_base is None else self._volume_common(draws.volume_base[2])) ** VOLUME_COMMON_LINK if flow_on else np.ones(_M)
+        common_var = common**VOLUME_COMMON_LINK
+        common_ref = (common if draws.volume_base is None else self._volume_common(draws.volume_base[2])) ** VOLUME_COMMON_LINK
         common_var = common_var * (dv_min[:m_day].sum() / (dv_min[:m_day] * common_ref[:m_day]).sum())
 
         # The unit paths (market, sectors, own) at the knots.
@@ -1269,22 +1277,23 @@ class MarketEngine:
         steps[1::2, : 1 + k] *= np.sqrt(common_var)[:, None]
         paths = np.cumsum(steps, axis=0)
         unit_market, unit_own = paths[:, :1], paths[:, 1 + k :]
-        if flow_on:  # part of the move is the day's order flow, spread over the day like its volume
-            expected = np.minimum(shape, FLOW_PROFILE_CAP)  # the closing cross and the opening rush trade a lot but don't move the price in proportion
-            expected[m_day:] = 0
-            cum = np.concatenate([np.zeros((1, n)), np.cumsum(expected, axis=0)])  # the day's expected volume profile
-            share = cum / np.maximum(cum[-1], 1e-9)
-            at_knots = np.empty((2 * _M, n))
-            at_knots[0::2], at_knots[1::2] = share[:-1], share[1:]
-            mkt_profile = np.minimum(self._volume.market_profile[state] * _M, FLOW_PROFILE_CAP)  # the market's own, whichever symbols are listed
-            mkt_profile[m_day:] = 0
-            mkt_cum = np.concatenate([[0.0], np.cumsum(mkt_profile)])
-            mkt_share = np.empty((2 * _M, 1))
-            mkt_share[0::2, 0], mkt_share[1::2, 0] = mkt_cum[:-1] / mkt_cum[-1], mkt_cum[1:] / mkt_cum[-1]
-            c = FLOW_SHARE
-            c_own = np.where(replayed, 0.0, c)
-            unit_market = math.sqrt(1 - c**2) * unit_market + c * market_flow * mkt_share
-            unit_own = np.sqrt(1 - c_own**2) * unit_own + c_own * own_flow * at_knots
+        # Part of the move is the day's order flow, spread over the day like its volume.
+        expected = np.minimum(shape, FLOW_PROFILE_CAP)  # the closing cross and the opening rush trade a lot but don't move the price in proportion
+        expected[m_day:] = 0
+        cum = np.concatenate([np.zeros((1, n)), np.cumsum(expected, axis=0)])  # the day's expected volume profile
+        share = cum / np.maximum(cum[-1], 1e-9)
+        at_knots = np.empty((2 * _M, n))
+        at_knots[0::2], at_knots[1::2] = share[:-1], share[1:]
+        mkt_profile = np.minimum(self._volume.market_profile[state] * _M, FLOW_PROFILE_CAP)  # the market's own, whichever symbols are listed
+        mkt_profile[m_day:] = 0
+        mkt_cum = np.concatenate([[0.0], np.cumsum(mkt_profile)])
+        mkt_share = np.empty((2 * _M, 1))
+        mkt_share[0::2, 0], mkt_share[1::2, 0] = mkt_cum[:-1] / mkt_cum[-1], mkt_cum[1:] / mkt_cum[-1]
+        c = FLOW_SHARE
+        c_own = np.where(replayed, 0.0, c)
+        end = m_day * 60 - 1  # the flow's size is the path's own at the close (less than a full day's on an early close; the usual, not the day's regimes, so a new future never changes earlier minutes)
+        unit_market = math.sqrt(1 - c**2) * unit_market + c * market_flow * mkt_share * math.sqrt(self._usual_cum[end])
+        unit_own = np.sqrt(1 - c_own**2) * unit_own + c_own * own_flow * at_knots * math.sqrt(self._usual_cum[end])
 
 
         # Log prices at the knots: the loaded paths, the drift (lognormal-corrected),

@@ -179,7 +179,7 @@ export function GoToDialog({ clock, onClose }: Props) {
             )}
           </div>
           <p className="muted">
-            The market is open 9:30 AM–4:00 PM ET, Monday–Friday. Other times go to the next open.
+            The market is open 9:30 AM–4:00 PM ET, Monday–Friday (1:00 PM on the day after Thanksgiving, Christmas Eve and July 3). Other times go to the next open.
           </p>
           <div className="dialog-actions">
             <button className="btn primary" disabled={busy || !value} onClick={check}>

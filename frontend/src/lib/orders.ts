@@ -10,7 +10,7 @@ export const STATUS_LABEL: Record<OrderStatus, string> = {
 }
 
 export const TIF_OPTIONS: { value: TimeInForce; label: string }[] = [
-  { value: 'day', label: 'Day (expires at 4:00 PM)' },
+  { value: 'day', label: 'Day (expires at the close)' },
   { value: 'gtc', label: 'Good till canceled' },
 ]
 

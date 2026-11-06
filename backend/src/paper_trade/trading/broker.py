@@ -10,7 +10,7 @@ Fill rules:
   gaps through it overnight.
 - A stop triggers when the last price reaches the stop price. A stop then
   fills at the ask/bid; a stop-limit becomes a limit order.
-- Day orders expire at the 4:00 PM close of the day they were placed.
+- Day orders expire at the close (4:00 PM, or 1:00 PM on an early close) of the day they were placed.
 
 Options (symbols are OCC symbols, e.g. AAPL261120C00230000; 100 shares a
 contract): market and limit orders only. Their bid and ask come from
@@ -49,6 +49,7 @@ from paper_trade.market.calendar import (
     next_trading_day,
     previous_trading_day,
     session_close,
+    session_length,
     session_open,
     session_seconds,
 )
@@ -64,7 +65,7 @@ DIVIDEND_ASSIGNMENT = 0.9  # chance a short call is assigned before a dividend i
 DIVIDEND_LAG = 3  # trading days from the ex-date to the payment (at that day's close)
 MAX_PRICE = 1_000_000.0
 IN_THE_MONEY = 0.01  # exercised or assigned at expiration from this much in the money
-CLOSEOUT_SECOND = SESSION_SECONDS - 60  # 3:59 PM: unexercisable options are sold
+CLOSEOUT_BEFORE_CLOSE = 60  # a minute before the close (3:59 PM, or 12:59 PM on an early close): unexercisable options are sold
 # Early assignment: the chance at a close that a short in-the-money option is
 # assigned, highest with no time value left, none from EARLY_TIME_VALUE up.
 EARLY_ASSIGNMENT = 0.2
@@ -308,12 +309,12 @@ class Broker:
         expired, or if that session's prices aren't available)."""
         col = self.engine.symbol_index(c.underlying)
         try:
-            spot = self.engine.price_at(day, SESSION_SECONDS - 1, col)
+            spot = self.engine.price_at(day, session_length(day) - 1, col)
         except KeyError:
             return float(c.intrinsic(self.engine.quotes[c.underlying].prev_close))
         if c.expiry < day:
             return float(c.intrinsic(spot))
-        return self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"]
+        return self._quote_at(c, day, session_length(day) - 1, spot)["mid"]
 
     def _quote_at(self, c: Contract, day: date, sec: int, spot: float) -> dict:
         p = options.price(self.engine, c.underlying, c.expiry, c.strike, day, sec, spot, self.calibration(c.underlying))
@@ -388,7 +389,8 @@ class Broker:
             warnings.append(f"The limit is {pct:.0f}% away from {what} ({last:,.2f}), so it may take a long time to fill.")
         if fill is None and tif == "day" and type != "market":
             day = market_day(self.engine.time).strftime("%a %b %-d")
-            warnings.append(f"Day order: if it hasn't filled by 4:00 PM ET today ({day}), it expires.")
+            close = session_close(market_day(self.engine.time)).astimezone(MARKET_TZ).strftime("%-I:%M %p")
+            warnings.append(f"Day order: if it hasn't filled by {close} ET today ({day}), it expires.")
         if realized is not None and realized < 0:
             warnings.append(f"{'Selling' if side == 'sell' else 'Buying back'} at about {est:,.2f} realizes a loss of about {money(-realized)}.")
         out = {
@@ -442,7 +444,8 @@ class Broker:
             )
         days = (c.expiry - market_day(self.engine.time)).days
         if days <= 1 and o.effect == "open":
-            warnings.append("This option expires " + ("today" if days == 0 else "tomorrow") + " at 4:00 PM ET.")
+            close = session_close(c.expiry).astimezone(MARKET_TZ).strftime("%-I:%M %p")
+            warnings.append("This option expires " + ("today" if days == 0 else "tomorrow") + f" at {close} ET.")
         return {
             "option": _contract_dict(c),
             "effect": o.effect,
@@ -801,7 +804,7 @@ class Broker:
         day, end_day = market_day(t0), market_day(t1)
         first = int(session_seconds(t0)) + 1
         while True:
-            last = int(session_seconds(t1)) if day == end_day else SESSION_SECONDS - 1
+            last = int(session_seconds(t1)) if day == end_day else session_length(day) - 1
             changed = self._process_day(day, first, last)
             if day == end_day:
                 yield changed
@@ -1090,7 +1093,7 @@ class Broker:
         return len(self.orders) != before
 
     def _close_price(self, c: Contract, day: date) -> float:
-        return round(self.engine.price_at(day, SESSION_SECONDS - 1, self.engine.symbol_index(c.underlying)), 2)
+        return round(self.engine.price_at(day, session_length(day) - 1, self.engine.symbol_index(c.underlying)), 2)
 
     def _expire(self, c: Contract, day: date) -> None:
         qty = self.ledger().qty(c.symbol)
@@ -1113,9 +1116,10 @@ class Broker:
         if can:
             self._settle(c, can, "exercise", spot, close, "Exercised at expiration")
         if rest := qty - can:
-            t = session_open(day) + timedelta(seconds=CLOSEOUT_SECOND)
+            closeout = session_length(day) - CLOSEOUT_BEFORE_CLOSE
+            t = session_open(day) + timedelta(seconds=closeout)
             col = self.engine.symbol_index(c.underlying)
-            bid = self._quote_at(c, day, CLOSEOUT_SECOND, self.engine.price_at(day, CLOSEOUT_SECOND, col))["bid"]
+            bid = self._quote_at(c, day, closeout, self.engine.price_at(day, closeout, col))["bid"]
             self._record(c.symbol, "sell", rest, bid, t, "market", f"Sold before expiration: {why}")
 
     def _maybe_assign_early(self, c: Contract, day: date) -> None:
@@ -1126,7 +1130,7 @@ class Broker:
         intrinsic = float(c.intrinsic(spot))
         if intrinsic < IN_THE_MONEY:
             return
-        time_value = max(self._quote_at(c, day, SESSION_SECONDS - 1, spot)["mid"] - intrinsic, 0.0)
+        time_value = max(self._quote_at(c, day, session_length(day) - 1, spot)["mid"] - intrinsic, 0.0)
         # The holder of a call gets the dividend by exercising the day before the ex-date,
         # which pays when the call's time value is less than the dividend.
         chance, reason = EARLY_ASSIGNMENT * max(0.0, 1 - time_value / EARLY_TIME_VALUE), "Assigned early"

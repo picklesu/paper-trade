@@ -12,9 +12,11 @@ from paper_trade.market.calendar import (
     MARKET_TZ,
     add_trading_days,
     add_trading_seconds,
+    is_early_close,
     market_day,
     next_trading_day,
     session_close,
+    session_open,
     session_seconds,
 )
 from paper_trade.market.engine import MarketEngine, bid_ask
@@ -716,3 +718,47 @@ def test_volume_draws_stay_put_when_a_symbol_is_added() -> None:
     for sym in ka:
         assert da.volume_score[a.symbol_index(sym)] == db.volume_score[b.symbol_index(sym)]
         assert np.array_equal(da.volume_noise[:, a.symbol_index(sym)], db.volume_noise[:, b.symbol_index(sym)])
+
+
+def test_an_early_close_session_ends_at_1pm_and_holds_the_close() -> None:
+    day = date(2025, 11, 28)  # the day after Thanksgiving
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "AAPL"))
+    engine = MarketEngine(et(2025, 11, 25, 9, 30), seed=5, specs=specs)
+    engine.advance(session_open(next_trading_day(day)))
+    sk = engine._skeleton(day)
+    assert sk.minutes == 210 and sk.volume[:210].sum() > 0
+    for part in (sk.open, sk.high, sk.low, sk.close):
+        assert np.array_equal(part[210:], np.broadcast_to(sk.close[209], part[210:].shape))
+    assert (sk.volume[210:] == 0).all() and sk.halted[210:].all() and not sk.halted[:210].any()
+    bars = engine.minute_bars(day)
+    assert bars.shape[0] == 210 and np.allclose(bars[-1, :, 3], np.exp(sk.close[209]))
+    assert np.allclose(engine._starts[next_trading_day(day)].prev_close, np.exp(sk.close[-1]))
+    assert engine.halted_at(day, 210 * 60)  # nothing trades after 1:00 PM
+    assert len(engine.vix_bars(day)) == 7  # seven half hours
+
+
+def test_early_closes_trade_less_and_move_less() -> None:
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    volume: dict = {}
+    for seed in range(6):
+        engine = MarketEngine(START, seed=seed, specs=specs)
+        engine.on_day_complete = lambda d, e=engine: volume.setdefault(seed, {}).__setitem__(d, (float(e._skeleton(d).volume.sum()), abs(float(e._skeleton(d).close[-1, 0] - e._skeleton(d).open[0, 0]))))
+        engine.advance(add_trading_seconds(START, 6 * 252 * 23_400))
+    early = [v for per in volume.values() for d, v in per.items() if is_early_close(d)]
+    ordinary = [v for per in volume.values() for d, v in per.items() if not is_early_close(d) and d.month in (3, 4, 5, 9, 10)]
+    assert len(early) > 20
+    assert 0.3 < np.median([v[0] for v in early]) / np.median([v[0] for v in ordinary]) < 0.65  # real: 0.46
+    assert np.median([v[1] for v in early]) < np.median([v[1] for v in ordinary])
+
+
+def test_holiday_weeks_trade_less() -> None:
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    quiet, normal = [], []
+    for seed in range(5):
+        engine = MarketEngine(START, seed=seed, specs=specs)
+        vols: dict = {}
+        engine.on_day_complete = lambda d, e=engine, v=vols: v.__setitem__(d, float(e._skeleton(d).volume.sum()))
+        engine.advance(add_trading_seconds(START, 5 * 252 * 23_400))
+        quiet += [v for d, v in vols.items() if d.month == 12 and 26 <= d.day <= 31]
+        normal += [v for d, v in vols.items() if d.month in (3, 4, 5, 9, 10)]
+    assert np.median(quiet) < 0.85 * np.median(normal)  # real: 0.66

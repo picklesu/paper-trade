@@ -376,3 +376,16 @@ def test_real_days_are_not_taken_in_over_trades_on_the_days_they_replace() -> No
         store.save_order(Order(1, "AAPL", "buy", 1, "market", "day", None, None, session_open(traded_on)))
         _extend_real(store, engine)
         assert (engine.real_through > last) is extended
+
+
+def test_a_real_early_close_is_pinned_over_its_210_minutes() -> None:
+    first = date(2006, 11, 21)  # the real bars include 2006-11-24, the day after Thanksgiving
+    bars = real_bars(days=6, first=first)
+    assert date(2006, 11, 24) in [b.day for b in bars["SPY"]]
+    engine = MarketEngine(START.replace(year=2006, month=11, day=21), seed=42, real=RealBars(NAMES, bars))
+    engine.advance(session_open(next_trading_day(bars["SPY"][-1].day)))
+    for b in bars["SPY"]:
+        check_day(engine, bars, b.day)
+    sk = engine._skeleton(date(2006, 11, 24))
+    assert sk.minutes == 210 and (sk.volume[210:] == 0).all()
+    assert (sk.high[210:] == sk.close[209]).all()

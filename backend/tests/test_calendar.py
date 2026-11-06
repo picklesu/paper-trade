@@ -1,13 +1,22 @@
 from datetime import date, datetime, timedelta
 
 from paper_trade.market.calendar import (
+    EFFECT_CHRISTMAS_WEEK,
+    EFFECT_THANKSGIVING_EVE,
     MARKET_TZ,
     SESSION_SECONDS,
     add_trading_seconds,
+    day_effects,
+    early_closes,
+    is_early_close,
     is_trading_day,
+    market_day,
     next_trading_day,
     nyse_holidays,
     previous_trading_day,
+    session_close,
+    session_minutes,
+    session_open,
     session_seconds,
     snap,
     trading_days_between,
@@ -79,14 +88,61 @@ def test_next_trading_day_from_weekend() -> None:
     assert next_trading_day(date(2026, 1, 10)) == date(2026, 1, 12)  # Saturday -> Monday
 
 
+def stepped(t, seconds):
+    """add_trading_seconds the slow way: session by session."""
+    t = snap(t)
+    while True:
+        left = (session_close(market_day(t)) - t).total_seconds()
+        if seconds < left:
+            return t + timedelta(seconds=seconds)
+        seconds -= left
+        t = session_open(next_trading_day(market_day(t)))
+
+
 def test_add_trading_seconds_far_ahead_is_exact_and_fast() -> None:
     import time
 
+    start = et(2026, 1, 6, 10, 0)
     began = time.perf_counter()
-    t = add_trading_seconds(et(2026, 1, 6, 10, 0), 252 * 50 * SESSION_SECONDS)
+    t = add_trading_seconds(start, 252 * 50 * SESSION_SECONDS)
     assert time.perf_counter() - began < 0.01
-    assert t.astimezone(MARKET_TZ).time().isoformat() == "10:00:00"
+    assert t == stepped(start, 252 * 50 * SESSION_SECONDS)  # early closes are shorter, so it is not 10:00 again
     assert t.weekday() < 5
+
+
+def test_early_closes() -> None:
+    assert set(early_closes(2025)) == {date(2025, 11, 28), date(2025, 12, 24), date(2025, 7, 3)}
+    assert set(early_closes(2023)) == {date(2023, 11, 24), date(2023, 7, 3)}  # Christmas Eve is a Sunday
+    assert not is_trading_day(date(2021, 12, 24)) and not is_early_close(date(2021, 12, 24))  # Christmas on a Saturday: Friday off
+    assert not is_early_close(date(2020, 7, 3))  # the observed holiday, closed
+    assert is_early_close(date(2025, 11, 28)) and not is_early_close(date(2025, 11, 26))
+    assert session_close(date(2025, 11, 28)) == et(2025, 11, 28, 13, 0)
+    assert session_minutes(date(2025, 11, 28)) == 210 and session_minutes(date(2025, 11, 26)) == 390
+
+
+def test_clock_runs_through_an_early_close() -> None:
+    t = add_trading_seconds(et(2025, 11, 28, 12, 59), 120)
+    assert t == et(2025, 12, 1, 9, 31)  # 1:00 PM ended the session
+    assert add_trading_seconds(et(2025, 11, 26, 15, 59), 60 + 3 * 3600) == et(2025, 11, 28, 12, 30)
+    assert snap(et(2025, 11, 28, 13, 30)) == et(2025, 12, 1, 9, 30)
+
+
+def test_add_trading_seconds_matches_stepping_around_early_closes() -> None:
+    for start, seconds in [
+        (et(2025, 11, 25, 15, 0), 5 * SESSION_SECONDS),
+        (et(2025, 12, 23, 10, 0), 30 * SESSION_SECONDS + 77),
+        (et(2024, 7, 2, 9, 30), 400 * SESSION_SECONDS),
+    ]:
+        assert add_trading_seconds(start, seconds) == stepped(start, seconds)
+
+
+def test_day_effects_around_holidays() -> None:
+    assert day_effects(date(2025, 3, 12)) == (1.0, 1.0)
+    assert day_effects(date(2025, 5, 23))[0] < 1 > day_effects(date(2025, 5, 23))[1]  # the Friday before Memorial Day
+    assert day_effects(date(2025, 5, 27))[1] > 1  # the day after: more movement
+    assert day_effects(date(2025, 12, 30)) == EFFECT_CHRISTMAS_WEEK
+    assert day_effects(date(2025, 11, 26)) == EFFECT_THANKSGIVING_EVE
+    assert day_effects(date(2025, 11, 28)) == (1.0, 1.0)  # an early close: its short session does it
 
 
 def test_trading_days_between_far_apart_is_fast() -> None:

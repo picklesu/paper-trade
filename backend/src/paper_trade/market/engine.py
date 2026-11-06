@@ -122,9 +122,10 @@ SHOCK_IN_CRISIS = 0.4  # a triggered shock's extra volatility is this share of t
 BREAKER_LEVELS = (0.07, 0.13, 0.20)
 HALT_MINUTES = 15
 # The market-wide halts that really happened under today's rule (level reached). SPY's own prints can fall 7% on days the
-# S&P 500 didn't (2015-08-24, 2025-04-10), so a real day is marked only if it is listed; add a day here if a new real halt follows an update.
+# S&P 500 didn't (2015-08-24 -7.7%, 2025-04-10 -7.2%), so a real day is marked only if it is listed (all four lows here do cross -7%,
+# checked on the stored bars); the value is the highest level that day reached. Add a day here if a new real halt follows an update.
+# (Before 2013 halts keyed off the Dow at 10/20/30%, and none ever tripped.)
 REAL_HALTS = {date(2020, 3, 9): 1, date(2020, 3, 12): 1, date(2020, 3, 16): 1, date(2020, 3, 18): 1}
-BREAKER_RULE_FROM = date(2013, 2, 4)  # today's rule (7/13/20% of the S&P 500); before it halts keyed off the Dow at 10/20/30%
 BREAKER_LAST_MINUTE = 355  # a level 1 or 2 halt can't begin once the session is this many minutes old (3:25 PM)
 SHOCK_DROP = 0.025  # the market's log drop at the open, per unit of excess
 SHOCK_REBOUND = 0.06  # annual drift per unit of excess, while it lasts
@@ -1534,8 +1535,8 @@ class MarketEngine:
 
     def halts_of(self, day: date) -> list[dict]:
         """The circuit-breaker halts of a session: when each began (Unix seconds), when trading
-        resumed (None: not that day), its level, and whether it is an estimate (a real day's
-        halt, placed on the generated path inside the real bar)."""
+        resumed (None: not that day), its level, and whether it is an estimate (a listed real halt,
+        `REAL_HALTS`, placed on the generated path inside the real bar; other real days have none)."""
         out = []
         if day not in self._starts:  # a day the market hasn't reached (or no longer keeps)
             return out

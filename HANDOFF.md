@@ -47,7 +47,7 @@ _Last updated: 2026-11-06. Everything through #79 is merged (`MODEL_VERSION` 17)
 | Fix (user's report: SPY volume 10-15M for months in a calm stretch): volume follows the variance as `h**0.3 × 1.3` (`VOLUME_ELASTICITY`, `VOLUME_LEVEL`), not its square root; calm SPY median 41M, choppy 66M, crisis 128M (`MODEL_VERSION` 11) | Merged | #59 |
 | Circuit-breaker markers on the chart (user's request): an orange square labeled Halt L1/L2/L3 on the bar where each halt began, from `GET /api/halts?start=&end=` | Merged | #61 |
 | Estimated halt markers on real days from 2013 (user's report: no markers in 2020) | Merged | #62 |
-| Fix: real-day halt markers only on the four real halts (2020-03-09, 12, 16, 18); 2015-08-24 and 2025-04-10 no longer marked | In review | |
+| Fix: real-day halt markers only on the four real halts (2020-03-09, 12, 16, 18); 2015-08-24 and 2025-04-10 no longer marked | Merged | #81 |
 | Intraday volume profile, step 1: `./server.sh update intraday` (Alpaca SIP one-minute bars, 2016 on, into the `intraday` table; 391 slots a day, the 16:00 bar holds the closing cross) | Merged | #64 |
 | Intraday volume profile: the fetch covers all 40 symbols (was 8) | Merged; **the user is to run `./server.sh update intraday` for the other 32 (about 8,000 requests, 40 min; resumes after a rate limit)** | #66 |
 | Intraday volume profile, step 2: `backend/scripts/fit_intraday_volume.py` and `market/volume_profile.json` (all 40 symbols; tiers from `SYMBOLS`, funds = no earnings) | Merged (without CI, Actions outage) | #65 |

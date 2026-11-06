@@ -205,6 +205,10 @@ def test_estimated_halts_follow_the_2013_rule_and_never_freeze_or_close_real_day
     # a day with no real halt is never marked, whatever SPY's print did (2015-08-24, 2025-04-10, before the rule)
     for d0, d1 in ((date(2008, 10, 8), date(2008, 10, 9)), (date(2015, 8, 21), date(2015, 8, 24)), (date(2025, 4, 9), date(2025, 4, 10))):
         assert real_engine(crash(d0, d1, 78.0), d1).halts_of(d1) == []
+    # realistic prints: SPY -7.7% on 2015-08-24 stays unmarked; -9.8% on the listed 2020-03-18 is marked
+    assert real_engine(crash(date(2015, 8, 21), date(2015, 8, 24), 92.3), date(2015, 8, 24)).halts_of(date(2015, 8, 24)) == []
+    listed = real_engine(crash(date(2020, 3, 17), date(2020, 3, 18), 90.2), date(2020, 3, 18))
+    assert [h["level"] for h in listed.halts_of(date(2020, 3, 18))] == [1]
     # a real halt day: marked at the level that really happened (not deeper), as a pause; prices stay real
     deep = real_engine(crash(date(2020, 3, 11), date(2020, 3, 12), 78.0), date(2020, 3, 12))
     levels = [(h["level"], h["estimated"], h["resume"] is not None) for h in deep.halts_of(date(2020, 3, 12))]

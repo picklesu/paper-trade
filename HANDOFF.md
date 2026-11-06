@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-11-04. Everything through #65, #66 and #69 is merged (#65 without CI: GitHub Actions was down, the user said not to wait; 412 backend tests passed locally). The engine PR (step 3, `MODEL_VERSION` 12) is merged (#70). Then 8g (walk-forward validation, a separate PR: propose its design and get the user's go-ahead first; the proposal is below). The user restarts and tests merged work._
+_Last updated: 2026-11-06. Everything through #65, #66 and #69 is merged (#65 without CI: GitHub Actions was down, the user said not to wait; 412 backend tests passed locally). The engine PR (step 3, `MODEL_VERSION` 12) is merged (#70). Then 8g (walk-forward validation, a separate PR: propose its design and get the user's go-ahead first; the proposal is below). The user restarts and tests merged work._
 
 ## Where things stand
 
@@ -51,7 +51,7 @@ _Last updated: 2026-11-04. Everything through #65, #66 and #69 is merged (#65 wi
 | Intraday volume profile: the fetch covers all 40 symbols (was 8) | Merged; **the user is to run `./server.sh update intraday` for the other 32 (about 8,000 requests, 40 min; resumes after a rate limit)** | #66 |
 | Intraday volume profile, step 2: `backend/scripts/fit_intraday_volume.py` and `market/volume_profile.json` (all 40 symbols; tiers from `SYMBOLS`, funds = no earnings) | Merged (without CI, Actions outage) | #65 |
 | Intraday volume profile, step 3: the engine follows each symbol's fitted profile by regime state, with a day mode (`MODEL_VERSION` 12) | Merged | #70 |
-| A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | In review | |
+| A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.
 

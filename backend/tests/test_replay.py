@@ -350,6 +350,14 @@ def test_a_saved_market_takes_in_real_days_fetched_since() -> None:
     assert not np.allclose(again._skeleton(next_trading_day(last)).close[-1], simulated)
     assert np.allclose(again._skeleton(last).close[-1], before)  # days before the old cutoff are untouched
     assert not again.extend_real()  # nothing newer
+    fresh = engine_with(more, ready=False)  # the same market begun with the newer bars
+    fresh.advance(session_open(later))
+    assert fresh._starts[later].variance == again._starts[later].variance
+    assert np.allclose(fresh._starts[later].prev_close, again._starts[later].prev_close)
+
+    rewound = MarketEngine.from_state(state, real=RealBars(NAMES, more))
+    rewound.rewind(session_open(bars["SPY"][2].day), False)  # before the old cutoff
+    assert rewound.extend_real() and rewound.real_through == more["SPY"][-1].day
 
 
 def test_real_days_are_not_taken_in_over_trades_on_the_days_they_replace() -> None:

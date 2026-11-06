@@ -52,7 +52,7 @@ def _extend_real(store: Store, engine: MarketEngine) -> None:
     for o in store.load_orders():
         stamps = (o.created_at, o.filled_at, o.closed_at, o.triggered_at)
         if any(t is not None and calendar.market_day(t) > old for t in stamps):
-            log.info("newer real days exist, but the account traded after %s: the market keeps its old cutoff", old)
+            log.info("newer real days exist, but the account has orders after %s: this market keeps its cutoff (a reset or a jump before the history starts a market with the new days)", old)
             return
     if engine.extend_real():
         log.info("the market now replays real days through %s (was %s)", engine.real_through, old)

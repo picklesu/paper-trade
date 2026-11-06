@@ -72,6 +72,7 @@ class MarketService:
         engine.on_day_complete = self.history.record
         if engine.extended_from:  # stored bars after the old cutoff were simulated; build_history stores the real ones
             self.history.delete_from(next_trading_day(engine.extended_from))
+            engine.extended_from = None
         # Anything saved after the market's last saved time never happened.
         self.broker.rewind(engine.time)
         self._subscribers: set[asyncio.Queue[dict]] = set()

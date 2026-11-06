@@ -776,22 +776,32 @@ def test_minute_volume_noise_persists_and_bursts_with_mean_one() -> None:
     assert (noise > 3).mean() > 0.01  # and there are bursts
 
 
-def test_day_level_volume_has_mean_one_and_spikes() -> None:
+def test_day_level_volume_persists_has_mean_one_and_spikes() -> None:
     rng = np.random.default_rng(1)
-    n = 20000
+    n, days = 40, 6000
     draws = engine_mod._Draws(
         gap=np.zeros(1), within=np.zeros((1, 1)), between=np.zeros((1, 1)), u=np.zeros((1, 2)), extremes=np.zeros((1, 1, 2)),
         volume_noise=np.zeros((1, 1)), news_minute=np.zeros(1), news_size=np.zeros(1), earnings=np.zeros(1), crash_u=1.0,
         crash_size=0.0, minute_seed=np.zeros(1, dtype=np.int64),
     )
-    out = []
-    for k in range(n):
-        draws.volume_day = np.array([[rng.standard_normal(), rng.random(), rng.exponential()]])
-        draws.volume_market = float(rng.standard_normal())
-        out.append(MarketEngine._volume_day(draws)[0])
+    state, out = None, []
+    day = date(2026, 3, 2)
+    for _ in range(days):
+        draws.volume_day = np.column_stack([rng.standard_normal(n), rng.random(n), rng.exponential(size=n), rng.standard_normal(n), rng.standard_normal(n)])
+        draws.volume_market = rng.standard_normal(3)
+        move = np.abs(rng.standard_normal(n))  # a day's move in its usual standard deviations
+        factor, state = MarketEngine._volume_day(draws, state, move, np.ones(n), day)
+        out.append(factor)
+        day = next_trading_day(day)
     out = np.array(out)
+    assert state.shape == (2, 1 + n)
     assert out.mean() == pytest.approx(1.0, rel=0.03)
-    assert np.percentile(out, 99.5) > 1.8 * np.median(out)  # heavy days
+    x = np.log(out[:, 0])
+    assert np.corrcoef(x[:-1], x[1:])[0, 1] > 0.3  # a busy day is followed by a busy one (real: 0.57 with everything else)
+    assert np.corrcoef(x[:-10], x[10:])[0, 1] < 0.2  # and it fades within a couple of weeks
+    assert np.percentile(out, 99.9) > 2.0 * np.median(out)  # heavy days
+    market = np.log(out).mean(axis=1)
+    assert 0.15 < np.var(market) / np.var(np.log(out[:, 0])) < 0.7  # part of a day's volume is the whole market's
 
 
 def test_five_minute_volume_is_as_uneven_as_the_real_market() -> None:

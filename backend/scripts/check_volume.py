@@ -9,6 +9,9 @@ for `--seeds` seeds. Per symbol, then the median over symbols and four examples:
 * mid-session 5-minute volume: the spread (standard deviation over the mean) of each
   block's share of the day, 11:30 to 14:00 (the real market's bursts show here);
 * daily volume: standard deviation of the log, lag-1 and lag-20 autocorrelation, skew;
+* the structure of daily volume after removing each symbol's slow level (a 250-day rolling
+  median): the autocorrelation at lags 1 to 60, how much of the variance is common to the
+  market, the link to the size of the day's move and the day-of-week pattern;
 * event days (`calendar.volume_event`): median volume against the previous 60 ordinary
   sessions on quarterly and other monthly expirations, the last session of a month and the
   Russell reconstitution.
@@ -107,6 +110,65 @@ def sim_stats(db: str, seeds: int, years: float) -> dict:
     return out
 
 
+LAGS = (1, 2, 3, 5, 10, 20, 40)
+
+
+def rolling_median(x: np.ndarray, width: int = 251) -> np.ndarray:
+    h = width // 2
+    return np.array([np.median(x[max(0, i - h) : i + h + 1]) for i in range(len(x))])
+
+
+def structure(volume: np.ndarray, close: np.ndarray, days: list[date], trim: int = 0) -> dict:
+    """Detrended log volume (days, symbols): variance shares, autocorrelation, link to |return|, weekdays."""
+    lv = np.log(volume[1:])
+    ret = np.diff(np.log(close), axis=0)
+    d = np.column_stack([lv[:, j] - rolling_median(lv[:, j]) for j in range(lv.shape[1])])
+    wd = np.array([x.weekday() for x in days[1:]])
+    if trim:
+        d, ret, wd = d[trim:-trim], ret[trim:-trim], wd[trim:-trim]
+    m = d.mean(axis=1)
+    ac = lambda x, k: float(np.corrcoef(x[:-k], x[k:])[0, 1])  # noqa: E731
+    return {
+        "sd": float(np.median(d.std(axis=0))),
+        "market share": float(np.mean([np.corrcoef(d[:, j], m)[0, 1] ** 2 for j in range(d.shape[1])])),
+        "acf": [float(np.median([ac(d[:, j], k) for j in range(d.shape[1])])) for k in LAGS],
+        "move corr": float(np.median([np.corrcoef(d[:, j], np.log(np.abs(ret[:, j]) + 1e-4))[0, 1] for j in range(d.shape[1])])),
+        "weekday": [float(d[wd == k].mean()) for k in range(5)],
+    }
+
+
+def real_structure(db: str) -> dict:
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    cols = {}
+    for sym in NAMES:
+        cols[sym] = {date.fromisoformat(r[0]): (r[1], r[2]) for r in con.execute("SELECT day, volume, close FROM daily WHERE symbol=? AND day>='2021-01-04' AND volume>0 ORDER BY day", (sym,))}
+    days = sorted(set.intersection(*[set(c) for c in cols.values()]))
+    vol = np.array([[cols[s][d][0] for s in NAMES] for d in days], float)
+    close = np.array([[cols[s][d][1] for s in NAMES] for d in days], float)
+    return structure(vol, close, days)
+
+
+def sim_structure(db: str, seeds: int) -> dict:
+    we.init(db)
+    full = RealBars(NAMES, we.G["bars"], we.G["vix"], we.G["series"])
+    start = cal.next_trading_day(full.last_day)
+    out = []
+    for seed in range(seeds):
+        engine = MarketEngine(cal.session_open(start), seed=seed, real=full)
+        days, vol, close = [], [], []
+
+        def done(day: date, engine=engine, days=days, vol=vol, close=close) -> None:
+            sk = engine._skeleton(day)
+            days.append(day)
+            vol.append(sk.volume.sum(axis=0))
+            close.append(np.exp(sk.close[-1]))
+
+        engine.on_day_complete = done
+        engine.advance(cal.session_open(cal.add_trading_days(start, 800)))
+        out.append(structure(np.array(vol), np.array(close), days, trim=125))
+    return {k: np.mean([o[k] for o in out], axis=0) for k in out[0]}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)
@@ -121,6 +183,15 @@ def main() -> None:
     print(f"{'median of 40':14s} " + "  ".join(f"{med(real, k):5.2f}/{med(sim, k):5.2f}" for k in keys))
     for s in SAMPLE:
         print(f"{s:14s} " + "  ".join(f"{real[s][k]:5.2f}/{sim[s][k]:5.2f}" for k in keys))
+    print("\nstructure after removing each symbol's slow level (real: 2021 on; simulated: 800 days from the real start)")
+    r, m = real_structure(a.db), sim_structure(a.db, max(2, a.seeds // 2))
+    print(f"  {'':22s} {'real':>8s} {'sim':>8s}")
+    print(f"  {'sd of log volume':22s} {r['sd']:8.3f} {m['sd']:8.3f}")
+    print(f"  {'market-wide share':22s} {r['market share']:8.2f} {m['market share']:8.2f}")
+    print(f"  {'corr with log |move|':22s} {r['move corr']:8.2f} {m['move corr']:8.2f}")
+    for k, lag in enumerate(LAGS):
+        print(f"  {'autocorrelation, lag %d' % lag:22s} {r['acf'][k]:8.2f} {m['acf'][k]:8.2f}")
+    print(f"  {'Mon..Fri (log)':22s} {' '.join(f'{x:+.2f}' for x in r['weekday'])}   |   {' '.join(f'{x:+.2f}' for x in m['weekday'])}")
     print("\nevent days (median volume of all 40 symbols against ordinary sessions; real: 2005 on)")
     for k in sorted(set(real["_events"]) | set(sim["_events"])):
         print(f"  {k:24s} real {real['_events'].get(k, float('nan')):.2f}   sim {sim['_events'].get(k, float('nan')):.2f}")

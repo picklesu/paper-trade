@@ -121,6 +121,9 @@ SHOCK_IN_CRISIS = 0.4  # a triggered shock's extra volatility is this share of t
 # halt at 7% and at 13% (not after 3:25 PM), and no more trading that day at 20%.
 BREAKER_LEVELS = (0.07, 0.13, 0.20)
 HALT_MINUTES = 15
+# The market-wide halts that really happened under today's rule (level reached). SPY's own prints can fall 7% on days the
+# S&P 500 didn't (2015-08-24, 2025-04-10), so a real day is marked only if it is listed; add a day here if a new real halt follows an update.
+REAL_HALTS = {date(2020, 3, 9): 1, date(2020, 3, 12): 1, date(2020, 3, 16): 1, date(2020, 3, 18): 1}
 BREAKER_RULE_FROM = date(2013, 2, 4)  # today's rule (7/13/20% of the S&P 500); before it halts keyed off the Dow at 10/20/30%
 BREAKER_LAST_MINUTE = 355  # a level 1 or 2 halt can't begin once the session is this many minutes old (3:25 PM)
 SHOCK_DROP = 0.025  # the market's log drop at the open, per unit of excess
@@ -1353,8 +1356,8 @@ class MarketEngine:
             found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy], min(BREAKER_LAST_MINUTE, m_day - (_M - BREAKER_LAST_MINUTE)) if real_day is None else m_day, m_day)
             if real_day is None:
                 halts = found
-            elif day >= BREAKER_RULE_FROM and real_day.has[self._spy]:
-                noted = found  # real prices aren't frozen; the breaker is only marked (the time of day is the generated path's, so the 3:25 PM cutoff doesn't apply)
+            elif day in REAL_HALTS and real_day.has[self._spy]:
+                noted = [h for h in found if h[2] <= REAL_HALTS[day]]  # real prices aren't frozen; the breaker is only marked (the time of day is the generated path's, so the 3:25 PM cutoff doesn't apply)
         if halts:  # a market-wide halt: every price freezes where it stood, then trading resumes
             open_, high, low, close = open_.copy(), high.copy(), low.copy(), close.copy()
             for first, resume, _ in halts:

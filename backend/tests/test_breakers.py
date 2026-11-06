@@ -202,13 +202,13 @@ def test_estimated_halts_follow_the_2013_rule_and_never_freeze_or_close_real_day
     def crash(day0: date, day1: date, low: float):
         return [Bar(day0, 100.0, 101.0, 99.0, 100.0, 1_000_000), Bar(day1, 95.0, 95.5, low, low + 1, 5_000_000)]
 
-    # before the rule: nothing is marked
-    old = real_engine(crash(date(2008, 10, 8), date(2008, 10, 9), 90.0), date(2008, 10, 9))
-    assert old.halts_of(date(2008, 10, 9)) == []
-    # a 21% fall on a real day: marked, but as a pause, not as the market closing; prices stay real
+    # a day with no real halt is never marked, whatever SPY's print did (2015-08-24, 2025-04-10, before the rule)
+    for d0, d1 in ((date(2008, 10, 8), date(2008, 10, 9)), (date(2015, 8, 21), date(2015, 8, 24)), (date(2025, 4, 9), date(2025, 4, 10))):
+        assert real_engine(crash(d0, d1, 78.0), d1).halts_of(d1) == []
+    # a real halt day: marked at the level that really happened (not deeper), as a pause; prices stay real
     deep = real_engine(crash(date(2020, 3, 11), date(2020, 3, 12), 78.0), date(2020, 3, 12))
     levels = [(h["level"], h["estimated"], h["resume"] is not None) for h in deep.halts_of(date(2020, 3, 12))]
-    assert levels[-1] == (3, True, True) and all(est for _, est, _ in levels)
+    assert levels == [(1, True, True)]
     sk = deep._skeleton(date(2020, 3, 12))
     assert not sk.halted.any() and not sk.halts  # no freezing
     assert deep.halt is None and not deep.halted_at(date(2020, 3, 12), 60 * 200)  # trading and orders go on

@@ -1,5 +1,7 @@
 # Engine-level walk-forward checks (8g, second part)
 
+Data through 2026-11-05; engine seeds 0-159; origins are the block ends nearest 2004-06-30, 2007-06-29, 2009-09-30, 2012-12-31, 2016-06-30, 2019-06-28, 2021-12-31, 2023-06-30.
+
 8 origins (2004-06-29, 2007-06-28, 2009-10-01, 2012-12-27, 2016-06-27, 2019-06-27, 2022-01-03, 2023-07-03), 160 engine seeds each, 3 years forward; the regime model refit before each origin; the engine started as a new market there with only the real bars before it.
 
 ## Volatility and drawdown ranges: engine against the regime layer alone
@@ -84,21 +86,22 @@ The engine's 1-year volatility range (10th to 90th percentile) is 1.87 times the
 | calm | 10.7% | 9.6% | 8.9% | +20% | FAIL |
 | choppy | 18.3% | 19.0% | 20.8% | -12% | PASS |
 | crisis | 32.3% | 42.4% | 52.2% | -38% | FAIL |
+History's states are the full-sample fit's smoothed labels, which have hindsight and make 'crisis' a narrow set of weeks; the refits' own volatility (third column) is the fairer yardstick for the engine, and a week counts toward a state only if all five sessions were in it.
 
 ## CRASH_BY_STATE: daily SPY moves of -3% or worse, and -5% or worse, per year
 
 | state | level | engine per year | history per year | engine / history | within a factor of 1.5 |
 |---|---|---|---|---|---|
-| calm | -3% | 0.81 | 0.20 | 4.07 | FAIL |
+| calm | -3% | 0.81 | 0.30 | 2.69 | FAIL |
 | calm | -5% | 0.19 | 0.00 | inf | FAIL |
-| choppy | -3% | 3.65 | 5.15 | 0.71 | PASS |
-| choppy | -5% | 0.87 | 0.40 | 2.21 | FAIL |
+| choppy | -3% | 3.65 | 4.69 | 0.78 | PASS |
+| choppy | -5% | 0.87 | 0.54 | 1.62 | FAIL |
 | crisis | -3% | 14.18 | 49.07 | 0.29 | FAIL |
 | crisis | -5% | 4.31 | 19.89 | 0.22 | FAIL |
-| all | -3% | 3.01 | 3.37 | 0.89 | PASS |
-| all | -5% | 0.78 | 0.77 | 1.02 | PASS |
+| all | -3% | 3.01 | 3.08 | 0.97 | PASS |
+| all | -5% | 0.78 | 0.65 | 1.20 | PASS |
 
-History is the weeks after the first origin; its daily states are the weekly smoothed labels. A state with few real days (crisis: about 40 weeks) gives a noisy rate.
+History is every SPY day since 1993; its daily states are the weekly smoothed labels. A state with few real days (crisis: about 40 weeks) gives a noisy rate.
 
 ## Verdicts (criteria fixed in the script's docstring)
 

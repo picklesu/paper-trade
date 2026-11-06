@@ -112,6 +112,7 @@ def run(task: tuple[int, date, object, list[int]]) -> dict:
     weekly, daily, states = [], [], []
     for seed in seeds:
         engine = MarketEngine(calendar.session_open(start_day), seed=seed, real=real)
+        assert engine._macro is params, "the engine must run on the refit model, not the committed one"
         base = float(np.log(engine._starts[start_day].prev_close[G["spy"]]))
         closes: list[float] = []
         state: list[int] = []
@@ -152,6 +153,7 @@ def main() -> None:
     ap.add_argument("--db", required=True)
     ap.add_argument("--report", default=str(Path(__file__).with_name("walk_forward_engine_report.md")))
     ap.add_argument("--workers", type=int, default=min(4, __import__("os").cpu_count() or 1))
+    ap.add_argument("--cache", help="save the engine runs here (npz), or read them from here if it exists")
     ap.add_argument("--limit", type=int, default=0, help="only the first N origins (a quick trial)")
     args = ap.parse_args()
     init(args.db)
@@ -172,10 +174,17 @@ def main() -> None:
         starts.append((state0, z0))
     tasks = [(k, cutoffs[k], fits[k], list(range(i, min(i + CHUNK, PATHS)))) for k in range(len(ns)) for i in range(0, PATHS, CHUNK)]
     done: dict[int, list[dict]] = {k: [] for k in range(len(ns))}
-    with Pool(args.workers, initializer=init, initargs=(args.db,), maxtasksperchild=4) as pool:
-        for i, res in enumerate(pool.imap_unordered(run, tasks), 1):
-            done[res["k"]].append(res)
-            print(f"{i}/{len(tasks)}", flush=True)
+    if args.cache and Path(args.cache).exists():
+        saved = np.load(args.cache)
+        for k in range(len(ns)):
+            done[k] = [{"weekly": saved[f"weekly{k}"], "daily": saved[f"daily{k}"], "states": saved[f"states{k}"]}]
+    else:
+        with Pool(args.workers, initializer=init, initargs=(args.db,), maxtasksperchild=4) as pool:
+            for i, res in enumerate(pool.imap_unordered(run, tasks), 1):
+                done[res["k"]].append(res)
+                print(f"{i}/{len(tasks)}", flush=True)
+        if args.cache:
+            np.savez_compressed(args.cache, **{f"{name}{k}": np.vstack([r[name] for r in done[k]]) for k in range(len(ns)) for name in ("weekly", "daily", "states")})
 
     rng = np.random.default_rng(3)
     rows, pooled = [], {h: {"engine": {x: [] for x in ("ret", "vol", "dd")}, "layer": {x: [] for x in ("ret", "vol", "dd")}} for h in wf.HORIZONS}
@@ -200,13 +209,17 @@ def main() -> None:
     # State volatility and crash frequency: the engine against history.
     state_label = real_states()
     sim_w = np.vstack(sim_weekly)
-    sim_s = np.vstack(sim_state)[:, :: fr.PERIOD][:, :WEEKS]  # the state at each week's first session
+    sessions = np.vstack(sim_state)[:, : WEEKS * fr.PERIOD].reshape(len(sim_w), WEEKS, fr.PERIOD)
+    # A week counts toward a state only if all five sessions were in it (a week with a switch is left out).
+    sim_s = np.where((sessions == sessions[:, :, :1]).all(axis=2), sessions[:, :, 0], -1)
     per_year = 252
-    real_d = np.diff(np.log(D["closes"]))
-    week_of_day = np.minimum(np.arange(len(real_d)) // fr.PERIOD, T - 1)
-    real_day_state = state_label[week_of_day]
-    first_day = int(D["marks"][wf.MIN_TRAIN_WEEKS - 1])  # the first origin's history onward
+    # Daily returns of the whole history; day i belongs to week i // PERIOD (both count from SPY's first bar).
+    real_d = np.diff(np.log(D["closes"]))[: T * fr.PERIOD]
+    assert len(real_d) == T * fr.PERIOD and int(D["marks"][0]) == 0, "daily rows and weekly blocks must line up"
+    real_day_state = np.repeat(state_label, fr.PERIOD)
+    last_day = D["days"][-1]
     L = ["# Engine-level walk-forward checks (8g, second part)\n",
+         f"Data through {last_day}; engine seeds 0-{PATHS - 1}; origins are the block ends nearest {', '.join(str(o) for o in origins)}.\n",
          f"{len(ns)} origins ({', '.join(str(c) for c in cutoffs)}), {PATHS} engine seeds each, 3 years forward; the regime model refit before each origin; the engine started as a new market there with only the real bars before it.\n"]
     L.append("## Volatility and drawdown ranges: engine against the regime layer alone\n")
     L.append("Each cell: realized | simulated 10th / median / 90th percentile; PIT in brackets (0 to 1, where reality fell).\n")
@@ -217,7 +230,7 @@ def main() -> None:
             e = next(r for r in rows if r["origin"] == str(cutoffs[k]) and r["h"] == h and r["who"] == "engine")
             lyr = next(r for r in rows if r["origin"] == str(cutoffs[k]) and r["h"] == h and r["who"] == "layer")
             for stat in ("ret", "vol", "dd"):
-                f = (lambda v: f"{v:.0%}") if stat == "dd" else (lambda v: f"{v:+.0%}" if stat == "ret" else f"{v:.0%}")
+                f = (lambda v: f"{v:.0%}") if stat == "dd" else (lambda v: f"{v:+.0%}" if stat == "ret" else f"{v:.0%}")  # noqa: E731
                 cell = lambda t: f"{f(t[1])} / {f(t[2])} / {f(t[3])} [{t[4]:.2f}]"  # noqa: E731
                 L.append(f"| {e['origin']} | {e['start']} | {stat} | {f(e[stat][0])} | {cell(e[stat])} | {cell(lyr[stat])} |")
         L.append("")
@@ -235,7 +248,7 @@ def main() -> None:
     L.append(f"\nThe engine's 1-year volatility range (10th to 90th percentile) is {np.mean(spread):.2f} times the regime layer's on average (per origin: {', '.join(f'{x:.2f}' for x in spread)}).\n")
 
     L.append("## STATE_LEVEL_ADJ: weekly volatility by state, annualized\n")
-    L.append("| state | engine | fitted (mean of the refits) | history (full-sample labels) | engine vs history | within ±15% |\n|---|---|---|---|---|---|")
+    L.append(f"| state | engine | fitted (mean of the refits) | history (full-sample labels) | engine vs history | within ±{STATE_VOL_TOL:.0%} |\n|---|---|---|---|---|---|")
     ann = np.sqrt(252 / fr.PERIOD)
     state_ok = True
     for j, name in enumerate(STATES):
@@ -245,15 +258,14 @@ def main() -> None:
         ok = bool(abs(eng / hist - 1) <= STATE_VOL_TOL) if np.isfinite(eng) else False
         state_ok &= ok
         L.append(f"| {name} | {eng:.1%} | {fitted:.1%} | {hist:.1%} | {eng / hist - 1:+.0%} | {'PASS' if ok else 'FAIL'} |")
-    L.append("")
+    L.append("History's states are the full-sample fit's smoothed labels, which have hindsight and make 'crisis' a narrow set of weeks; the refits' own volatility (third column) is the fairer yardstick for the engine, and a week counts toward a state only if all five sessions were in it.\n")
 
     L.append("## CRASH_BY_STATE: daily SPY moves of -3% or worse, and -5% or worse, per year\n")
     sim_d = np.vstack(sim_daily)
     sim_ds = np.vstack(sim_state)
-    L.append("| state | level | engine per year | history per year | engine / history | within a factor of 1.5 |\n|---|---|---|---|---|---|")
+    L.append(f"| state | level | engine per year | history per year | engine / history | within a factor of {CRASH_FACTOR:g} |\n|---|---|---|---|---|---|")
     crash_ok = True
-    real_d_window = real_d[first_day:]
-    real_s_window = real_day_state[first_day:]
+    real_d_window, real_s_window = real_d, real_day_state
     for j, name in (*list(enumerate(STATES)), (None, "all")):
         for level in CRASH_LEVELS:
             e_mask = np.ones_like(sim_d, dtype=bool) if j is None else sim_ds == j
@@ -266,13 +278,13 @@ def main() -> None:
             ok = 1 / CRASH_FACTOR <= ratio <= CRASH_FACTOR
             crash_ok &= ok
             L.append(f"| {name} | {level:.0%} | {e:.2f} | {r:.2f} | {ratio:.2f} | {'PASS' if ok else 'FAIL'} |")
-    L.append(f"\nHistory is the weeks after the first origin; its daily states are the weekly smoothed labels. A state with few real days (crisis: about 40 weeks) gives a noisy rate.\n")
+    L.append("\nHistory is every SPY day since 1993; its daily states are the weekly smoothed labels. A state with few real days (crisis: about 40 weeks) gives a noisy rate.\n")
     L.append("## Verdicts (criteria fixed in the script's docstring)\n")
     L.append(f"- STATE_LEVEL_ADJ: {'PASS' if state_ok else 'FAIL'} (every state's engine volatility within {STATE_VOL_TOL:.0%} of history)")
     L.append(f"- CRASH_BY_STATE: {'PASS' if crash_ok else 'FAIL'} (every rate within a factor of {CRASH_FACTOR:g} of history)")
     L.append("- SHOCK_IN_CRISIS: not checked (it only acts on a user-triggered shock; history has none)\n")
     L.append("Eight origins and 4-5 real crises: this shows a gross difference, not a fine one.")
-    text = "\n".join(L)
+    text = "\n".join(L) + "\n"
     Path(args.report).write_text(text)
     print(text)
 

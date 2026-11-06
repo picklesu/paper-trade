@@ -217,7 +217,10 @@ export function compute(id: IndicatorId, params: number[], bars: Bar[]): Indicat
   }
 }
 
-/** Keep only sane settings (from storage or input): whole lengths 1-500, std dev 0.5-5. */
+/** The longest length a box accepts (a 737-day average needs about three years of daily bars). */
+export const MAX_LENGTH = 2000
+
+/** Keep only sane settings (from storage or input): whole lengths 1-2000, std dev 0.5-5. */
 export function sanitize(raw: unknown): IndicatorSettings {
   const out = structuredClone(DEFAULT_SETTINGS)
   if (!raw || typeof raw !== 'object') return out
@@ -236,7 +239,7 @@ export function clampParam(id: IndicatorId, index: number, value: unknown, fallb
   const n = Number(value)
   if (!Number.isFinite(n)) return fallback
   if (id === 'bb' && index === 1) return Math.min(5, Math.max(0.5, Math.round(n * 10) / 10))
-  return Math.min(500, Math.max(1, Math.round(n)))
+  return Math.min(MAX_LENGTH, Math.max(1, Math.round(n)))
 }
 
 /** Fix combinations that don't make sense: MACD's fast length must be shorter than its slow one. */
@@ -245,7 +248,7 @@ export function normalizeParams(id: IndicatorId, params: number[]): number[] {
   let [fast, slow] = params
   if (fast > slow) [fast, slow] = [slow, fast]
   if (fast === slow) {
-    if (slow < 500) slow += 1
+    if (slow < MAX_LENGTH) slow += 1
     else fast -= 1
   }
   return [fast, slow, params[2]]

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bar } from '../lib/bars'
 import { calls, createChart, resetCalls } from '../test/lightweight-charts.mock'
 import type { ClockState, Order, Quote } from '../lib/types'
+import { DEFAULT_SETTINGS, INDICATORS } from '../lib/indicators'
 import { PriceChart } from './PriceChart'
 
 const OPEN = Date.parse('2026-01-07T14:30:00Z') / 1000
@@ -175,6 +176,7 @@ describe('PriceChart history paging', () => {
         json: async () => (url.includes('end=') ? { bars: older, more: false } : { bars, more: true }),
       })),
     )
+    allIndicatorsOff() // otherwise the longest average would load the older bars by itself
     render(<PriceChart quote={quote} clock={clock} orders={[]} />)
     await waitFor(() => expect(calls.candleData).toHaveLength(2))
     calls.logicalRange = { from: 30, to: 35 } // settled view: not near the start yet
@@ -204,6 +206,39 @@ describe('PriceChart settling', () => {
     // After settling, the applied view starts at the first bar: load older bars once.
     calls.logicalRange = { from: 0, to: 2 }
     await waitFor(() => expect(older()).toBe(1))
+  })
+})
+
+function allIndicatorsOff(extra: Record<string, unknown> = {}) {
+  const off = Object.fromEntries(INDICATORS.map((i) => [i.id, { on: false, params: DEFAULT_SETTINGS[i.id].params }]))
+  localStorage.setItem('paper-trade.indicators', JSON.stringify({ ...off, ...extra }))
+}
+
+describe('PriceChart indicator history', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    resetCalls()
+    localStorage.clear()
+  })
+
+  it('loads older bars by itself until a long average has its bars (and stops when there are no more)', async () => {
+    allIndicatorsOff({ sma200: { on: true, params: [737] } })
+    let end = OPEN
+    const fn = vi.fn(async (url: string) => {
+      if (!url.includes('end=')) return { ok: true, status: 200, json: async () => ({ bars, more: true }) }
+      const page: Bar[] = Array.from({ length: 300 }, (_, k) => [end - (300 - k) * 300, 1, 1, 1, 1, 1])
+      end -= 300 * 300
+      return { ok: true, status: 200, json: async () => ({ bars: page, more: true }) }
+    })
+    vi.stubGlobal('fetch', fn)
+    render(<PriceChart quote={quote} clock={clock} orders={[]} />)
+    await waitFor(() => expect(calls.candleData).toHaveLength(2))
+    calls.logicalRange = { from: 30, to: 35 } // nowhere near the start of the loaded bars
+    const older = () => fn.mock.calls.filter(([u]) => String(u).includes('/api/bars') && String(u).includes('end=')).length
+    // 2 + 300 per page reaches 737 + 50 after 3 pages, then it stops.
+    await waitFor(() => expect(calls.candleData).toHaveLength(902))
+    await new Promise((r) => setTimeout(r, 150))
+    expect(older()).toBe(3)
   })
 })
 

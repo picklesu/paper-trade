@@ -34,7 +34,7 @@ import { direction, percent, price, volume } from '../lib/format'
 import { compute, DEFAULT_SETTINGS, type IndicatorId, indicatorLabel, INDICATORS, type IndicatorSettings, sanitize } from '../lib/indicators'
 import { isIndex } from '../lib/symbols'
 import type { ClockState, Order, Quote } from '../lib/types'
-import { applicable, IndicatorLayer, lineColor } from './IndicatorLayer'
+import { applicable, IndicatorLayer, lineColor, warmupBars } from './IndicatorLayer'
 import { IndicatorMenu } from './IndicatorMenu'
 
 interface Props {
@@ -125,6 +125,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   // ranges on its next frame); older pages wait for this so they shift the right view.
   const settled = useRef(false)
   const loadOlderIfNeeded = useRef<() => void>(() => {})
+  const settingsRef = useRef(settings)
 
   const symbol = quote.symbol
   const now = Date.parse(clock.time) / 1000
@@ -228,7 +229,11 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   // comes with the bars: only fill them now if the bars on screen are already this view's.
   useEffect(() => {
     indicators.current?.configure(settings, interval)
-    if (shownView.current === `${symbol}|${interval}|${clock.timeline}`) indicators.current?.setData(barsRef.current)
+    settingsRef.current = settings
+    if (shownView.current === `${symbol}|${interval}|${clock.timeline}`) {
+      indicators.current?.setData(barsRef.current)
+      loadOlderIfNeeded.current() // a longer length may need more bars than are loaded
+    }
     // Only settings and bar size reconfigure; symbol and timeline changes reload the bars (show()).
   }, [settings, interval]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -323,11 +328,18 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   useEffect(() => {
     const ts = chart.current?.timeScale()
     if (!ts) return
-    const onRange = (range: { from: number; to: number } | null) => {
+    const lacksWarmup = () => {
+      const need = warmupBars(settingsRef.current, intervalRef.current)
+      return need > 0 && barsRef.current.length < need + 50
+    }
+    const onRange = (range: { from: number; to: number } | null, force = false) => {
       if (!settled.current) return // a fresh load's view is still being applied
       // Near the start only (written so a missing or odd range never counts as "near").
-      if (!range || !(range.from <= 20) || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
+      // Also, when asked to, while the loaded bars are fewer than the longest indicator needs (a 737-bar average).
+      const short = force && lacksWarmup()
+      if (!range || !(range.from <= 20 || short) || !moreRef.current || loadingOlder.current || !barsRef.current.length) return
       loadingOlder.current = true
+      let grew = false
       const first = barsRef.current[0][0]
       const gen = generation.current
       fetchBars(symbol, intervalRef.current, first, PAGE)
@@ -342,6 +354,7 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
           const before = barsRef.current.length
           show(mergeBars(page.bars, barsRef.current))
           const added = barsRef.current.length - before
+          grew = added > 0
           if (ts && view) ts.setVisibleLogicalRange({ from: view.from + added, to: view.to + added })
         })
         .catch(() => {
@@ -349,9 +362,10 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
         })
         .finally(() => {
           loadingOlder.current = false
+          if (grew && lacksWarmup()) loadOlderIfNeeded.current()
         })
     }
-    loadOlderIfNeeded.current = () => onRange(ts.getVisibleLogicalRange())
+    loadOlderIfNeeded.current = () => onRange(ts.getVisibleLogicalRange(), true)
     ts.subscribeVisibleLogicalRangeChange(onRange)
     return () => ts.unsubscribeVisibleLogicalRangeChange(onRange)
   }, [symbol])

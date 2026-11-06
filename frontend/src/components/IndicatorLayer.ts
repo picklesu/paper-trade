@@ -38,8 +38,9 @@ export function warmupBars(settings: IndicatorSettings, interval: Interval): num
   let most = 0
   for (const info of INDICATORS) {
     if (!settings[info.id].on || !applicable(info.id, interval)) continue
-    const lengths = info.id === 'bb' ? settings[info.id].params.slice(0, 1) : settings[info.id].params
-    most = Math.max(most, ...lengths)
+    const p = settings[info.id].params
+    // Bollinger's second box is a multiplier; MACD's signal line starts after the slow average has.
+    most = Math.max(most, info.id === 'macd' ? p[1] + p[2] : info.id === 'bb' ? p[0] : Math.max(...p))
   }
   return most
 }

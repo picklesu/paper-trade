@@ -230,8 +230,10 @@ export function PriceChart({ quote, clock, orders, history, header }: Props) {
   useEffect(() => {
     indicators.current?.configure(settings, interval)
     settingsRef.current = settings
-    loadOlderIfNeeded.current()
-    if (shownView.current === `${symbol}|${interval}|${clock.timeline}`) indicators.current?.setData(barsRef.current)
+    if (shownView.current === `${symbol}|${interval}|${clock.timeline}`) {
+      indicators.current?.setData(barsRef.current)
+      loadOlderIfNeeded.current() // a longer length may need more bars than are loaded
+    }
     // Only settings and bar size reconfigure; symbol and timeline changes reload the bars (show()).
   }, [settings, interval]) // eslint-disable-line react-hooks/exhaustive-deps
 

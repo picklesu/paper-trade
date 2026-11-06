@@ -129,7 +129,7 @@ describe('review fixes', () => {
     const { normalizeParams } = await import('./indicators')
     expect(normalizeParams('macd', [26, 12, 9])).toEqual([12, 26, 9])
     expect(normalizeParams('macd', [12, 12, 9])).toEqual([12, 13, 9])
-    expect(normalizeParams('macd', [500, 500, 9])).toEqual([499, 500, 9])
+    expect(normalizeParams('macd', [MAX_LENGTH, MAX_LENGTH, 9])).toEqual([MAX_LENGTH - 1, MAX_LENGTH, 9])
     expect(normalizeParams('rsi', [14])).toEqual([14])
     expect(sanitize({ macd: { on: true, params: [30, 10, 9] } }).macd.params).toEqual([10, 30, 9])
   })

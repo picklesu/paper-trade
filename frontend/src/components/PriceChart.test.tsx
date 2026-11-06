@@ -209,9 +209,9 @@ describe('PriceChart settling', () => {
   })
 })
 
-function allIndicatorsOff() {
+function allIndicatorsOff(extra: Record<string, unknown> = {}) {
   const off = Object.fromEntries(INDICATORS.map((i) => [i.id, { on: false, params: DEFAULT_SETTINGS[i.id].params }]))
-  localStorage.setItem('paper-trade.indicators', JSON.stringify(off))
+  localStorage.setItem('paper-trade.indicators', JSON.stringify({ ...off, ...extra }))
 }
 
 describe('PriceChart indicator history', () => {
@@ -222,15 +222,23 @@ describe('PriceChart indicator history', () => {
   })
 
   it('loads older bars by itself until a long average has its bars (and stops when there are no more)', async () => {
-    const off = Object.fromEntries(INDICATORS.map((i) => [i.id, { on: false, params: DEFAULT_SETTINGS[i.id].params }]))
-    localStorage.setItem('paper-trade.indicators', JSON.stringify({ ...off, sma200: { on: true, params: [737] } }))
-    const fn = vi.fn(async (_url: string) => ({ ok: true, status: 200, json: async () => ({ bars, more: true }) }))
+    allIndicatorsOff({ sma200: { on: true, params: [737] } })
+    let end = OPEN
+    const fn = vi.fn(async (url: string) => {
+      if (!url.includes('end=')) return { ok: true, status: 200, json: async () => ({ bars, more: true }) }
+      const page: Bar[] = Array.from({ length: 300 }, (_, k) => [end - (300 - k) * 300, 1, 1, 1, 1, 1])
+      end -= 300 * 300
+      return { ok: true, status: 200, json: async () => ({ bars: page, more: true }) }
+    })
     vi.stubGlobal('fetch', fn)
     render(<PriceChart quote={quote} clock={clock} orders={[]} />)
     await waitFor(() => expect(calls.candleData).toHaveLength(2))
     calls.logicalRange = { from: 30, to: 35 } // nowhere near the start of the loaded bars
-    const older = () => fn.mock.calls.filter(([u]) => String(u).includes('end=')).length
-    await waitFor(() => expect(older()).toBeGreaterThanOrEqual(1))
+    const older = () => fn.mock.calls.filter(([u]) => String(u).includes('/api/bars') && String(u).includes('end=')).length
+    // 2 + 300 per page reaches 737 + 50 after 3 pages, then it stops.
+    await waitFor(() => expect(calls.candleData).toHaveLength(902))
+    await new Promise((r) => setTimeout(r, 150))
+    expect(older()).toBe(3)
   })
 })
 

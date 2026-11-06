@@ -429,6 +429,19 @@ def test_long_run_volatility_matches_spec(ten_years) -> None:
         assert returns(ten_years, spec.symbol).std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.3)
 
 
+def test_long_run_volatility_over_many_paths_matches_spec() -> None:
+    """Three 15-year paths of SPY, crises included: a check over more than the single path above."""
+    spy = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    rets = []
+    for seed in range(3):
+        engine = MarketEngine(START, seed=seed, specs=spy)
+        closes = []
+        engine.on_day_complete = lambda day, e=engine, c=closes: c.append(float(e._skeleton(day).close[-1, 0]))
+        engine.advance(add_trading_seconds(START, 15 * 252 * 23_400))
+        rets.append(np.diff(closes))  # log prices
+    assert np.concatenate(rets).std() * math.sqrt(252) == pytest.approx(spy[0].vol, rel=0.15)
+
+
 def test_daily_returns_have_fat_tails(ten_years) -> None:
     x = returns(ten_years, "SPY")
     x = x - x.mean()

@@ -2,12 +2,13 @@
 the rate of -3% / -5% days in each state, and the whole run's volatility and drift.
 
     uv run python scripts/check_engine_states.py [--years 40] [--seeds 16] \
-        [--adj 0.95,0.95,1.8] [--crash 0.3,1.2,4.0]
+        [--adj 0.95,0.95,2.4] [--crash 0.3,1.2,4.0]
 
 Used to retune `STATE_LEVEL_ADJ` and `CRASH_BY_STATE` against what the walk-forward
 checks found (`walk_forward_engine_report.md`): history's weekly volatility by state is
 8.9% / 20.8% / 52.2% (calm / choppy / crisis; full-sample labels) and its -3% days a
-year are 0.30 / 4.7 / 49 (-5%: 0 / 0.54 / 20). Three symbols run (SPY and its factor
+year are 0.30 / 4.7 / 49 (-5%: 0 / 0.54 / 20). With the crisis at 2.4 it measures
+51.5%, and its -3% days 38 a year (1.8 gave 43-47% and 33). Three symbols run (SPY and its factor
 neighbours), which is far quicker than 40 and gives SPY the same path.
 """
 
@@ -58,6 +59,8 @@ def main() -> None:
         runs = pool.map(one, [(s, a.years, adj, crash) for s in range(a.seeds)])
     d = np.concatenate([r[0] for r in runs])
     st = np.concatenate([r[1] for r in runs])
+    per = len(runs[0][0])
+    assert per % PERIOD == 0, "use a number of years whose sessions fill whole weeks (a week must not span two seeds)"
     print(f"adj {adj} crash {crash}: {len(d) / 252:.0f} simulated years")
     print(f"whole run: vol {d.std() * np.sqrt(252):.1%}  mean log return {d.mean() * 252:+.1%}/yr")
     weeks = len(d) // PERIOD

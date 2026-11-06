@@ -379,7 +379,8 @@ class MarketEngine:
 
         # The long-lived regime (calm / choppy / crisis): its variance level, drift tilt
         # and selloff odds, centered so the long-run averages stay (up to the hand-tuned
-        # STATE_LEVEL_ADJ, which lifts the average variance by about 7%).
+        # STATE_LEVEL_ADJ, which lifts the average variance a few percent: whole-run volatility
+        # 16.5% to 16.8% for the crisis retune, measured by scripts/check_engine_states.py).
         self._macro: RegimeParams = load_params()
         self._state_variance = self._macro.variance_multiple * np.array(STATE_LEVEL_ADJ)
         crash_by = np.array(CRASH_BY_STATE)

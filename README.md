@@ -70,7 +70,7 @@ cd frontend && npm test
 | 8e | Replay the real past; volatility and option prices follow the real VIX | Done |
 | 8f | A regime-switching future model (calm / choppy / crisis) fitted to the real history | Done |
 | 8f+ | Intraday volume that follows real minute patterns by regime (fetch, fit and engine done) | In progress |
-| 8g | Walk-forward checks of the future model against what really happened (`backend/scripts/walk_forward.py`, report in `walk_forward_report.md`) | Checked at the regime and engine levels (`walk_forward*.py`); crisis volatility retuned |
+| 8g | Walk-forward checks of the future model against what really happened (`backend/scripts/walk_forward.py`, report in `walk_forward_report.md`) | Checked at the regime and engine levels (`walk_forward*.py`); crisis volatility retuned (the walk-forward still shows it milder than history) |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |
 | 11 | Analysis tools: screener, portfolio analytics, journal | |

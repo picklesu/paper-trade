@@ -414,6 +414,8 @@ class MarketEngine:
         self.on_day_complete: Callable[[date], None] | None = None
         # Set by a finished backfill: what its unit-start prices were multiplied by.
         self.backfill_scale: np.ndarray | None = None
+        # Set by `extend_real`: the old cutoff, after which stored bars no longer match.
+        self.extended_from: date | None = None
         self._reset(start, seed, prices)
 
     # ----- time travel -------------------------------------------------------
@@ -478,6 +480,31 @@ class MarketEngine:
             self._forget(lambda d: d >= day)
         self._time = t
         self._quotes = None
+
+    def extend_real(self) -> bool:
+        """Replay real bars that arrived after this market began: sessions after the old
+        cutoff, simulated until now, are generated again from the real days (the ones up to
+        today's are rebuilt now). Returns whether anything changed; `extended_from` is the
+        old cutoff. The caller must make sure nothing was traded on the replaced days."""
+        old, new = self._real_through, self._real.last_day if self._real else None
+        if old is None or new is None or new <= old:
+            return False
+        today = market_day(self._time)
+        self._real_through = new
+        self.extended_from = old
+        self._shocks = {d: s for d, s in self._shocks.items() if not old < d <= new}  # the real past can't be shocked
+        self._vix_inputs.clear()
+        self._quotes = None
+        if old not in self._starts:  # the market was rewound to before the old cutoff: nothing after it exists yet
+            return True
+        self._starts = {d: s for d, s in self._starts.items() if d <= old}
+        self._forget(lambda d: d > old)
+        last = old
+        while last < today:  # starts for the days already lived, from the real days
+            self._starts[next_trading_day(last)] = self._skeleton(last).next_start
+            last = next_trading_day(last)
+        self.starts_version += 1
+        return True
 
     def trigger_shock(self) -> date:
         """Start an uncertainty shock at the next session's open (sessions already

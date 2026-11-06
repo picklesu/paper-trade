@@ -18,7 +18,7 @@ contract): market and limit orders only. Their bid and ask come from
 path. Buys open a position or close a short one; sells close a long one or
 open a covered call (100 free shares a contract, locked while it's open) or a
 cash-secured put (strike x 100 a contract set aside). At expiration (the 4:00 PM
-close) options $0.01 or more in the money are exercised or assigned; others
+close, 1:00 PM on an early close) options $0.01 or more in the money are exercised or assigned; others
 expire worthless. A long option the account can't exercise (a call without the
 cash, a put without the shares: that would be a short sale) is sold at its bid
 at 3:59 PM instead. Short options deep in the money with little time value left
@@ -50,6 +50,7 @@ from paper_trade.market.calendar import (
     previous_trading_day,
     session_close,
     session_length,
+    session_minutes,
     session_open,
     session_seconds,
 )
@@ -75,7 +76,6 @@ MATCH_MARGIN = 0.01  # an option minute is looked at second by second if within 
 # when someone trades with it: of the contract's trades (half on each side) a
 # share that grows with how far into the spread it is, squared (none at the
 # far edge, a quarter at the mid, all at the near one).
-MINUTES_PER_SESSION = SESSION_SECONDS / 60
 MIN_DAY_VOLUME = 40  # a quiet contract's trades a session, for fills inside the spread
 
 
@@ -900,7 +900,7 @@ class Broker:
                 self._volumes.clear()
             self._volumes[key] = options.expected_volume(self.engine, c, day, self.calibration(c.underlying))
         # Trades on the order's other side; market makers trade even quiet contracts now and then.
-        per_minute = max(self._volumes[key], MIN_DAY_VOLUME) / MINUTES_PER_SESSION / 2
+        per_minute = max(self._volumes[key], MIN_DAY_VOLUME) / session_minutes(day) / 2
         return np.where(inside, per_minute * np.clip(x, 0, 1) ** 2, 0.0)
 
     def _mid_fill_seconds(self, o: Order, c: Contract, day: date, inputs, cal) -> np.ndarray:

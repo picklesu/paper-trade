@@ -58,14 +58,14 @@ import numpy as np
 from paper_trade.market.calendar import (
     SESSION_MINUTES,
     SESSION_SECONDS,
-    day_effects,
-    session_minutes,
     add_trading_days,
+    day_effects,
     is_trading_day,
     market_day,
     next_trading_day,
     previous_trading_day,
     session_close,
+    session_minutes,
     session_open,
     session_seconds,
     snap,
@@ -142,6 +142,7 @@ EARNINGS_PER_YEAR = 4
 # 50-60M in quiet markets and 150M+ in crises. With the regime model's calm state at a third of
 # average variance, the old square-root link left calm days at about a third of normal volume.
 VOLUME_ELASTICITY = 0.3
+EARLY_CLOSE_VOLUME = 0.46  # an early close's volume as a share of a normal day's (median of 20 years of the 40 symbols; scripts/check_holidays.py)
 VOLUME_LEVEL = 1.3  # puts the long-run average volume at about each spec's daily volume (measured over 6 seeds x 20 years)
 EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
 
@@ -1228,7 +1229,7 @@ class MarketEngine:
         halts: list[tuple[int, int, int]] = []
         noted: list[tuple[int, int, int]] = []
         if self._spy is not None:
-            found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy], min(BREAKER_LAST_MINUTE, m_day - 35) if real_day is None else m_day, m_day)
+            found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy], min(BREAKER_LAST_MINUTE, m_day - (_M - BREAKER_LAST_MINUTE)) if real_day is None else m_day, m_day)
             if real_day is None:
                 halts = found
             elif day >= BREAKER_RULE_FROM and real_day.has[self._spy]:
@@ -1255,6 +1256,9 @@ class MarketEngine:
         level = self._daily_volume * VOLUME_LEVEL * (h * scale**2) ** VOLUME_ELASTICITY * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
         level = level * holiday_volume
         shape = self._volume.shape(state, draws.volume_score)
+        if m_day < _M:  # an early close trades EARLY_CLOSE_VOLUME of a normal day, in the shape of the open minutes
+            shape = shape.copy()
+            shape[:m_day] *= EARLY_CLOSE_VOLUME * _M / shape[:m_day].sum(axis=0)
         volume = np.floor(level / _M * shape * activity * noise)
         volume[m_day:] = 0
         if real_day is not None:  # the real day's volume, spread over the minutes it was open

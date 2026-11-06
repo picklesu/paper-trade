@@ -191,7 +191,7 @@ export interface ExercisePreview {
 }
 
 export interface Expiration {
-  /** "YYYY-MM-DD"; options expire at that day's 4:00 PM close. */
+  /** "YYYY-MM-DD"; options expire at that day's close (4:00 PM, 1:00 PM on an early close). */
   date: string
   /** Quarterly: a month- or quarter-end expiration. */
   kind: 'daily' | 'weekly' | 'quarterly' | 'monthly' | 'leaps'

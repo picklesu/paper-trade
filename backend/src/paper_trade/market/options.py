@@ -28,7 +28,7 @@ Monday/Wednesday/Friday weeklies, quarterlies, June and December LEAPS), else:
 daily for SPY, QQQ and IWM over the next two weeks; Fridays for six weeks;
 monthlies (third Friday) for a year; then the next two Januaries (LEAPS). An
 expiration on a holiday moves to the trading day before. Options expire at the
-4:00 PM close.
+4:00 PM close (1:00 PM on an early close).
 """
 
 import functools

@@ -11,11 +11,12 @@ from typing import Literal
 import numpy as np
 
 from paper_trade.market.calendar import (
-    SESSION_SECONDS,
     market_day,
     next_trading_day,
     previous_trading_day,
     session_close,
+    session_length,
+    session_minutes,
     session_open,
     session_seconds,
     snap,
@@ -179,9 +180,10 @@ class MarketService:
             day, now = market_day(self.engine.time), int(session_seconds(self.engine.time))
             step = SPARKLINE_MINUTES * 60  # the same grid as the stocks: each stretch's last second, then now
             secs = np.append(np.arange(step - 1, now, step), now)
-            series[options.VIX_SYMBOL] = [round(float(v), 2) for v in self.engine.vix_at(day, np.minimum(secs, SESSION_SECONDS - 1))]
+            series[options.VIX_SYMBOL] = [round(float(v), 2) for v in self.engine.vix_at(day, np.minimum(secs, session_length(day) - 1))]
         return {
             "step_minutes": SPARKLINE_MINUTES,
+            "session_minutes": session_minutes(market_day(self.engine.time)),
             "session_open": session_open(market_day(self.engine.time)).isoformat(),
             "series": series,
         }

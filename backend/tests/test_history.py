@@ -186,3 +186,18 @@ def test_bars_before_a_mid_session_end_never_include_later_prices(h: History, in
 def test_more_is_false_when_everything_fits(h: History) -> None:
     assert h.bars("SPY", "1W", count=500)["more"] is False
     assert h.bars("SPY", "1D", count=5)["more"] is True
+
+
+def test_an_early_close_stores_and_serves_seven_half_hours() -> None:
+    engine = MarketEngine(et(2025, 11, 25, 9, 30))
+    history = History(Store(":memory:").connection, engine)
+    engine.on_day_complete = history.record
+    engine.advance(et(2025, 12, 1, 10, 0))
+    day = date(2025, 11, 28)  # the day after Thanksgiving: 9:30 AM to 1:00 PM
+    rows = history.db.execute("SELECT COUNT(*) FROM bars30 WHERE symbol = 'SPY' AND day = ?", (day.isoformat(),)).fetchone()[0]
+    assert rows == 7
+    page = history.bars("SPY", "30m", et(2025, 12, 1, 10, 0), 40)
+    session = [b for b in page["bars"] if datetime.fromtimestamp(b[0], MARKET_TZ).date() == day]
+    assert len(session) == 7 and datetime.fromtimestamp(session[-1][0], MARKET_TZ).time().isoformat() == "12:30:00"
+    hourly = [b for b in history.bars("SPY", "1h", et(2025, 12, 1, 10, 0), 40)["bars"] if datetime.fromtimestamp(b[0], MARKET_TZ).date() == day]
+    assert hourly and datetime.fromtimestamp(hourly[-1][0], MARKET_TZ).hour == 12  # the last hour bar is the half-hour 12:30 one

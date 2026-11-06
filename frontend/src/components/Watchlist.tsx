@@ -168,6 +168,7 @@ export function Watchlist({ lists, list, onPickList, quotes, stats, held, symbol
                   onRemove={remove}
                   points={spark.series[r.symbol]}
                   step={spark.step}
+                  minutes={spark.minutes}
                   drag={drag}
                   dropHere={dropBefore === r.symbol}
                 />
@@ -221,6 +222,7 @@ interface RowProps {
   onRemove: (symbol: string) => void
   points: number[] | undefined
   step: number
+  minutes: number
   drag: Drag
   dropHere: boolean
 }
@@ -228,7 +230,7 @@ interface RowProps {
 const FLASH_MS = 400
 
 /** One symbol. Memoized: a tick only re-renders rows whose quote changed. */
-const Row = memo(function Row({ symbol, quote: q, stats, qty, columns, selected, onSelect, onRemove, points, step, drag, dropHere }: RowProps) {
+const Row = memo(function Row({ symbol, quote: q, stats, qty, columns, selected, onSelect, onRemove, points, step, minutes, drag, dropHere }: RowProps) {
   const row: RowData = { symbol, quote: q, stats, qty }
   const flash = useTickFlash(q?.last)
   const classes = [selected && 'selected', dropHere && 'drop-here'].filter(Boolean).join(' ')
@@ -260,7 +262,7 @@ const Row = memo(function Row({ symbol, quote: q, stats, qty, columns, selected,
         {qty > 0 && <span className="held-dot" title={`You hold ${qty.toLocaleString()} shares`} aria-label={`held: ${qty} shares`} />}
       </td>
       {columns.map((id) => (
-        <Cell key={id} id={id} row={row} flash={flash} points={points} step={step} />
+        <Cell key={id} id={id} row={row} flash={flash} points={points} step={step} minutes={minutes} />
       ))}
       <td className="row-actions">
         <button
@@ -281,7 +283,7 @@ const Row = memo(function Row({ symbol, quote: q, stats, qty, columns, selected,
 
 const dash = <span className="muted">—</span>
 
-function Cell({ id, row, flash, points, step }: { id: ColumnId; row: RowData; flash: string; points: number[] | undefined; step: number }) {
+function Cell({ id, row, flash, points, step, minutes }: { id: ColumnId; row: RowData; flash: string; points: number[] | undefined; step: number; minutes: number }) {
   const q: Quote | undefined = row.quote
   if (!q && id !== 'position' && id !== 'avg_volume') return <td className="num">{dash}</td>
   switch (id) {
@@ -294,7 +296,7 @@ function Cell({ id, row, flash, points, step }: { id: ColumnId; row: RowData; fl
     case 'spark':
       return (
         <td className="num spark-cell">
-          <Sparkline points={points} last={q!.last} prevClose={q!.prev_close} step={step} />
+          <Sparkline points={points} last={q!.last} prevClose={q!.prev_close} step={step} minutes={minutes} />
         </td>
       )
     case 'range':

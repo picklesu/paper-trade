@@ -28,7 +28,7 @@ Monday/Wednesday/Friday weeklies, quarterlies, June and December LEAPS), else:
 daily for SPY, QQQ and IWM over the next two weeks; Fridays for six weeks;
 monthlies (third Friday) for a year; then the next two Januaries (LEAPS). An
 expiration on a holiday moves to the trading day before. Options expire at the
-4:00 PM close.
+4:00 PM close (1:00 PM on an early close).
 """
 
 import functools
@@ -45,6 +45,7 @@ from paper_trade.market.calendar import (
     market_day,
     nth_weekday,
     session_close,
+    session_length,
     session_open,
     session_seconds,
     trading_day_on_or_before,
@@ -433,7 +434,7 @@ def activity(engine: MarketEngine, spec: SymbolSpec, expiry: date, kind: str, st
     sd = spec.vol * math.sqrt(days / 365)
     z = np.log(strikes_ / anchor) / max(sd, 0.005)
     bucket = volume_bucket((expiry - today).days)
-    progress = min(1.0, max(0.02, session_seconds(engine.time) / SESSION_SECONDS))
+    progress = min(1.0, max(0.02, session_seconds(engine.time) / session_length(market_day(engine.time))))
 
     def made_up(u: np.ndarray) -> np.ndarray:  # open interest without real data
         return np.floor(_made_up_interest(spec, kind, strikes_, anchor, sd) * (0.3 + 1.4 * u))

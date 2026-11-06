@@ -7,7 +7,7 @@ const MIN_REFRESH_MS = 2000 // at high speeds, at most this often
 /** Today's prices every few minutes for `symbols`, refetched when a new stretch
  *  of minutes starts (at most every 2s), the list changes or time jumps. */
 export function useSparklines(symbols: string[], clock: ClockState | null, enabled: boolean) {
-  const [data, setData] = useState<{ step: number; series: Record<string, number[]> }>({ step: 5, series: {} })
+  const [data, setData] = useState<{ step: number; minutes: number; series: Record<string, number[]> }>({ step: 5, minutes: 390, series: {} })
   const last = useRef(0)
   const key = symbols.join(',')
   const step = data.step
@@ -20,7 +20,7 @@ export function useSparklines(symbols: string[], clock: ClockState | null, enabl
     const timer = setTimeout(() => {
       last.current = Date.now()
       fetchSparklines(key.split(','))
-        .then((d) => live && setData({ step: d.step_minutes, series: d.series }))
+        .then((d) => live && setData({ step: d.step_minutes, minutes: d.session_minutes ?? 390, series: d.series }))
         .catch(() => {})
     }, wait)
     return () => {

@@ -59,11 +59,13 @@ from paper_trade.market.calendar import (
     SESSION_MINUTES,
     SESSION_SECONDS,
     add_trading_days,
+    day_effects,
     is_trading_day,
     market_day,
     next_trading_day,
     previous_trading_day,
     session_close,
+    session_minutes,
     session_open,
     session_seconds,
     snap,
@@ -140,6 +142,7 @@ EARNINGS_PER_YEAR = 4
 # 50-60M in quiet markets and 150M+ in crises. With the regime model's calm state at a third of
 # average variance, the old square-root link left calm days at about a third of normal volume.
 VOLUME_ELASTICITY = 0.3
+EARLY_CLOSE_VOLUME = 0.46  # an early close's volume as a share of a normal day's (median of 20 years of the 40 symbols; scripts/check_holidays.py)
 VOLUME_LEVEL = 1.3  # puts the long-run average volume at about each spec's daily volume (measured over 6 seeds x 20 years)
 EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
 
@@ -175,7 +178,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 13  # 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 14  # 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -304,7 +307,8 @@ class _Skeleton:
     halted: np.ndarray | None = None  # (M,) minutes trading is halted (prices frozen, no volume)
     halts: tuple = ()  # (first halted minute, minute trading resumes (M: not today), level) for each halt
     noted_halts: tuple = ()  # on a replayed real day: the halts the real market had (found from the pinned path; nothing is frozen)
-    vix: np.ndarray | None = None  # (14,) the volatility index at each half hour and the close (None: no SPY)
+    vix: np.ndarray | None = None  # the volatility index at each half hour and the close (None: no SPY)
+    minutes: int = SESSION_MINUTES  # minutes the session is open (210 on an early close; later minutes hold the close, halted, no volume)
 
 
 @dataclass(frozen=True)
@@ -681,8 +685,8 @@ class MarketEngine:
         col = next((i for i, s in enumerate(self.specs) if s.symbol == "SPY"), None)
         if col is None:
             return None
-        minutes = np.arange(0, _M, VIX_STEP_MINUTES)
-        secs = np.append(minutes * 60, _S - 1)
+        minutes = np.arange(0, sk.minutes, VIX_STEP_MINUTES)
+        secs = np.append(minutes * 60, sk.minutes * 60 - 1)
         spots = np.append(np.exp(sk.open[minutes, col]), np.exp(sk.close[-1, col]))
         return options.vix(self.specs[col], self._option_inputs_of(sk, start, col, VIX_REGIME_WEIGHT), secs, spots)
 
@@ -828,15 +832,16 @@ class MarketEngine:
         """(minutes, N, 5) one-minute [open, high, low, close, volume] bars for a
         session, for the whole day or only through second `through`."""
         sk = self._skeleton(day)
-        bars = np.empty((_M, len(self.specs), 5))
-        bars[..., 0] = np.exp(sk.open)
-        bars[..., 1] = np.exp(sk.high)
-        bars[..., 2] = np.exp(sk.low)
-        bars[..., 3] = np.exp(sk.close)
-        bars[..., 4] = sk.volume
+        m_open = sk.minutes
+        bars = np.empty((m_open, len(self.specs), 5))
+        bars[..., 0] = np.exp(sk.open[:m_open])
+        bars[..., 1] = np.exp(sk.high[:m_open])
+        bars[..., 2] = np.exp(sk.low[:m_open])
+        bars[..., 3] = np.exp(sk.close[:m_open])
+        bars[..., 4] = sk.volume[:m_open]
         if through is None:
             return bars
-        m, sec = divmod(min(through, _S - 1), 60)
+        m, sec = divmod(min(through, m_open * 60 - 1), 60)
         bars = bars[: m + 1]
         part = self._fine(day, m)[: sec + 1]
         bars[m, :, 1] = part.max(axis=0)
@@ -1091,6 +1096,7 @@ class MarketEngine:
     def _generate(self, day: date, start: _DayStart, draws: _Draws) -> _Skeleton:
         n, k = len(self.specs), len(self.sectors)
         real_day = self._real_day(day)
+        m_day = session_minutes(day)  # an early close uses the first part of the grid; the rest holds the close
         replayed = real_day.has if real_day is not None else np.zeros(n, dtype=bool)
         regimes = np.empty(_M, dtype=np.int8)
         r = start.regime
@@ -1161,8 +1167,9 @@ class MarketEngine:
 
         # Each symbol's loadings on them, today.
         h_own = np.ones(n) if start.own_variance is None else start.own_variance
-        market_load = self._rho * self._day_sd * math.sqrt(h) * scale
-        own_sd = np.sqrt(1 - self._rho**2) * self._day_sd * np.sqrt(h_own) * scale
+        holiday_volume, holiday_sd = (1.0, 1.0) if real_day is not None else day_effects(day)  # real days carry their own
+        market_load = self._rho * self._day_sd * math.sqrt(h) * scale * holiday_sd
+        own_sd = np.sqrt(1 - self._rho**2) * self._day_sd * np.sqrt(h_own) * scale * holiday_sd
         sector_load = own_sd * self._sector_corr
         own_load = own_sd * np.sqrt(1 - self._sector_corr**2)
 
@@ -1175,7 +1182,7 @@ class MarketEngine:
             + sector_load * paths[:, 1 + self._sector_of]
             + own_load * paths[:, 1 + k :]
             + (self._drift + (SHOCK_REBOUND * excess + state_drift) * self._beta) / (TRADING_DAYS_PER_YEAR * (_S - 1)) * t
-            + self._beta * tilt[knots][:, None]
+            + self._beta * tilt[knots][:, None] * holiday_sd  # the volatility regimes' drift scales with the day's volatility
             - 0.5 * (market_load**2 * v_market[knots][:, None] + own_sd**2 * v_own[knots][:, None])
         )
         earnings_on = self._earnings_on(day) & ~replayed
@@ -1209,14 +1216,20 @@ class MarketEngine:
         # Within half a second's move of the open or close, the extreme is that price.
         high = np.where(high - top < 0.5 * one_second, top, high)
         low = np.where(bottom - low < 0.5 * one_second, bottom, low)
-        if real_day is not None:  # the real open, high, low and close
-            open_, high, low, close = _pin(open_, high, low, close, real_day)
-            move = np.abs(close - open_)
+        if real_day is not None:  # the real open, high, low and close (through the early close, if any)
+            pinned = _pin(open_[:m_day], high[:m_day], low[:m_day], close[:m_day], real_day)
+            open_, high, low, close = (np.concatenate([part, old[m_day:]]) for part, old in zip(pinned, (open_, high, low, close), strict=True))
+        if m_day < _M:  # after an early close every price stays at the close
+            open_, high, low, close = open_.copy(), high.copy(), low.copy(), close.copy()
+            for part in (open_, high, low, close):
+                part[m_day:] = close[m_day - 1]
+        move = np.abs(close - open_)
         halted = np.zeros(_M, dtype=bool)
+        halted[m_day:] = True
         halts: list[tuple[int, int, int]] = []
         noted: list[tuple[int, int, int]] = []
         if self._spy is not None:
-            found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy], BREAKER_LAST_MINUTE if real_day is None else _M)
+            found = self._halts(float(np.log(start.prev_close[self._spy])), low[:, self._spy], min(BREAKER_LAST_MINUTE, m_day - (_M - BREAKER_LAST_MINUTE)) if real_day is None else m_day, m_day)
             if real_day is None:
                 halts = found
             elif day >= BREAKER_RULE_FROM and real_day.has[self._spy]:
@@ -1241,10 +1254,15 @@ class MarketEngine:
             activity[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
         noise = draws.volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
         level = self._daily_volume * VOLUME_LEVEL * (h * scale**2) ** VOLUME_ELASTICITY * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
+        level = level * holiday_volume
         shape = self._volume.shape(state, draws.volume_score)
+        if m_day < _M:  # an early close trades EARLY_CLOSE_VOLUME of a normal day, in the shape of the open minutes
+            shape = shape.copy()
+            shape[:m_day] *= EARLY_CLOSE_VOLUME * _M / shape[:m_day].sum(axis=0)
         volume = np.floor(level / _M * shape * activity * noise)
-        if real_day is not None:  # the real day's volume, spread over the minutes
-            volume = _pin_volume(volume, real_day)
+        volume[m_day:] = 0
+        if real_day is not None:  # the real day's volume, spread over the minutes it was open
+            volume = np.concatenate([_pin_volume(volume[:m_day], real_day), volume[m_day:]])
         volume[halted] = 0
         cum_volume = np.zeros((_M + 1, n))
         cum_volume[1:] = np.cumsum(volume, axis=0)
@@ -1255,10 +1273,11 @@ class MarketEngine:
 
         # The day's shocks (a jump counts in full) set the next session's variances.
         market_day_sd = MARKET_VOL / math.sqrt(TRADING_DAYS_PER_YEAR) * math.sqrt(h)
-        shock = paths[-1, 0] - crash / market_day_sd
+        last_knot = 2 * m_day - 1  # the close (an early close ends the day's variance there)
+        shock = paths[last_knot, 0] - crash / market_day_sd
         response = GARCH_ALPHA + (GARCH_GAMMA if shock < 0 else 0.0)
         h_next = float(np.clip(self._omega * self._state_variance[state] + GARCH_BETA * h + response * shock**2 * h, *VARIANCE_RANGE))
-        own_shock = self._sector_corr * paths[-1, 1 + self._sector_of] + np.sqrt(1 - self._sector_corr**2) * paths[-1, 1 + k :]
+        own_shock = self._sector_corr * paths[last_knot, 1 + self._sector_of] + np.sqrt(1 - self._sector_corr**2) * paths[last_knot, 1 + k :]
         own_shock += np.divide(own_jump, own_sd, out=np.zeros(n), where=own_sd > 0)
         own_response = OWN_GARCH_ALPHA + np.where(own_shock < 0, OWN_GARCH_GAMMA, 0.0)
         h_own_next = np.where(
@@ -1295,7 +1314,7 @@ class MarketEngine:
             own_load=own_load,
             minute_seed=draws.minute_seed,
             # The close is the last price shown in the session (one second before 4:00).
-            next_start=_DayStart(np.exp(close[-1]), int(regimes[-1]), h_next, h_own_next, shock_next, next_state, next_z, next_phase),
+            next_start=_DayStart(np.exp(close[-1]), int(regimes[m_day - 1]), h_next, h_own_next, shock_next, next_state, next_z, next_phase),
             shock=excess,
             shock_onset=began,
             state=state,
@@ -1304,18 +1323,19 @@ class MarketEngine:
             halted=halted,
             halts=tuple(halts),
             noted_halts=tuple(noted),
+            minutes=m_day,
         )
         sk.vix = self._vix_samples(sk, start)
         return sk
 
     @staticmethod
-    def _halts(prev_log: float, spy_low: np.ndarray, last_minute: int = BREAKER_LAST_MINUTE) -> list[tuple[int, int, int]]:
+    def _halts(prev_log: float, spy_low: np.ndarray, last_minute: int = BREAKER_LAST_MINUTE, end: int = _M) -> list[tuple[int, int, int]]:
         """The circuit-breaker halts of a session from SPY's minute lows (log prices) and its
         previous close: (first halted minute, minute trading resumes, level). A level is
         crossed once; one crossed while trading is open halts from the next minute."""
         out: list[tuple[int, int, int]] = []
         level, m = 0, 0
-        while level < len(BREAKER_LEVELS) and m < _M:
+        while level < len(BREAKER_LEVELS) and m < end:
             hit = np.flatnonzero(spy_low[m:] <= prev_log + math.log(1 - BREAKER_LEVELS[level]))
             if hit.size == 0:
                 break
@@ -1325,9 +1345,9 @@ class MarketEngine:
                 level = len(BREAKER_LEVELS) - 1
                 continue
             first = k + 1
-            if first >= _M:
+            if first >= end:
                 break
-            resume = _M if last else min(first + HALT_MINUTES, _M)
+            resume = end if last else min(first + HALT_MINUTES, end)
             out.append((first, resume, level + 1))
             m, level = resume, level + 1
         return out
@@ -1337,10 +1357,11 @@ class MarketEngine:
         """The circuit-breaker halt in force now: its level (1-3) and when trading resumes
         (None: not today), or None when trading is open."""
         day = market_day(self._time)
-        minute = min(int(session_seconds(self._time)) // 60, _M - 1)
-        for first, resume, level in self._skeleton(day).halts:
+        sk = self._skeleton(day)
+        minute = min(int(session_seconds(self._time)) // 60, sk.minutes - 1)
+        for first, resume, level in sk.halts:
             if first <= minute < resume:
-                when = None if resume >= _M else (session_open(day) + timedelta(minutes=resume)).isoformat()
+                when = None if resume >= sk.minutes else (session_open(day) + timedelta(minutes=resume)).isoformat()
                 return {"level": level, "resumes": when}
         return None
 
@@ -1352,15 +1373,15 @@ class MarketEngine:
         if day not in self._starts:  # a day the market hasn't reached (or no longer keeps)
             return out
         sk = self._skeleton(day)
-        opened = session_open(day)
+        opened, end = session_open(day), sk.minutes
         for real, found in ((False, sk.halts), (True, sk.noted_halts)):
             for first, resume, level in found:
-                if real and resume >= _M:  # a real day never closed early: the estimate is a pause like the others
-                    resume = min(first + HALT_MINUTES, _M)
+                if real and resume >= end:  # a real day never closed early: the estimate is a pause like the others
+                    resume = min(first + HALT_MINUTES, end)
                 out.append(
                     {
                         "start": int((opened + timedelta(minutes=first)).timestamp()),
-                        "resume": None if resume >= _M and not real else int((opened + timedelta(minutes=min(resume, _M))).timestamp()),
+                        "resume": None if resume >= end and not real else int((opened + timedelta(minutes=min(resume, end))).timestamp()),
                         "level": level,
                         "estimated": real,
                     }

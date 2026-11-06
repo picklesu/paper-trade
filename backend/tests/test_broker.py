@@ -216,6 +216,18 @@ def test_day_order_expires_at_close_gtc_does_not() -> None:
     assert gtc.status == "working"
 
 
+def test_day_order_expires_at_the_early_close() -> None:
+    engine = MarketEngine(et(2025, 11, 26, 9, 30))
+    engine.advance(et(2025, 11, 28, 10, 0))  # the day after Thanksgiving: the market closes at 1:00 PM
+    b = Broker(engine, Store(":memory:"))
+    low = round(engine.quotes["SPY"].last * 0.5, 2)
+    day_order = b.place("SPY", "buy", 1, "limit", limit_price=low, tif="day")
+    gtc = b.place("SPY", "buy", 1, "limit", limit_price=low, tif="gtc")
+    move(b, et(2025, 12, 1, 10, 0))
+    assert day_order.status == "expired" and day_order.closed_at == et(2025, 11, 28, 13, 0)
+    assert gtc.status == "working"
+
+
 def test_gtc_fills_on_a_later_day_during_a_long_jump() -> None:
     b = make()
     last = b.engine.quotes["TSLA"].last

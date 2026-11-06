@@ -189,6 +189,8 @@ export async function fetchQuoteStats(): Promise<Record<string, QuoteStats>> {
 
 export interface Sparklines {
   step_minutes: number
+  /** Minutes the session is open (390; 210 on an early close). */
+  session_minutes?: number
   /** The session's 9:30 open (ISO). */
   session_open: string
   /** Today's prices every `step_minutes` so far, ending with the latest. */

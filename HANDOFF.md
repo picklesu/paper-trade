@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-11-06. Everything through #65, #66 and #69 is merged (#65 without CI: GitHub Actions was down, the user said not to wait; 412 backend tests passed locally). The engine PR (step 3, `MODEL_VERSION` 12) is merged (#70). Then 8g (walk-forward validation, a separate PR: propose its design and get the user's go-ahead first; the proposal is below). The user restarts and tests merged work._
+_Last updated: 2026-11-06. Everything through #79 is merged (`MODEL_VERSION` 17). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
 
 ## Where things stand
 
@@ -52,7 +52,11 @@ _Last updated: 2026-11-06. Everything through #65, #66 and #69 is merged (#65 wi
 | Intraday volume profile, step 2: `backend/scripts/fit_intraday_volume.py` and `market/volume_profile.json` (all 40 symbols; tiers from `SYMBOLS`, funds = no earnings) | Merged (without CI, Actions outage) | #65 |
 | Intraday volume profile, step 3: the engine follows each symbol's fitted profile by regime state, with a day mode (`MODEL_VERSION` 12) | Merged | #70 |
 | Holidays (the user's request): 1:00 PM early closes (day after Thanksgiving, Dec 24, Jul 3) as 210-minute sessions, and holiday volume and volatility on simulated days (`MODEL_VERSION` 14) | Merged | #76 |
-| Volume dispersion (the user's report: simulated volume looked uniform): bursty persistent minute volume, busy and quiet days, heavy days, expiration, month-end and Russell days (`MODEL_VERSION` 15) | In review | |
+| 8g. Walk-forward validation: regime layer (`walk_forward.py`) and engine level (`walk_forward_engine.py`) | Merged | #73, #74 |
+| Crisis retune: `STATE_LEVEL_ADJ` crisis 1.8 to 2.4 (`MODEL_VERSION` 13) | Merged | #75 |
+| Volume dispersion (the user's report: simulated volume looked uniform): bursty persistent minute volume, busy and quiet days, heavy days, expiration, month-end and Russell days (`MODEL_VERSION` 15) | Merged | #77 |
+| Volume flow (the user's report: weeks of near-identical daily volume): persistent day-to-day volume state (`MODEL_VERSION` 16) | Merged | #78 |
+| Order flow first (the user's point: volume moves price, not the reverse): activity state, signed imbalance, minute-level links (`MODEL_VERSION` 17) | Merged | #79 |
 | A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.

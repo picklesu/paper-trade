@@ -233,6 +233,28 @@ def day_effects(d: date) -> tuple[float, float]:
     return 1.0, 1.0
 
 
+# Event days that trade more, measured as the median volume of all 40 symbols against the previous
+# 60 ordinary sessions (20 years): the quarterly expiration (index rebalancing), other monthly
+# expirations, the last session of a month and the Russell reconstitution (last Friday of June).
+EVENT_QUARTERLY_EXPIRATION = 1.62
+EVENT_MONTHLY_EXPIRATION = 1.10
+EVENT_MONTH_END = 1.09
+EVENT_RUSSELL = 1.25
+
+
+def volume_events(d: date) -> float:
+    """Volume multiple of a simulated session on an expiration, month end or reconstitution day."""
+    if d in EARLY:
+        return 1.0
+    if d.weekday() == 4 and 15 <= d.day <= 21:
+        return EVENT_QUARTERLY_EXPIRATION if d.month in (3, 6, 9, 12) else EVENT_MONTHLY_EXPIRATION
+    if d.month == 6 and d.weekday() == 4 and d.day >= 24:
+        return EVENT_RUSSELL
+    if next_trading_day(d).month != d.month:
+        return EVENT_MONTH_END
+    return 1.0
+
+
 def trading_days_between(a: date, b: date) -> int:
     """Number of trading days d with a < d <= b (0 if b <= a)."""
     if b <= a:

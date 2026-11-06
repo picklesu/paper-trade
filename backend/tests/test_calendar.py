@@ -1,6 +1,10 @@
 from datetime import date, datetime, timedelta
 
 from paper_trade.market.calendar import (
+    EVENT_MONTH_END,
+    EVENT_MONTHLY_EXPIRATION,
+    EVENT_QUARTERLY_EXPIRATION,
+    EVENT_RUSSELL,
     EFFECT_CHRISTMAS_WEEK,
     EFFECT_THANKSGIVING_EVE,
     MARKET_TZ,
@@ -20,6 +24,7 @@ from paper_trade.market.calendar import (
     session_seconds,
     snap,
     trading_days_between,
+    volume_events,
 )
 
 
@@ -181,3 +186,12 @@ def test_holidays_are_skipped() -> None:
     # The close before a holiday weekend continues at the next open.
     assert add_trading_seconds(et(2026, 4, 2, 15, 59), 60) == et(2026, 4, 6, 9, 30)
     assert trading_days_between(date(2026, 12, 23), date(2026, 12, 28)) == 2  # Dec 24 and 28
+
+
+def test_volume_events() -> None:
+    assert volume_events(date(2025, 3, 21)) == EVENT_QUARTERLY_EXPIRATION  # third Friday of March
+    assert volume_events(date(2025, 5, 16)) == EVENT_MONTHLY_EXPIRATION
+    assert volume_events(date(2025, 6, 27)) == EVENT_RUSSELL  # last Friday of June
+    assert volume_events(date(2025, 7, 31)) == EVENT_MONTH_END
+    assert volume_events(date(2025, 3, 12)) == 1.0
+    assert volume_events(date(2025, 11, 28)) == 1.0  # an early close and a month end: its short session decides

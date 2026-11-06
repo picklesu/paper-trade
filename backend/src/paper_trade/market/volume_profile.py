@@ -38,6 +38,8 @@ class VolumeProfiles:
         # (symbols, minutes): the day-to-day mode in log shares, stretched from blocks to minutes
         self.mode = np.array([np.repeat(f["mode"], block) for f in fits])
         self.mode_sd = np.array([f["mode_sd"] for f in fits])
+        # how much a minute's volume stays above or below its profile into the next minute
+        self.minute_ar1 = np.array([f.get("minute_ar1", 0.3) for f in fits])
 
     def shape(self, state: int, score: np.ndarray) -> np.ndarray:
         """(minutes, symbols) multiples of an average minute's volume (mean 1 for each symbol) on a

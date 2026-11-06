@@ -233,6 +233,45 @@ def day_effects(d: date) -> tuple[float, float]:
     return 1.0, 1.0
 
 
+# Event days that trade more, measured as the median volume of all 40 symbols against the previous
+# 60 ordinary sessions (20 years): the quarterly expiration (index rebalancing), other monthly
+# expirations, the last session of a month and the Russell reconstitution (last Friday of June).
+EVENT_QUARTERLY_EXPIRATION = 1.62
+EVENT_MONTHLY_EXPIRATION = 1.10
+EVENT_MONTH_END = 1.09
+EVENT_RUSSELL = 1.25
+
+
+def volume_event(d: date) -> str | None:
+    """Which volume event a session is, if any: 'quarterly expiration', 'monthly expiration' (the third
+    Friday, or the Thursday before when that Friday is a holiday), 'Russell reconstitution' (the last
+    Friday of June) or 'month end'. Early closes are none (their short session decides)."""
+    if d in EARLY:
+        return None
+    third_friday = d.weekday() == 4 and 15 <= d.day <= 21
+    friday_off = d.weekday() == 3 and 14 <= d.day <= 20 and not is_trading_day(d + timedelta(days=1))
+    if third_friday or friday_off:
+        return "quarterly expiration" if d.month in (3, 6, 9, 12) else "monthly expiration"
+    if d.month == 6 and d.weekday() == 4 and d.day >= 24:
+        return "Russell reconstitution"
+    if next_trading_day(d).month != d.month:
+        return "month end"
+    return None
+
+
+_EVENT_VOLUME = {
+    "quarterly expiration": EVENT_QUARTERLY_EXPIRATION,
+    "monthly expiration": EVENT_MONTHLY_EXPIRATION,
+    "Russell reconstitution": EVENT_RUSSELL,
+    "month end": EVENT_MONTH_END,
+}
+
+
+def volume_events(d: date) -> float:
+    """Volume multiple of a simulated session on an expiration, month end or reconstitution day."""
+    return _EVENT_VOLUME.get(volume_event(d), 1.0)
+
+
 def trading_days_between(a: date, b: date) -> int:
     """Number of trading days d with a < d <= b (0 if b <= a)."""
     if b <= a:

@@ -52,6 +52,7 @@ _Last updated: 2026-11-06. Everything through #65, #66 and #69 is merged (#65 wi
 | Intraday volume profile, step 2: `backend/scripts/fit_intraday_volume.py` and `market/volume_profile.json` (all 40 symbols; tiers from `SYMBOLS`, funds = no earnings) | Merged (without CI, Actions outage) | #65 |
 | Intraday volume profile, step 3: the engine follows each symbol's fitted profile by regime state, with a day mode (`MODEL_VERSION` 12) | Merged | #70 |
 | Holidays (the user's request): 1:00 PM early closes (day after Thanksgiving, Dec 24, Jul 3) as 210-minute sessions, and holiday volume and volatility on simulated days (`MODEL_VERSION` 14) | Merged | #76 |
+| Volume dispersion (the user's report: simulated volume looked uniform): bursty persistent minute volume, busy and quiet days, heavy days, expiration, month-end and Russell days (`MODEL_VERSION` 15) | In review | |
 | A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.
@@ -72,6 +73,10 @@ _Last updated: 2026-11-06. Everything through #65, #66 and #69 is merged (#65 wi
 4. Optional: label intraday candles on replayed days as simulated (the user has not asked for it yet).
 
 **Caveats to tell the user:** fitted shapes are per symbol and per state; crisis rests on one episode; the sim cannot reproduce a specific real 5-minute candle, only its distribution.
+
+### Volume dispersion (the user's report, 2026-11-06: futures to 2027-10-10 had "very uniform" volume; `MODEL_VERSION` 15)
+
+**Cause:** minute volume was an independent lognormal (sigma 0.5), so 5-minute bars were far smoother than the market's (mid-session spread of a block's share of the day: real 0.64, simulated 0.36 across 40 symbols); the fit's persistence (`minute_ar1`, SPY 0.31) was unused, and day volume had no events or own-symbol days (daily volume: ac20 and skew off, calm futures flat). **Built:** `scripts/check_volume.py --db PATH` compares real and simulated dispersion (needs `daily`, `macro` and `intraday` in the db). `_volume_noise`: minute volume is an AR(1) lognormal (each symbol's fitted persistence) with bursts (`VOLUME_BURST` 4% a minute, +4x on average; mean kept at 1); `_volume_day`: a market-wide day factor (0.08), a symbol's own (0.12) and heavy days (4%, +1.2x), mean 1; `calendar.volume_events`: quarterly expiration 1.62, other third Fridays 1.10, month end 1.09, Russell reconstitution 1.25 (median of 40 symbols against ordinary sessions, 20 years; simulated days only); `VOLUME_ELASTICITY` 0.3 to 0.25 (daily volume followed the volatility regime too persistently). **Result (6 seeds x 2 years from the real start, median of 40 symbols, real / simulated):** 5-minute spread 0.64 / 0.64; daily sd of log 0.38 (3 years; 0.42 over 20 years detrended) / 0.44; lag-1 autocorrelation 0.57 / 0.52; lag-20 0.13 (0.23 detrended) / 0.34; skew 0.67 / 0.81; events 1.62 / 1.54 (quarterly), 1.25 / 1.57 (Russell: one date, few samples). Long-run mean volume is 1.03 of each spec's daily volume. Prices are unchanged for a seed (the new volume draws sit at the end of each stream; checked against model 14). The AR(1) loop costs about 11% of generation time. **Left:** the daily spread and the lag-20 persistence are a little above real (the volatility regime still moves volume slowly), TSLA's real 5-minute spread is lower (0.39) than the pooled model's; no FOMC, earnings-season or holiday-week events beyond `day_effects`.
 
 ### Holidays and early closes (the user's request, 2026-11-06; `MODEL_VERSION` 14)
 

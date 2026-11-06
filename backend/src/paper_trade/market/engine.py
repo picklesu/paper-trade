@@ -69,6 +69,7 @@ from paper_trade.market.calendar import (
     session_open,
     session_seconds,
     snap,
+    volume_events,
 )
 from paper_trade.market.realbars import RealBars, RealBarsGone, RealDay
 from paper_trade.market.regime import STATES, RegimeParams, load_params
@@ -141,9 +142,9 @@ EARNINGS_PER_YEAR = 4
 # Volume follows the market's variance more gently than volatility does: real SPY trades about
 # 50-60M in quiet markets and 150M+ in crises. With the regime model's calm state at a third of
 # average variance, the old square-root link left calm days at about a third of normal volume.
-VOLUME_ELASTICITY = 0.3
+VOLUME_ELASTICITY = 0.25
 EARLY_CLOSE_VOLUME = 0.46  # an early close's volume as a share of a normal day's (median of 20 years of the 40 symbols; scripts/check_holidays.py)
-VOLUME_LEVEL = 1.3  # puts the long-run average volume at about each spec's daily volume (measured over 6 seeds x 20 years)
+VOLUME_LEVEL = 1.3  # puts the long-run average volume at about each spec's daily volume (measured over 6 seeds x 20 years; 1.03 again with the dispersion and event factors, 8 seeds x 25 years)
 EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
 
 # GJR-GARCH(1,1) on daily variance, as a multiple of normal (averaging 1). GAMMA is
@@ -158,7 +159,13 @@ VARIANCE_RANGE = (0.03, 25.0)
 # fading over BURST_DECAY of the session (about 12 minutes).
 OPEN_BURST, CLOSE_BURST, BURST_DECAY = 1.5, 0.5, 0.03
 
-VOLUME_NOISE = 0.5  # lognormal sigma of per-minute volume
+VOLUME_NOISE = 0.5  # lognormal sigma of per-minute volume (an AR(1) in the log: each symbol's fitted persistence)
+VOLUME_BURST = 0.04  # chance a minute's volume bursts (news, program trades)
+VOLUME_BURST_SIZE = 4.0  # a burst adds this many times the minute's usual volume on average
+VOLUME_DAY_MARKET = 0.08  # lognormal sigma of a day's volume common to all symbols (the market's busy and quiet days)
+VOLUME_DAY_OWN = 0.12  # and of one symbol's own
+VOLUME_SPIKE = 0.04  # chance a symbol has a heavy day of its own (news, a block trade, a rebalance)
+VOLUME_SPIKE_SIZE = 1.2  # which adds this many times the day's usual volume on average
 # Volume follows price: a minute's volume scales with ACTIVITY_BASE plus the rest
 # times its squared standardized move (capped at ACTIVITY_CAP), and news brings a
 # burst of NEWS_VOLUME_BURST times more, fading over NEWS_VOLUME_DECAY minutes.
@@ -178,7 +185,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 14  # 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 15  # 15: volume as uneven as the market's (persistent, bursty minute volume; busy and quiet days; heavy days; expiration, month-end and Russell days; VOLUME_ELASTICITY 0.25); 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -268,7 +275,7 @@ class _Draws:
     between: np.ndarray  # (M, P) shocks from each minute's close to the next one's open
     u: np.ndarray  # (M, 2) regime switching
     extremes: np.ndarray  # (M, N, 2) uniforms in (0, 1] for each minute's high and low
-    volume_noise: np.ndarray  # (M, N)
+    volume_noise: np.ndarray  # (M, N) log-normal draws (the log over VOLUME_NOISE is a unit normal)
     news_minute: np.ndarray  # (N,) news arrives after this minute's close, or -1 for none
     news_size: np.ndarray  # (N,) unit-variance news jump sizes
     earnings: np.ndarray  # (N,) unit-variance earnings moves
@@ -280,6 +287,9 @@ class _Draws:
     regime_u: float = 0.5  # picks the regime's next state
     regime_z: np.ndarray | None = None  # unit normals for the macro features' next values
     volume_score: np.ndarray | None = None  # (N,) unit normals: how close-heavy each symbol's volume is today
+    volume_day: np.ndarray | None = None  # (N, 3): a unit normal, a uniform and an exponential for the symbol's day-level volume
+    volume_burst: np.ndarray | None = None  # (M, N) uniforms: which minutes' volume bursts
+    volume_market: float = 0.0  # a unit normal: the market's busy or quiet day
 
 
 @dataclass
@@ -1013,7 +1023,10 @@ class MarketEngine:
         between = np.empty((_M, p))
         extremes = np.empty((_M, n, 2))
         volume_noise = np.empty((_M, n))
+        volume_burst = np.zeros((_M, n))
         volume_score = np.zeros(n)
+        volume_day = np.zeros((n, 3))
+        volume_market = 0.0
         news_minute = np.full(n, -1)
         news_size = np.zeros(n)
         earnings = np.zeros(n)
@@ -1029,6 +1042,7 @@ class MarketEngine:
                 crash_u, crash_size = rng.random(), rng.exponential()
                 shock_u, shock_size = rng.random(), rng.random()
                 regime_u, regime_z = rng.random(), rng.standard_normal(len(self._macro.center))
+                volume_market = rng.standard_normal()  # last in the stream, so the draws above are unchanged
             elif j > k:
                 i = j - 1 - k
                 extremes[:, i] = 1 - rng.random((_M, 2))
@@ -1037,7 +1051,9 @@ class MarketEngine:
                     news_minute[i] = rng.integers(0, _M - 1)
                 news_size[i] = rng.standard_t(JUMP_DF) * jump_scale
                 earnings[i] = rng.standard_t(JUMP_DF) * jump_scale
-                volume_score[i] = rng.standard_normal()  # last in the stream, so the draws above are unchanged
+                volume_score[i] = rng.standard_normal()
+                volume_day[i] = rng.standard_normal(), rng.random(), rng.exponential()  # these two are last in the stream, so every draw above is unchanged
+                volume_burst[:, i] = rng.random(_M)
         return _Draws(
             gap,
             within,
@@ -1056,6 +1072,9 @@ class MarketEngine:
             regime_u,
             regime_z,
             volume_score,
+            volume_day,
+            volume_burst,
+            volume_market,
         )
 
     def _draws(self, day: date) -> _Draws:
@@ -1077,7 +1096,7 @@ class MarketEngine:
             if m >= _M:
                 continue
             new = self._random(seed, day)
-            for name in ("within", "between", "u", "extremes", "volume_noise", "minute_seed"):
+            for name in ("within", "between", "u", "extremes", "volume_noise", "volume_burst", "minute_seed"):
                 getattr(draws, name)[m:] = getattr(new, name)[m:]
             # News after the minute it arrives in: earlier news stays; later, the new epoch's.
             keep = (draws.news_minute >= 0) & (draws.news_minute < m)
@@ -1252,9 +1271,11 @@ class MarketEngine:
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
             activity[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
-        noise = draws.volume_noise / math.exp(VOLUME_NOISE**2 / 2)  # mean 1
+        noise = self._volume_noise(draws.volume_noise, draws.volume_burst)
         level = self._daily_volume * VOLUME_LEVEL * (h * scale**2) ** VOLUME_ELASTICITY * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
         level = level * holiday_volume
+        if real_day is None:  # real days carry their own volume (and symbols without a bar stay as they were)
+            level = level * self._volume_day(draws) * volume_events(day)
         shape = self._volume.shape(state, draws.volume_score)
         if m_day < _M:  # an early close trades EARLY_CLOSE_VOLUME of a normal day, in the shape of the open minutes
             shape = shape.copy()
@@ -1327,6 +1348,35 @@ class MarketEngine:
         )
         sk.vix = self._vix_samples(sk, start)
         return sk
+
+    def _volume_noise(self, lognormal: np.ndarray, burst_u: np.ndarray | None) -> np.ndarray:
+        """(M, N) multiples of the profile (mean 1): a log-normal that persists from minute to minute
+        (each symbol's fitted persistence), with occasional bursts. Real minute volume is clumpy; an
+        independent log-normal made 5-minute volume far smoother than the market's. `lognormal` are the
+        per-minute log-normal draws (their log over VOLUME_NOISE is a unit normal), `burst_u` uniforms."""
+        rho = np.clip(self._volume.minute_ar1, 0.0, 0.95)
+        z = np.log(lognormal) / VOLUME_NOISE
+        y = np.empty_like(z)
+        y[0] = z[0]
+        step = np.sqrt(1 - rho**2)
+        for m in range(1, len(z)):
+            y[m] = rho * y[m - 1] + step * z[m]
+        noise = np.exp(VOLUME_NOISE * y - VOLUME_NOISE**2 / 2)
+        if burst_u is None:
+            return noise
+        burst = np.where(burst_u < VOLUME_BURST, 1 - VOLUME_BURST_SIZE * np.log(np.maximum(burst_u, 1e-12) / VOLUME_BURST), 1.0)
+        return noise * burst / (1 + VOLUME_BURST * VOLUME_BURST_SIZE)
+
+    @staticmethod
+    def _volume_day(draws: _Draws) -> np.ndarray | float:
+        """(N,) the day's volume against the usual (mean 1): a busy or quiet day for the whole market,
+        one of the symbol's own, and now and then a heavy day."""
+        if draws.volume_day is None:
+            return 1.0
+        own, u, size = draws.volume_day[:, 0], draws.volume_day[:, 1], draws.volume_day[:, 2]
+        spike = np.where(u < VOLUME_SPIKE, 1 + VOLUME_SPIKE_SIZE * size, 1.0) / (1 + VOLUME_SPIKE * VOLUME_SPIKE_SIZE)
+        sigma2 = VOLUME_DAY_MARKET**2 + VOLUME_DAY_OWN**2
+        return np.exp(VOLUME_DAY_MARKET * draws.volume_market + VOLUME_DAY_OWN * own - sigma2 / 2) * spike
 
     @staticmethod
     def _halts(prev_log: float, spy_low: np.ndarray, last_minute: int = BREAKER_LAST_MINUTE, end: int = _M) -> list[tuple[int, int, int]]:

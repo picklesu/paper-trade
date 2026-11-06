@@ -762,3 +762,57 @@ def test_holiday_weeks_trade_less() -> None:
         quiet += [v for d, v in vols.items() if d.month == 12 and 26 <= d.day <= 31]
         normal += [v for d, v in vols.items() if d.month in (3, 4, 5, 9, 10)]
     assert np.median(quiet) < 0.85 * np.median(normal)  # real: 0.66
+
+
+def test_minute_volume_noise_persists_and_bursts_with_mean_one() -> None:
+    spy = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    engine = MarketEngine(START, seed=1, specs=spy)
+    rng = np.random.default_rng(0)
+    n = 390 * 400
+    noise = engine._volume_noise(rng.lognormal(0.0, engine_mod.VOLUME_NOISE, (n, 1)), rng.random((n, 1)))
+    assert noise.mean() == pytest.approx(1.0, rel=0.03)
+    x = np.log(noise[:, 0])
+    assert np.corrcoef(x[:-1], x[1:])[0, 1] > 0.15  # a busy minute is followed by a busy one (SPY's fitted persistence is 0.31)
+    assert (noise > 3).mean() > 0.01  # and there are bursts
+
+
+def test_day_level_volume_has_mean_one_and_spikes() -> None:
+    rng = np.random.default_rng(1)
+    n = 20000
+    draws = engine_mod._Draws(
+        gap=np.zeros(1), within=np.zeros((1, 1)), between=np.zeros((1, 1)), u=np.zeros((1, 2)), extremes=np.zeros((1, 1, 2)),
+        volume_noise=np.zeros((1, 1)), news_minute=np.zeros(1), news_size=np.zeros(1), earnings=np.zeros(1), crash_u=1.0,
+        crash_size=0.0, minute_seed=np.zeros(1, dtype=np.int64),
+    )
+    out = []
+    for k in range(n):
+        draws.volume_day = np.array([[rng.standard_normal(), rng.random(), rng.exponential()]])
+        draws.volume_market = float(rng.standard_normal())
+        out.append(MarketEngine._volume_day(draws)[0])
+    out = np.array(out)
+    assert out.mean() == pytest.approx(1.0, rel=0.03)
+    assert np.percentile(out, 99.5) > 1.8 * np.median(out)  # heavy days
+
+
+def test_five_minute_volume_is_as_uneven_as_the_real_market() -> None:
+    spy = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    engine = MarketEngine(START, seed=2, specs=spy)
+    blocks = []
+    engine.on_day_complete = lambda d: blocks.append(engine._skeleton(d).volume[:, 0].reshape(78, 5).sum(axis=1)) if not is_early_close(d) else None
+    engine.advance(add_trading_seconds(START, 120 * 23_400))
+    share = np.array(blocks) / np.array(blocks).sum(axis=1, keepdims=True)
+    mid = share[:, 24:54]
+    assert (mid.std(axis=0) / mid.mean(axis=0)).mean() > 0.5  # SPY's real figure is 0.64; independent minutes gave 0.36
+
+
+def test_event_and_day_factors_reach_a_simulated_session_but_not_a_real_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    spy = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    day = date(2026, 1, 8)
+
+    def volume(factor: float) -> float:
+        monkeypatch.setattr(engine_mod, "volume_events", lambda d: factor)
+        engine = MarketEngine(START, seed=4, specs=spy)
+        engine.advance(session_open(next_trading_day(day)))
+        return float(engine._skeleton(day).volume.sum())
+
+    assert volume(2.0) / volume(1.0) == pytest.approx(2.0, rel=0.01)

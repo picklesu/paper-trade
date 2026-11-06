@@ -9,9 +9,9 @@ for `--seeds` seeds. Per symbol, then the median over symbols and four examples:
 * mid-session 5-minute volume: the spread (standard deviation over the mean) of each
   block's share of the day, 11:30 to 14:00 (the real market's bursts show here);
 * daily volume: standard deviation of the log, lag-1 and lag-20 autocorrelation, skew;
-* event days: median volume against the previous 60 ordinary sessions on quarterly
-  expirations (third Friday of Mar/Jun/Sep/Dec), other third Fridays, the last session of a
-  month, and the Russell reconstitution (last Friday of June).
+* event days (`calendar.volume_event`): median volume against the previous 60 ordinary
+  sessions on quarterly and other monthly expirations, the last session of a month and the
+  Russell reconstitution.
 """
 
 from __future__ import annotations
@@ -36,20 +36,6 @@ MID = slice(24, 54)  # 5-minute blocks from 11:30 to 14:00
 SAMPLE = ("SPY", "AAPL", "KO", "TSLA")
 
 
-def third_friday(d: date) -> bool:
-    return d.weekday() == 4 and 15 <= d.day <= 21
-
-
-def event(d: date, month_end: bool) -> str | None:
-    if d.month == 6 and d.weekday() == 4 and d.day >= 22 and d.day + 7 > 30:
-        return "Russell reconstitution"
-    if third_friday(d):
-        return "quarterly expiration" if d.month in (3, 6, 9, 12) else "monthly expiration"
-    if month_end:
-        return "month end"
-    return None
-
-
 def block_cv(day_blocks: np.ndarray) -> float:
     """Mean over mid-session blocks of the spread of the block's share of the day."""
     share = day_blocks / day_blocks.sum(axis=1, keepdims=True)
@@ -64,8 +50,7 @@ def daily_stats(v: np.ndarray) -> dict:
 
 
 def events(days: list[date], v: np.ndarray, acc: dict[str, list[float]]) -> None:
-    last_of_month = {days[i] for i in range(len(days) - 1) if days[i].month != days[i + 1].month}
-    tags = [event(d, d in last_of_month) for d in days]
+    tags = [cal.volume_event(d) for d in days]
     for i in range(60, len(days)):
         ordinary = [j for j in range(i - 60, i) if tags[j] is None and not cal.is_early_close(days[j])]
         if tags[i] is None or len(ordinary) < 20:

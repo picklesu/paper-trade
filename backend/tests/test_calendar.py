@@ -1,12 +1,12 @@
 from datetime import date, datetime, timedelta
 
 from paper_trade.market.calendar import (
+    EFFECT_CHRISTMAS_WEEK,
+    EFFECT_THANKSGIVING_EVE,
     EVENT_MONTH_END,
     EVENT_MONTHLY_EXPIRATION,
     EVENT_QUARTERLY_EXPIRATION,
     EVENT_RUSSELL,
-    EFFECT_CHRISTMAS_WEEK,
-    EFFECT_THANKSGIVING_EVE,
     MARKET_TZ,
     SESSION_SECONDS,
     add_trading_seconds,
@@ -194,4 +194,6 @@ def test_volume_events() -> None:
     assert volume_events(date(2025, 6, 27)) == EVENT_RUSSELL  # last Friday of June
     assert volume_events(date(2025, 7, 31)) == EVENT_MONTH_END
     assert volume_events(date(2025, 3, 12)) == 1.0
+    assert volume_events(date(2025, 4, 17)) == EVENT_MONTHLY_EXPIRATION  # Good Friday (the 18th) is closed: expiration moves to Thursday
+    assert volume_events(date(2025, 4, 21)) == 1.0
     assert volume_events(date(2025, 11, 28)) == 1.0  # an early close and a month end: its short session decides

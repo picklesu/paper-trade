@@ -60,7 +60,6 @@ from paper_trade.market.calendar import (
     SESSION_SECONDS,
     add_trading_days,
     day_effects,
-    volume_events,
     is_trading_day,
     market_day,
     next_trading_day,
@@ -70,6 +69,7 @@ from paper_trade.market.calendar import (
     session_open,
     session_seconds,
     snap,
+    volume_events,
 )
 from paper_trade.market.realbars import RealBars, RealBarsGone, RealDay
 from paper_trade.market.regime import STATES, RegimeParams, load_params
@@ -144,7 +144,7 @@ EARNINGS_PER_YEAR = 4
 # average variance, the old square-root link left calm days at about a third of normal volume.
 VOLUME_ELASTICITY = 0.25
 EARLY_CLOSE_VOLUME = 0.46  # an early close's volume as a share of a normal day's (median of 20 years of the 40 symbols; scripts/check_holidays.py)
-VOLUME_LEVEL = 1.3  # puts the long-run average volume at about each spec's daily volume (measured over 6 seeds x 20 years)
+VOLUME_LEVEL = 1.3  # puts the long-run average volume at about each spec's daily volume (measured over 6 seeds x 20 years; 1.03 again with the dispersion and event factors, 8 seeds x 25 years)
 EARNINGS_VOLUME = 2.5  # volume multiple on a symbol's earnings day
 
 # GJR-GARCH(1,1) on daily variance, as a multiple of normal (averaging 1). GAMMA is
@@ -275,7 +275,7 @@ class _Draws:
     between: np.ndarray  # (M, P) shocks from each minute's close to the next one's open
     u: np.ndarray  # (M, 2) regime switching
     extremes: np.ndarray  # (M, N, 2) uniforms in (0, 1] for each minute's high and low
-    volume_noise: np.ndarray  # (M, N, 2): a unit normal and a uniform for each minute's volume
+    volume_noise: np.ndarray  # (M, N) log-normal draws (the log over VOLUME_NOISE is a unit normal)
     news_minute: np.ndarray  # (N,) news arrives after this minute's close, or -1 for none
     news_size: np.ndarray  # (N,) unit-variance news jump sizes
     earnings: np.ndarray  # (N,) unit-variance earnings moves
@@ -288,6 +288,7 @@ class _Draws:
     regime_z: np.ndarray | None = None  # unit normals for the macro features' next values
     volume_score: np.ndarray | None = None  # (N,) unit normals: how close-heavy each symbol's volume is today
     volume_day: np.ndarray | None = None  # (N, 3): a unit normal, a uniform and an exponential for the symbol's day-level volume
+    volume_burst: np.ndarray | None = None  # (M, N) uniforms: which minutes' volume bursts
     volume_market: float = 0.0  # a unit normal: the market's busy or quiet day
 
 
@@ -1021,7 +1022,8 @@ class MarketEngine:
         within = np.empty((_M, p))
         between = np.empty((_M, p))
         extremes = np.empty((_M, n, 2))
-        volume_noise = np.empty((_M, n, 2))
+        volume_noise = np.empty((_M, n))
+        volume_burst = np.zeros((_M, n))
         volume_score = np.zeros(n)
         volume_day = np.zeros((n, 3))
         volume_market = 0.0
@@ -1044,13 +1046,14 @@ class MarketEngine:
             elif j > k:
                 i = j - 1 - k
                 extremes[:, i] = 1 - rng.random((_M, 2))
-                volume_noise[:, i, 0], volume_noise[:, i, 1] = rng.standard_normal(_M), rng.random(_M)
+                volume_noise[:, i] = rng.lognormal(0.0, VOLUME_NOISE, _M)
                 if rng.random() < NEWS_PER_YEAR / TRADING_DAYS_PER_YEAR:
                     news_minute[i] = rng.integers(0, _M - 1)
                 news_size[i] = rng.standard_t(JUMP_DF) * jump_scale
                 earnings[i] = rng.standard_t(JUMP_DF) * jump_scale
                 volume_score[i] = rng.standard_normal()
-                volume_day[i] = rng.standard_normal(), rng.random(), rng.exponential()  # last in the stream, so the draws above are unchanged
+                volume_day[i] = rng.standard_normal(), rng.random(), rng.exponential()  # these two are last in the stream, so every draw above is unchanged
+                volume_burst[:, i] = rng.random(_M)
         return _Draws(
             gap,
             within,
@@ -1070,6 +1073,7 @@ class MarketEngine:
             regime_z,
             volume_score,
             volume_day,
+            volume_burst,
             volume_market,
         )
 
@@ -1092,7 +1096,7 @@ class MarketEngine:
             if m >= _M:
                 continue
             new = self._random(seed, day)
-            for name in ("within", "between", "u", "extremes", "volume_noise", "minute_seed"):
+            for name in ("within", "between", "u", "extremes", "volume_noise", "volume_burst", "minute_seed"):
                 getattr(draws, name)[m:] = getattr(new, name)[m:]
             # News after the minute it arrives in: earlier news stays; later, the new epoch's.
             keep = (draws.news_minute >= 0) & (draws.news_minute < m)
@@ -1267,11 +1271,11 @@ class MarketEngine:
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
             activity[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
-        noise = self._volume_noise(draws.volume_noise)
+        noise = self._volume_noise(draws.volume_noise, draws.volume_burst)
         level = self._daily_volume * VOLUME_LEVEL * (h * scale**2) ** VOLUME_ELASTICITY * np.where(earnings_on, EARNINGS_VOLUME, 1.0)
-        level = level * holiday_volume * self._volume_day(draws)
-        if real_day is None:
-            level = level * volume_events(day)
+        level = level * holiday_volume
+        if real_day is None:  # real days carry their own volume (and symbols without a bar stay as they were)
+            level = level * self._volume_day(draws) * volume_events(day)
         shape = self._volume.shape(state, draws.volume_score)
         if m_day < _M:  # an early close trades EARLY_CLOSE_VOLUME of a normal day, in the shape of the open minutes
             shape = shape.copy()
@@ -1345,23 +1349,26 @@ class MarketEngine:
         sk.vix = self._vix_samples(sk, start)
         return sk
 
-    def _volume_noise(self, draws: np.ndarray) -> np.ndarray:
+    def _volume_noise(self, lognormal: np.ndarray, burst_u: np.ndarray | None) -> np.ndarray:
         """(M, N) multiples of the profile (mean 1): a log-normal that persists from minute to minute
         (each symbol's fitted persistence), with occasional bursts. Real minute volume is clumpy; an
-        independent log-normal made 5-minute volume far smoother than the market's."""
-        rho = self._volume.minute_ar1
-        z = draws[..., 0]
+        independent log-normal made 5-minute volume far smoother than the market's. `lognormal` are the
+        per-minute log-normal draws (their log over VOLUME_NOISE is a unit normal), `burst_u` uniforms."""
+        rho = np.clip(self._volume.minute_ar1, 0.0, 0.95)
+        z = np.log(lognormal) / VOLUME_NOISE
         y = np.empty_like(z)
         y[0] = z[0]
         step = np.sqrt(1 - rho**2)
         for m in range(1, len(z)):
             y[m] = rho * y[m - 1] + step * z[m]
-        u = draws[..., 1]
-        burst = np.where(u < VOLUME_BURST, 1 - VOLUME_BURST_SIZE * np.log(np.maximum(u, 1e-12) / VOLUME_BURST), 1.0)
-        return np.exp(VOLUME_NOISE * y - VOLUME_NOISE**2 / 2) * burst / (1 + VOLUME_BURST * VOLUME_BURST_SIZE)
+        noise = np.exp(VOLUME_NOISE * y - VOLUME_NOISE**2 / 2)
+        if burst_u is None:
+            return noise
+        burst = np.where(burst_u < VOLUME_BURST, 1 - VOLUME_BURST_SIZE * np.log(np.maximum(burst_u, 1e-12) / VOLUME_BURST), 1.0)
+        return noise * burst / (1 + VOLUME_BURST * VOLUME_BURST_SIZE)
 
     @staticmethod
-    def _volume_day(draws: _Draws) -> np.ndarray:
+    def _volume_day(draws: _Draws) -> np.ndarray | float:
         """(N,) the day's volume against the usual (mean 1): a busy or quiet day for the whole market,
         one of the symbol's own, and now and then a heavy day."""
         if draws.volume_day is None:

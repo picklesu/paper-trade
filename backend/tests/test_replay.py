@@ -328,3 +328,43 @@ def test_a_backfill_ending_off_the_real_close_rescales_only_the_simulated_days()
     assert engine._starts[sim].prev_close[i] == pytest.approx(bars["SPY"][-1].close * engine.backfill_scale[i], rel=1e-9)
     assert engine._starts[origin_day].prev_close[i] == pytest.approx(target[i], rel=1e-9)
     assert engine.real_through == last
+
+
+def test_a_saved_market_takes_in_real_days_fetched_since() -> None:
+    bars = real_bars()
+    engine = engine_with(bars)
+    last = bars["SPY"][-1].day
+    later = next_trading_day(next_trading_day(last))
+    engine.advance(session_open(later))  # the days after the real ones were simulated and lived
+    simulated = engine._skeleton(next_trading_day(last)).close[-1].copy()
+    before = engine._skeleton(last).close[-1].copy()
+    state = engine.to_state()
+    more = real_bars(days=12)
+    again = MarketEngine.from_state(state, real=RealBars(NAMES, more))
+    assert again.real_through == last
+    assert again.extend_real() and again.extended_from == last
+    assert again.real_through == more["SPY"][-1].day
+    assert again.time == engine.time and again.generated_through == later
+    check_day(again, more, next_trading_day(last))  # the replaced day follows the real bar
+    check_day(again, more, later)
+    assert not np.allclose(again._skeleton(next_trading_day(last)).close[-1], simulated)
+    assert np.allclose(again._skeleton(last).close[-1], before)  # days before the old cutoff are untouched
+    assert not again.extend_real()  # nothing newer
+
+
+def test_real_days_are_not_taken_in_over_trades_on_the_days_they_replace() -> None:
+    from paper_trade.main import _extend_real
+    from paper_trade.store import Store
+    from paper_trade.trading.orders import Order
+
+    bars = real_bars()
+    last = bars["SPY"][-1].day
+    later = next_trading_day(last)
+    for traded_on, extended in ((last, True), (later, False)):
+        engine = engine_with(bars)
+        engine.advance(session_open(next_trading_day(later)))
+        engine = MarketEngine.from_state(engine.to_state(), real=RealBars(NAMES, real_bars(days=12)))
+        store = Store(":memory:")
+        store.save_order(Order(1, "AAPL", "buy", 1, "market", "day", None, None, session_open(traded_on)))
+        _extend_real(store, engine)
+        assert (engine.real_through > last) is extended

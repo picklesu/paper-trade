@@ -37,9 +37,25 @@ def load_market(store: Store, seed: int, real: RealBars | None = None) -> tuple[
             engine = MarketEngine.continue_older(state, real=real)
     else:
         engine = MarketEngine.continue_older(state, real=real)
+    _extend_real(store, engine)
     saved = store.get("clock", {})
     clock = SimClock(start=engine.time, speed=saved.get("speed", 1), paused=saved.get("paused", False))
     return clock, engine
+
+
+def _extend_real(store: Store, engine: MarketEngine) -> None:
+    """Bring real days fetched since the market began into it, unless an order was
+    placed, filled or closed on the days they would replace (their prices would change under it)."""
+    old = engine.real_through
+    if old is None:
+        return
+    for o in store.load_orders():
+        stamps = (o.created_at, o.filled_at, o.closed_at, o.triggered_at)
+        if any(t is not None and calendar.market_day(t) > old for t in stamps):
+            log.info("newer real days exist, but the account traded after %s: the market keeps its old cutoff", old)
+            return
+    if engine.extend_real():
+        log.info("the market now replays real days through %s (was %s)", engine.real_through, old)
 
 
 def create_app(seed: int = 42, db_path: str | Path | None = None, history_days: int = HISTORY_DAYS) -> FastAPI:

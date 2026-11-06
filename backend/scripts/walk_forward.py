@@ -69,6 +69,7 @@ def init(db: str) -> None:
     days, r, raw, series = fr.load(db)
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     rows = con.execute("SELECT day, close FROM daily WHERE symbol='SPY' ORDER BY day").fetchall()
+    con.close()
     D.update(
         block_starts=days,
         r=r,
@@ -82,7 +83,7 @@ def init(db: str) -> None:
 
 def fit_model(n: int, variant: str) -> tuple[RegimeParams, bool]:
     """The model refit on the first `n` weeks (as `fit_regime.main` does). Returns the
-    parameters, the share clipping count and whether the share was clipped."""
+    parameters and whether a state's share was under 0.1% (then floored, a degenerate fit)."""
     r, raw = D["r"][:n], D["raw"][:n]
     fr.STICKY = STICKY_OF[variant]
     if variant == "nomacro":
@@ -155,7 +156,8 @@ def one(task: tuple[int, str]) -> dict:
         try:
             params, clipped = fit_model(n, variant)
             m = int(D["marks"][n - 1]) + fr.PERIOD
-            found = RealRegime(params, D["days"][: m + 1], D["closes"][: m + 1], D["series"]).at(D["days"][m])
+            series = {} if variant == "nomacro" else D["series"]  # no macro inputs at all, also for the start
+            found = RealRegime(params, D["days"][: m + 1], D["closes"][: m + 1], series).at(D["days"][m])
             state0, z0 = found
             sim, states = simulate(params, state0, z0, max(HORIZONS), PATHS, rng)
         except Exception as e:  # a fit that fails is reported, not hidden
@@ -179,7 +181,7 @@ def one(task: tuple[int, str]) -> dict:
     return out
 
 
-def labels(db: str) -> np.ndarray:
+def labels() -> np.ndarray:
     """Weeks the full-sample fit (smoothed) calls a crisis: what 'happened', for scoring."""
     r, raw = D["r"], D["raw"]
     fr.STICKY = STICKY_OF["base"]
@@ -201,7 +203,8 @@ def summarize(results: list[dict], crisis_label: np.ndarray) -> dict:
     windows = {h: within(crisis_label, h) for h in CRISIS_HORIZONS}
     for variant in VARIANTS:
         rows = sorted((r for r in results if r["variant"] == variant and "error" not in r), key=lambda r: r["n"])
-        s: dict = {"origins": len(rows), "errors": sum(1 for r in results if r["variant"] == variant and "error" in r)}
+        s: dict = {"origins": len(rows), "errors": sum(1 for r in results if r["variant"] == variant and "error" in r),
+                   "clipped": sum(1 for r in rows if r.get("clipped"))}
         for h in HORIZONS:
             have = [r[f"h{h}"] for r in rows if f"h{h}" in r]
             if not have:
@@ -247,7 +250,7 @@ def verdicts(s: dict) -> list[tuple[str, bool, str]]:
             found.append((f"{h // 52}y {label}: outer 5% tails hold at most {OUTER_MAX:.0%}", b[name]["outer"] <= OUTER_MAX, f"{b[name]['outer']:.0%}"))
     c = base.get("crisis52")
     if c:
-        found.append((f"12-month crisis odds: Brier skill >= {BRIER_SKILL_MIN:g} against the base rate", c["skill"] >= BRIER_SKILL_MIN, f"{c['skill']:+.2f}"))
+        found.append((f"12-month crisis odds: Brier skill >= {BRIER_SKILL_MIN:g} against the base rate (label and base rate come from the full-sample fit, so they have hindsight)", c["skill"] >= BRIER_SKILL_MIN, f"{c['skill']:+.2f}"))
     return found
 
 
@@ -255,6 +258,7 @@ def report(s: dict, first: date, last: date, count: int) -> str:
     L = [f"# Walk-forward validation (8g)\n", f"{count} quarter-end origins, {first} to {last}; {PATHS} paths each; training from 1993 (at least {MIN_TRAIN_WEEKS} weeks).\n"]
     L.append("## Pass criteria on the base model (fixed before running)\n")
     L += [f"- {'PASS' if ok else 'FAIL'}: {name} (got {got})" for name, ok, got in verdicts(s)]
+    L.append("\nWith about 25 independent years, a rate within 5 points of its cutoff (21% against 20%) is inside sampling error: read those as borderline, not as clear failures.")
     L.append("\n## Calibration (base)\n")
     L.append("| horizon | origins | stat | 50% covered | 80% covered | below 10% | above 90% | outer 5% |")
     L.append("|---|---|---|---|---|---|---|---|")
@@ -280,15 +284,20 @@ def report(s: dict, first: date, last: date, count: int) -> str:
         cells = [f"{x[k]['crps_ret']:.4f}" if k in x else "-" for k in ("h52", "h156")] + [f"{x[k]['brier']:.4f}" if k in x else "-" for k in ("crisis13", "crisis52")]
         L.append(f"| {v} | " + " | ".join(cells) + " |")
     b, nm = s["base"], s["nomacro"]
-    better = all(b[k]["crps_ret"] < nm[k]["crps_ret"] for k in ("h52", "h156") if k in b and k in nm) and all(
-        b[k]["brier"] < nm[k]["brier"] for k in ("crisis13", "crisis52") if k in b and k in nm)
-    L.append(f"\nMacro inputs {'improve' if better else 'do NOT improve'} both the return CRPS and the crisis Brier score over the no-macro model.\n")
+    crps_keys = [k for k in ("h52", "h156") if k in b and k in nm]
+    brier_keys = [k for k in ("crisis13", "crisis52") if k in b and k in nm]
+    if crps_keys and brier_keys:
+        better = all(b[k]["crps_ret"] < nm[k]["crps_ret"] for k in crps_keys) and all(b[k]["brier"] < nm[k]["brier"] for k in brier_keys)
+        L.append(f"\nMacro inputs {'improve' if better else 'do NOT improve'} both the return CRPS and the crisis Brier score over the no-macro model.\n")
+    else:
+        L.append("\nToo few origins to compare the macro inputs.\n")
     L.append("## STICKY\n")
     L.append("| STICKY | 1y CRPS | 3y CRPS | 3m Brier | 12m Brier | 1y 80% cover |\n|---|---|---|---|---|---|")
     for v in ("sticky10", "sticky20", "base", "sticky80"):
         x = s[v]
         cells = [f"{x[k]['crps_ret']:.4f}" if k in x else "-" for k in ("h52", "h156")] + [f"{x[k]['brier']:.4f}" if k in x else "-" for k in ("crisis13", "crisis52")]
-        L.append(f"| {STICKY_OF[v]:g}{' (current)' if v == 'base' else ''} | " + " | ".join(cells) + f" | {x['h52']['ret']['cover80']:.0%} |")
+        cover = f"{x['h52']['ret']['cover80']:.0%}" if "h52" in x else "-"
+        L.append(f"| {STICKY_OF[v]:g}{' (current)' if v == 'base' else ''} | " + " | ".join(cells) + f" | {cover} |")
     L.append(f"\nA different STICKY would be warranted only by a margin of {CLEAR_MARGIN:.0%} in both CRPS and Brier.\n")
     L.append("## Reading this\n")
     L.append("- This tests the regime layer (weekly returns by state), not the whole engine: the engine adds fat-tailed gaps, volatility clustering inside a state and per-symbol noise, so its volatility and drawdown ranges are wider than these.")
@@ -297,6 +306,9 @@ def report(s: dict, first: date, last: date, count: int) -> str:
     errors = {v: s[v]["errors"] for v in VARIANTS if s[v]["errors"]}
     if errors:
         L.append(f"Fits that failed (skipped): {errors}\n")
+    clipped = {v: s[v]["clipped"] for v in VARIANTS if s[v]["clipped"]}
+    if clipped:
+        L.append(f"Origins where a state had under 0.1% of the weeks (floored; a degenerate fit): {clipped}\n")
     return "\n".join(L)
 
 
@@ -314,7 +326,7 @@ def main() -> None:
         origins = origins[: args.limit]
     ends = [D["days"][int(D["marks"][n - 1]) + fr.PERIOD] for n in origins]
     print(f"{len(origins)} origins {ends[0]} to {ends[-1]}, {len(VARIANTS)} models each", flush=True)
-    crisis_label = labels(args.db)
+    crisis_label = labels()
     print(f"full-sample crisis weeks: {int(crisis_label.sum())} of {T}", flush=True)
     tasks = [(n, v) for n in origins for v in VARIANTS]
     results = []

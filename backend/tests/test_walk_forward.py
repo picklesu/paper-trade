@@ -32,7 +32,8 @@ def test_simulation_is_seeded_and_starts_from_the_given_state() -> None:
     b, sb = wf.simulate(p, 2, z, 12, 200, np.random.default_rng(5))
     assert np.array_equal(a, b) and np.array_equal(sa, sb)
     assert a.shape == (200, 12) and sa.min() >= 0 and sa.max() < len(p.mean)
-    # Crisis lasts: from a crisis most paths are still there next week, from calm few are.
-    _, from_crisis = wf.simulate(p, 2, z, 1, 2000, np.random.default_rng(1))
-    _, from_calm = wf.simulate(p, 0, z, 1, 2000, np.random.default_rng(1))
-    assert (from_crisis == 2).mean() > 0.5 > (from_calm == 2).mean() + 0.3
+    # The vectorized step follows the model's own odds: next-state shares match `transition`.
+    for start in (0, 2):
+        _, nxt = wf.simulate(p, start, z, 1, 20000, np.random.default_rng(1))
+        odds = p.transition(z * p.scale + p.center)[start]
+        assert np.allclose([(nxt == k).mean() for k in range(len(odds))], odds, atol=0.02)

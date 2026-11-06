@@ -12,7 +12,9 @@
 - PASS: 3y return: outer 5% tails hold at most 20% (got 8%)
 - FAIL: 3y volatility: outer 5% tails hold at most 20% (got 24%)
 - FAIL: 3y drawdown: outer 5% tails hold at most 20% (got 22%)
-- PASS: 12-month crisis odds: Brier skill >= 0 against the base rate (got +0.19)
+- PASS: 12-month crisis odds: Brier skill >= 0 against the base rate (label and base rate come from the full-sample fit, so they have hindsight) (got +0.19)
+
+With about 25 independent years, a rate within 5 points of its cutoff (21% against 20%) is inside sampling error: read those as borderline, not as clear failures.
 
 ## Calibration (base)
 

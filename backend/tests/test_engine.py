@@ -422,8 +422,24 @@ def returns(ten_years: dict, symbol: str) -> np.ndarray:
 
 
 def test_long_run_volatility_matches_spec(ten_years) -> None:
+    # One 10-year path: a crisis in it (about 3% of the time, at 50% volatility) moves its sample
+    # volatility by a few points, so the tolerance is wide; scripts/check_engine_states.py
+    # measures the long-run level over hundreds of years (16.5% before the crisis retune, 16.8% after).
     for spec in ten_years["engine"].specs:
-        assert returns(ten_years, spec.symbol).std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.2)
+        assert returns(ten_years, spec.symbol).std() * math.sqrt(252) == pytest.approx(spec.vol, rel=0.3)
+
+
+def test_long_run_volatility_over_many_paths_matches_spec() -> None:
+    """Three 15-year paths of SPY, crises included: a check over more than the single path above."""
+    spy = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
+    rets = []
+    for seed in range(3):
+        engine = MarketEngine(START, seed=seed, specs=spy)
+        closes = []
+        engine.on_day_complete = lambda day, e=engine, c=closes: c.append(float(e._skeleton(day).close[-1, 0]))
+        engine.advance(add_trading_seconds(START, 15 * 252 * 23_400))
+        rets.append(np.diff(closes))  # log prices
+    assert np.concatenate(rets).std() * math.sqrt(252) == pytest.approx(spy[0].vol, rel=0.15)
 
 
 def test_daily_returns_have_fat_tails(ten_years) -> None:

@@ -826,3 +826,16 @@ def test_event_and_day_factors_reach_a_simulated_session_but_not_a_real_one(monk
         return float(engine._skeleton(day).volume.sum())
 
     assert volume(2.0) / volume(1.0) == pytest.approx(2.0, rel=0.01)
+
+
+def test_the_volume_state_survives_save_and_restore() -> None:
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("SPY", "AAPL"))
+    engine = MarketEngine(START, seed=9, specs=specs)
+    engine.advance(add_trading_seconds(START, 12 * 23_400))
+    last = engine.generated_through
+    assert engine._starts[last].volume_state is not None and np.abs(engine._starts[last].volume_state).max() > 0
+    again = MarketEngine.from_state(engine.to_state(), specs=specs)
+    assert np.array_equal(again._starts[last].volume_state, engine._starts[last].volume_state)
+    engine.advance(add_trading_seconds(START, 13 * 23_400))
+    again.advance(add_trading_seconds(START, 13 * 23_400))
+    assert np.array_equal(again._skeleton(last).volume, engine._skeleton(last).volume)

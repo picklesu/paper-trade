@@ -1292,12 +1292,13 @@ class MarketEngine:
             factor, volume_state = self._volume_day(draws, start.volume_state, ret, day_sd, day)
             level = level * factor * volume_events(day)
         shape = self._volume.shape(state, draws.volume_score)
-        # The minute noise decides how the day's volume is spread over its minutes, not how much there is: a
-        # busy minute leaves less for the others (the real day's total has its own, persistent, variation).
-        noise = noise * (shape.sum(axis=0) / (shape * noise).sum(axis=0))
         if m_day < _M:  # an early close trades EARLY_CLOSE_VOLUME of a normal day, in the shape of the open minutes
             shape = shape.copy()
             shape[:m_day] *= EARLY_CLOSE_VOLUME * _M / shape[:m_day].sum(axis=0)
+        # The minute noise decides how the day's volume is spread over its open minutes, not how much there is: a
+        # busy minute leaves less for the others (the real day's total has its own, persistent, variation).
+        noise = noise.copy()
+        noise[:m_day] *= shape[:m_day].sum(axis=0) / (shape[:m_day] * noise[:m_day]).sum(axis=0)
         volume = np.floor(level / _M * shape * activity * noise)
         volume[m_day:] = 0
         if real_day is not None:  # the real day's volume, spread over the minutes it was open
@@ -1394,7 +1395,7 @@ class MarketEngine:
         if draws.volume_day is None or draws.volume_market is None:
             return 1.0, state
         n = len(draws.volume_day)
-        old = np.zeros((2, 1 + n)) if state is None else state
+        old = state if state is not None and state.shape == (2, 1 + n) else np.zeros((2, 1 + n))  # a state saved for other symbols starts again
         fast_rho, fast_share = VOLUME_FAST
         slow_rho, slow_share = VOLUME_SLOW
         white = 1 - fast_share - slow_share

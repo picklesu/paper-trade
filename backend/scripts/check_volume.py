@@ -145,7 +145,7 @@ def real_structure(db: str) -> dict:
     days = sorted(set.intersection(*[set(c) for c in cols.values()]))
     vol = np.array([[cols[s][d][0] for s in NAMES] for d in days], float)
     close = np.array([[cols[s][d][1] for s in NAMES] for d in days], float)
-    return structure(vol, close, days)
+    return structure(vol, close, days, trim=125)  # the same edge trim as the simulated series
 
 
 def sim_structure(db: str, seeds: int) -> dict:

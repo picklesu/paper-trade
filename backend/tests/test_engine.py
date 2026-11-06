@@ -175,6 +175,7 @@ def test_daily_volatility_matches_spec(monkeypatch) -> None:
     for name in ("NEWS_PER_YEAR", "CRASHES_PER_YEAR", "SHOCKS_PER_YEAR"):
         monkeypatch.setattr(engine_mod, name, 0.0)
     monkeypatch.setattr(engine_mod, "SHOCK_VARIANCE", 1.0)
+    monkeypatch.setattr(engine_mod, "VOLUME_VOL_LINK", 0.0)  # the day's activity makes volatility heavy-tailed: too few days here to average it out
     spec = SymbolSpec("TEST", "Test", 100, vol=0.30, drift=0, market_corr=0.5, daily_volume=1000)
     engine = MarketEngine(START, seed=3, specs=(spec,))
     closes = []
@@ -432,16 +433,18 @@ def test_long_run_volatility_matches_spec(ten_years) -> None:
 
 
 def test_long_run_volatility_over_many_paths_matches_spec() -> None:
-    """Three 15-year paths of SPY, crises included: a check over more than the single path above."""
+    """Five 10-year paths of SPY, crises included. A path's volatility varies a lot with whether it has a crisis
+    (this is roughly 50 years: sampling error about 10 percent), so the bound is wide; scripts/check_engine_states.py
+    measures it over hundreds of years."""
     spy = tuple(s for s in engine_mod.SYMBOLS if s.symbol == "SPY")
     rets = []
-    for seed in range(3):
+    for seed in range(5):
         engine = MarketEngine(START, seed=seed, specs=spy)
         closes = []
         engine.on_day_complete = lambda day, e=engine, c=closes: c.append(float(e._skeleton(day).close[-1, 0]))
-        engine.advance(add_trading_seconds(START, 15 * 252 * 23_400))
+        engine.advance(add_trading_seconds(START, 10 * 252 * 23_400))
         rets.append(np.diff(closes))  # log prices
-    assert np.concatenate(rets).std() * math.sqrt(252) == pytest.approx(spy[0].vol, rel=0.15)
+    assert np.concatenate(rets).std() * math.sqrt(252) == pytest.approx(spy[0].vol, rel=0.2)
 
 
 def test_daily_returns_have_fat_tails(ten_years) -> None:
@@ -776,7 +779,8 @@ def test_minute_volume_noise_persists_and_bursts_with_mean_one() -> None:
     assert (noise > 3).mean() > 0.01  # and there are bursts
 
 
-def test_day_level_volume_persists_has_mean_one_and_spikes() -> None:
+def test_day_level_activity_persists_and_drives_both_volume_and_volatility(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(engine_mod, "VOLUME_VOL_LINK", 0.5)  # (the shipped link makes volatility so heavy-tailed that 6000 days do not average out its mean square)
     rng = np.random.default_rng(1)
     n, days = 40, 6000
     draws = engine_mod._Draws(
@@ -784,24 +788,45 @@ def test_day_level_volume_persists_has_mean_one_and_spikes() -> None:
         volume_noise=np.zeros((1, 1)), news_minute=np.zeros(1), news_size=np.zeros(1), earnings=np.zeros(1), crash_u=1.0,
         crash_size=0.0, minute_seed=np.zeros(1, dtype=np.int64),
     )
-    state, out = None, []
+    state, volume, vol_market, vol_own, activity = None, [], [], [], []
     day = date(2026, 3, 2)
     for _ in range(days):
-        draws.volume_day = np.column_stack([rng.standard_normal(n), rng.random(n), rng.exponential(size=n), rng.standard_normal(n), rng.standard_normal(n)])
-        draws.volume_market = rng.standard_normal(3)
-        move = np.abs(rng.standard_normal(n))  # a day's move in its usual standard deviations
-        factor, state = MarketEngine._volume_day(draws, state, move, np.ones(n), day)
-        out.append(factor)
+        draws.volume_day = np.column_stack(
+            [rng.standard_normal(n), rng.random(n), rng.exponential(size=n), rng.standard_normal(n), rng.standard_normal(n), rng.standard_normal(n)]
+        )
+        draws.volume_market = rng.standard_normal(4)
+        state, comps, market_mult, own_mult = MarketEngine._volume_activity(draws, state)
+        flow = rng.standard_normal(n)
+        volume.append(MarketEngine._volume_factor(comps, flow, draws, day))
+        vol_market.append(market_mult)
+        vol_own.append(own_mult)
+        activity.append(comps)
         day = next_trading_day(day)
-    out = np.array(out)
+    volume, vol_own, activity = np.array(volume), np.array(vol_own), np.array(activity)
     assert state.shape == (2, 1 + n)
-    assert out.mean() == pytest.approx(1.0, rel=0.03)
-    x = np.log(out[:, 0])
+    assert volume.mean() == pytest.approx(1.0, rel=0.03)
+    x = np.log(volume[:, 0])
     assert np.corrcoef(x[:-1], x[1:])[0, 1] > 0.3  # a busy day is followed by a busy one (real: 0.57 with everything else)
     assert np.corrcoef(x[:-10], x[10:])[0, 1] < 0.2  # and it fades within a couple of weeks
-    assert np.percentile(out, 99.9) > 2.0 * np.median(out)  # heavy days
-    market = np.log(out).mean(axis=1)
-    assert 0.15 < np.var(market) / np.var(np.log(out[:, 0])) < 0.7  # part of a day's volume is the whole market's
+    assert np.percentile(volume, 99.9) > 2.0 * np.median(volume)  # heavy days
+    assert 0.08 < np.var(np.log(volume).mean(axis=1)) / np.var(x) < 0.5  # part of a day's volume is the whole market's
+    # the same activity moves volatility: a busy day is a more volatile one, and the multiple keeps the variance
+    assert np.mean(np.array(vol_market) ** 2) == pytest.approx(1.0, rel=0.05) and np.mean(vol_own**2) == pytest.approx(1.0, rel=0.05)
+    assert np.corrcoef(np.log(vol_own[:, 0]), activity[:, 1])[0, 1] > 0.99
+
+
+def test_order_flow_imbalance_moves_volume_and_the_sides_differ() -> None:
+    comps = np.zeros(41)
+    draws = engine_mod._Draws(
+        gap=np.zeros(1), within=np.zeros((1, 1)), between=np.zeros((1, 1)), u=np.zeros((1, 2)), extremes=np.zeros((1, 1, 2)),
+        volume_noise=np.zeros((1, 1)), news_minute=np.zeros(1), news_size=np.zeros(1), earnings=np.zeros(1), crash_u=1.0,
+        crash_size=0.0, minute_seed=np.zeros(1, dtype=np.int64),
+    )
+    draws.volume_day = np.column_stack([np.zeros(40), np.ones(40), np.zeros(40), np.zeros(40), np.zeros(40), np.zeros(40)])  # no heavy days
+    day = date(2026, 3, 4)  # a Wednesday
+    quiet = MarketEngine._volume_factor(comps, np.zeros(40), draws, day)
+    buying, selling = MarketEngine._volume_factor(comps, np.full(40, 2.0), draws, day), MarketEngine._volume_factor(comps, np.full(40, -2.0), draws, day)
+    assert (buying > quiet).all() and (selling > buying).all()  # a lopsided day trades more, and a sell-off more than a rally
 
 
 def test_five_minute_volume_is_as_uneven_as_the_real_market() -> None:
@@ -839,3 +864,24 @@ def test_the_volume_state_survives_save_and_restore() -> None:
     engine.advance(add_trading_seconds(START, 13 * 23_400))
     again.advance(add_trading_seconds(START, 13 * 23_400))
     assert np.array_equal(again._skeleton(last).volume, engine._skeleton(last).volume)
+
+
+def test_order_flow_and_activity_leave_each_stocks_variance_as_it_was(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Paired with the same seeds and the links off: a first version of the activity link inflated a stock's
+    variance by 20-30% (a jump judged against the day's scaled volatility fed the GARCH). Sampling error of
+    the mean ratio here is about 6 percent."""
+    specs = tuple(s for s in engine_mod.SYMBOLS if s.symbol in ("AAPL", "KO"))
+
+    def variance(seed: int) -> np.ndarray:
+        engine = MarketEngine(START, seed=seed, specs=specs)
+        closes = []
+        engine.on_day_complete = lambda d: closes.append(engine._skeleton(d).close[-1].copy())
+        engine.advance(add_trading_seconds(START, 4 * 252 * 23_400))
+        return (np.diff(np.array(closes), axis=0) ** 2).mean(axis=0)
+
+    on = np.array([variance(seed) for seed in range(8)])
+    for name in ("FLOW_SHARE", "VOLUME_VOL_LINK", "VOLUME_VARIANCE_LINK", "VOLUME_COMMON_LINK"):
+        monkeypatch.setattr(engine_mod, name, 0.0)
+    off = np.array([variance(seed) for seed in range(8)])
+    ratio = (on / off).mean(axis=0)
+    assert ((ratio > 0.85) & (ratio < 1.15)).all(), ratio

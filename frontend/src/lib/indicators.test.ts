@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Bar } from './bars'
-import { bollinger, compute, DEFAULT_SETTINGS, ema, indicatorLabel, macd, rsi, sanitize, sma, vwap } from './indicators'
+import { bollinger, clampParam, compute, DEFAULT_SETTINGS, ema, indicatorLabel, MAX_LENGTH, macd, rsi, sanitize, sma, vwap } from './indicators'
 
 const bars = (closes: number[], start = Date.parse('2026-01-07T14:30:00Z') / 1000, step = 60): Bar[] =>
   closes.map((c, i) => [start + i * step, c, c, c, c, 100])
@@ -103,8 +103,9 @@ describe('settings', () => {
   })
 
   it('sanitizes stored settings', () => {
-    const s = sanitize({ sma20: { on: false, params: [9999] }, bb: { on: true, params: [20, 0.1] }, rsi: { params: ['x'] }, nope: 1 })
-    expect(s.sma20).toEqual({ on: false, params: [500] })
+    const s = sanitize({ sma20: { on: false, params: [99999] }, bb: { on: true, params: [20, 0.1] }, rsi: { params: ['x'] }, nope: 1 })
+    expect(s.sma20).toEqual({ on: false, params: [MAX_LENGTH] })
+    expect(clampParam('sma200', 0, '737', 200)).toBe(737)
     expect(s.bb).toEqual({ on: true, params: [20, 0.5] })
     expect(s.rsi).toEqual(DEFAULT_SETTINGS.rsi)
     expect(sanitize('garbage')).toEqual(DEFAULT_SETTINGS)

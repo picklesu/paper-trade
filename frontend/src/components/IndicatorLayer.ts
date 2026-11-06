@@ -33,6 +33,17 @@ export function applicable(id: IndicatorId, interval: Interval): boolean {
   return !info.intradayOnly || (interval !== '1D' && interval !== '1W')
 }
 
+/** How many bars the enabled indicators need before their first value (the longest length). */
+export function warmupBars(settings: IndicatorSettings, interval: Interval): number {
+  let most = 0
+  for (const info of INDICATORS) {
+    if (!settings[info.id].on || !applicable(info.id, interval)) continue
+    const lengths = info.id === 'bb' ? settings[info.id].params.slice(0, 1) : settings[info.id].params
+    most = Math.max(most, ...lengths)
+  }
+  return most
+}
+
 interface Drawn {
   lines: Map<string, ISeriesApi<'Line'>>
   histogram?: ISeriesApi<'Histogram'>

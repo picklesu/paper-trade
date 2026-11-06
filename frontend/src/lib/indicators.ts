@@ -236,8 +236,11 @@ export function clampParam(id: IndicatorId, index: number, value: unknown, fallb
   const n = Number(value)
   if (!Number.isFinite(n)) return fallback
   if (id === 'bb' && index === 1) return Math.min(5, Math.max(0.5, Math.round(n * 10) / 10))
-  return Math.min(500, Math.max(1, Math.round(n)))
+  return Math.min(MAX_LENGTH, Math.max(1, Math.round(n)))
 }
+
+/** The longest length a box accepts (a 737-day average needs about three years of daily bars). */
+export const MAX_LENGTH = 2000
 
 /** Fix combinations that don't make sense: MACD's fast length must be shorter than its slow one. */
 export function normalizeParams(id: IndicatorId, params: number[]): number[] {

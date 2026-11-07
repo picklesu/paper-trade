@@ -22,11 +22,11 @@ def test_release_dates_parse_and_save() -> None:
         calls.append(release_id)
         if release_id == 10:
             raise FetchError("boom")
-        return {50: "Employment Situation", 10: "Consumer Price Index", 101: "FOMC Press Release", 53: "Gross Domestic Product", 54: "Personal Income and Outlays", 9: "Advance Retail Sales"}[release_id], [date(2024, 1, 5)]
+        return {50: "Employment Situation", 10: "Consumer Price Index", 53: "Gross Domestic Product", 54: "Personal Income and Outlays", 9: "Advance Retail Sales"}[release_id], [date(2024, 1, 5)]
 
     releases = Releases(store, "key", fetch)
     problems = releases.update(lambda m: None)
-    assert len(calls) == 6 and len(problems) == 1 and "cpi" in problems[0]  # one release failing leaves the others
+    assert len(calls) == 5 and len(problems) == 1 and "cpi" in problems[0]  # one release failing leaves the others
     assert releases.days("jobs") == [date(2024, 1, 5)] and releases.days("cpi") == []
 
 
@@ -91,7 +91,7 @@ def test_a_wrong_release_id_is_refused_and_conditions_are_skipped_and_a_stopped_
     store = Store(":memory:")
     releases = Releases(store, "k", lambda i, k: ("Something Else Entirely", [date(2024, 1, 5)]))
     problems = releases.update(lambda m: None)
-    assert len(problems) == 6 and releases.days("jobs") == []  # nothing saved under a wrong label
+    assert len(problems) == 5 and releases.days("jobs") == []  # nothing saved under a wrong label
 
     # an odd lot, an out-of-sequence print and a closing cross neither count nor set the direction
     trades = [
@@ -142,3 +142,12 @@ def test_a_per_second_limit_waits_and_retries_but_the_daily_limit_stops() -> Non
     problems = history.update(["AAPL", "KO", "MSFT"], lambda m: None)
     assert calls == ["AAPL", "AAPL", "AAPL", "KO"] and history.days("AAPL") == [date(2024, 5, 2)]  # two bursts retried, then saved
     assert len(problems) == 1 and "MSFT" in history.due(["AAPL", "KO", "MSFT"]) and len(waits) >= 3  # the daily limit stopped the run; pauses between requests
+
+
+def test_a_release_that_lists_every_day_is_not_saved_as_an_event_calendar() -> None:
+    from datetime import timedelta
+
+    every_day = [date(2020, 1, 1) + timedelta(days=i) for i in range(800)]
+    releases = Releases(Store(":memory:"), "k", lambda i, k: ({50: "Employment", 10: "Consumer Price", 53: "Gross Domestic", 54: "Personal Income", 9: "Retail"}[i], every_day))
+    problems = releases.update(lambda m: None)
+    assert len(problems) == 5 and "not a calendar" in problems[0] and releases.days("jobs") == []

@@ -35,7 +35,6 @@ TRADES_URL = "https://data.alpaca.markets/v2/stocks/trades"
 RELEASES = {
     50: ("jobs", "employment"),  # Employment Situation
     10: ("cpi", "consumer price"),  # Consumer Price Index
-    101: ("fomc", "fomc"),  # FOMC Press Release
     53: ("gdp", "gross domestic"),  # Gross Domestic Product
     54: ("pce", "personal income"),  # Personal Income and Outlays
     9: ("retail", "retail"),  # Advance Monthly Sales for Retail and Food Services
@@ -101,6 +100,9 @@ class Releases:
             except FetchError as e:
                 problems.append(f"release {release_id} ({kind}): {e}")
                 continue
+            if days and len(days) / max(days[-1].year - days[0].year + 1, 1) > MAX_PER_YEAR:
+                problems.append(f"release {release_id} ({kind}) lists {len(days)} dates, about {len(days) // max(days[-1].year - days[0].year + 1, 1)} a year: not a calendar of events, not saved")
+                continue
             if expected not in name.lower():
                 problems.append(f"release {release_id} is called {name!r}, not the {kind} release: not saved (fix RELEASES)")
                 continue
@@ -120,6 +122,7 @@ class Burst(FetchError):
     """Alpha Vantage's per-second limit (1 request a second on the free plan): wait a moment and ask again."""
 
 
+MAX_PER_YEAR = 60  # more dates a year than this is not a calendar of events (FRED's FOMC press release, id 101, lists every calendar day)
 EARNINGS_PAUSE_SECONDS = 1.5  # between Alpha Vantage requests
 EARNINGS_RETRIES = 3
 

@@ -170,7 +170,29 @@ def test_density_check_uses_the_busiest_year_and_old_bad_rows_are_removed() -> N
 
 
 def test_alpha_vantages_message_never_carries_the_api_key() -> None:
-    note = "We have detected your API key as ABCD1234SECRET and our standard API rate limit is 25 requests per day."
-    with pytest.raises(FetchStop) as e:
-        parse_earnings_history({"Information": note})
-    assert "ABCD1234SECRET" not in str(e.value) and "25 requests" in str(e.value)
+    for note in (
+        "We have detected your API key as ABCD1234SECRET and our standard API rate limit is 25 requests per day.",
+        "your api key is ABCD1234SECRET. Our standard limit is 25 requests per day.",
+        "Invalid call for apikey=ABCD1234SECRET, 25 requests per day.",
+        "Premium endpoint; the key ABCD1234SECRET, is not allowed. 25 requests per day.",
+    ):
+        with pytest.raises(FetchStop) as e:
+            parse_earnings_history({"Information": note}, key="ABCD1234SECRET")
+        assert "ABCD1234SECRET" not in str(e.value) and "***" in str(e.value) and "25 requests" in str(e.value), str(e.value)
+    with pytest.raises(FetchStop) as e:  # worded some new way, the wording pattern still catches the common forms
+        parse_earnings_history({"Information": "API key as ABCD1234SECRET. Limit: 25 requests per day."})
+    assert "ABCD1234SECRET" not in str(e.value)
+
+
+def test_a_symbol_without_earnings_is_tried_three_times_then_left_alone() -> None:
+    from paper_trade.research import NoEarnings
+
+    def fetch(symbol, key):
+        raise NoEarnings("none")
+
+    history = EarningsHistory(Store(":memory:"), "k", fetch, sleep=lambda s: None)
+    for attempt in (1, 2, 3):
+        assert history.due(["META", "KO"]) == ["META", "KO"]
+        problems = history.update(["META", "KO"], lambda m: None)
+        assert f"try {attempt} of 3" in problems[0]
+    assert history.due(["META", "KO"]) == []  # no more requests spent on them

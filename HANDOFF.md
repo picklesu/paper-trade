@@ -85,7 +85,7 @@ _Last updated: 2026-11-07. Everything through #87 is merged (`MODEL_VERSION` 20)
 
 **Caveats to tell the user:** fitted shapes are per symbol and per state; crisis rests on one episode; the sim cannot reproduce a specific real 5-minute candle, only its distribution.
 
-**Earnings history progress (user's runs, 2026-11-07):** 17 stocks saved (AAPL, MSFT, NVDA, AMD, AVGO, ORCL, GOOGL, DIS, AMZN, TSLA, HD, COST, KO, PG, JPM, BAC, XOM; 66-123 reports each); META, NFLX, NKE, WMT, GS and V returned no `quarterlyEarnings` (not marked fetched, retried next run: unsupported or Alpha Vantage's quiet throttle); the daily limit stopped the run. Alpha Vantage's limit message repeats the API key: `parse_earnings_history` now masks it (the key was printed once in the user's terminal and pasted into a session; the user may want to regenerate it).
+**Earnings history progress (user's runs, 2026-11-07):** 17 stocks saved (AAPL, MSFT, NVDA, AMD, AVGO, ORCL, GOOGL, DIS, AMZN, TSLA, HD, COST, KO, PG, JPM, BAC, XOM; 66-123 reports each); META, NFLX, NKE, WMT, GS and V returned no `quarterlyEarnings` (not marked fetched, retried next run: unsupported or Alpha Vantage's quiet throttle); the daily limit stopped the run. Alpha Vantage's limit message repeats the API key: `parse_earnings_history` masks the known key by value and the common wordings (it still should not be relied on as the only guard). **The key was printed once in the user's terminal and pasted into a session transcript: it should be rotated** (Alpha Vantage account page, then `ALPHAVANTAGE_API_KEY` in `backend/.env`). A symbol with no answer is tried 3 times, then left alone (`earnings_misses`).
 
 ### Release calendar (the user's yes, 2026-11-07; `MODEL_VERSION` 20)
 

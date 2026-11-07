@@ -131,6 +131,13 @@ class Releases:
 # --- earnings history (Alpha Vantage) --------------------------------------------------------
 
 
+class NoEarnings(FetchError):
+    """An answer without quarterly earnings: an unsupported symbol, or Alpha Vantage throttling quietly."""
+
+
+MAX_MISSES = 3  # tries before a symbol with no answer is left alone
+
+
 class Burst(FetchError):
     """Alpha Vantage's per-second limit (1 request a second on the free plan): wait a moment and ask again."""
 
@@ -140,7 +147,7 @@ EARNINGS_PAUSE_SECONDS = 1.5  # between Alpha Vantage requests
 EARNINGS_RETRIES = 3
 
 
-def parse_earnings_history(body: object) -> list[tuple[date, str, float | None, float | None]]:
+def parse_earnings_history(body: object, key: str | None = None) -> list[tuple[date, str, float | None, float | None]]:
     """(report day, "pre"/"post"/"", reported EPS, surprise %) rows, oldest first."""
     if not isinstance(body, dict):
         raise FetchError("Alpha Vantage's earnings answer wasn't readable")
@@ -148,11 +155,14 @@ def parse_earnings_history(body: object) -> list[tuple[date, str, float | None, 
     if note and ("per second" in str(note) or "sparingly" in str(note)):
         raise Burst("Alpha Vantage: too many requests in a second")
     if note:  # the daily limit (25 requests on the free plan) or a bad key
-        text = re.sub(r"(API key as )\S+", r"\1***", str(note))  # Alpha Vantage's own message repeats the key
+        text = str(note)  # Alpha Vantage's own message repeats the key: masked by value, and by the wording it uses
+        if key:
+            text = text.replace(key, "***")
+        text = re.sub(r"(?i)(api ?key(?: as| is|=)? ?)[A-Za-z0-9]{8,}", r"\1***", text)
         raise FetchStop(f"Alpha Vantage said: {text[:300]} (the free plan allows 25 requests a day; a bad key looks the same)")
     rows = body.get("quarterlyEarnings")
     if not isinstance(rows, list):
-        raise FetchError("Alpha Vantage sent no quarterly earnings for this symbol (an unsupported symbol, or its quiet throttling): it is tried again next run")
+        raise NoEarnings("Alpha Vantage sent no quarterly earnings for this symbol")
 
     def number(x: object) -> float | None:
         try:
@@ -174,7 +184,7 @@ def parse_earnings_history(body: object) -> list[tuple[date, str, float | None, 
 def fetch_earnings_history(symbol: str, key: str) -> list[tuple[date, str, float | None, float | None]]:
     query = urllib.parse.urlencode({"function": "EARNINGS", "symbol": symbol, "apikey": key})
     body, _ = request_json(f"{EARNINGS_URL}?{query}", {}, 30, "Alpha Vantage")
-    return parse_earnings_history(body)
+    return parse_earnings_history(body, key)
 
 
 class EarningsHistory:
@@ -187,6 +197,7 @@ class EarningsHistory:
             "CREATE TABLE IF NOT EXISTS earnings_history (symbol TEXT NOT NULL, day TEXT NOT NULL, time TEXT NOT NULL, eps REAL, surprise REAL, PRIMARY KEY (symbol, day))"
         )
         self._db.execute("CREATE TABLE IF NOT EXISTS earnings_fetched (symbol TEXT PRIMARY KEY, at TEXT NOT NULL)")
+        self._db.execute("CREATE TABLE IF NOT EXISTS earnings_misses (symbol TEXT PRIMARY KEY, tries INTEGER NOT NULL)")
 
     @property
     def configured(self) -> bool:
@@ -194,7 +205,8 @@ class EarningsHistory:
 
     def due(self, symbols: list[str]) -> list[str]:
         have = {s for (s,) in self._db.execute("SELECT symbol FROM earnings_fetched")}
-        return [s for s in symbols if s not in have]
+        gave_up = {s for (s,) in self._db.execute("SELECT symbol FROM earnings_misses WHERE tries >= ?", (MAX_MISSES,))}
+        return [s for s in symbols if s not in have and s not in gave_up]
 
     def update(self, symbols: list[str], say: Callable[[str], None] = print) -> list[str]:
         """Each symbol not yet fetched; stops at the daily limit (run it again tomorrow)."""
@@ -219,6 +231,12 @@ class EarningsHistory:
             except FetchStop as e:
                 problems.append(f"{e} (what is saved is kept; run it again later)")
                 break
+            except NoEarnings as e:
+                with self._db:
+                    self._db.execute("INSERT INTO earnings_misses (symbol, tries) VALUES (?, 1) ON CONFLICT(symbol) DO UPDATE SET tries = tries + 1", (symbol,))
+                tries = self._db.execute("SELECT tries FROM earnings_misses WHERE symbol = ?", (symbol,)).fetchone()[0]
+                problems.append(f"{symbol}: {e} (try {tries} of {MAX_MISSES}; after that it is left alone)")
+                continue
             except FetchError as e:
                 problems.append(f"{symbol}: {e}")
                 continue

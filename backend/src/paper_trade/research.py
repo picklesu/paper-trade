@@ -53,6 +53,14 @@ FLOW_DAYS = (
 # --- scheduled releases (FRED) -------------------------------------------------------------
 
 
+def too_dense(days: list[date]) -> bool:
+    """More than MAX_PER_YEAR dates in some calendar year: a list of every day, not of events."""
+    per_year: dict[int, int] = {}
+    for d in set(days):
+        per_year[d.year] = per_year.get(d.year, 0) + 1
+    return max(per_year.values(), default=0) > MAX_PER_YEAR
+
+
 def parse_release_dates(body: object) -> list[date]:
     if not isinstance(body, dict) or not isinstance(body.get("release_dates"), list):
         raise FetchError("FRED's answer had no release dates")
@@ -84,6 +92,10 @@ class Releases:
         self._fetch = fetch
         self._db = store.connection
         self._db.execute("CREATE TABLE IF NOT EXISTS releases (kind TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (kind, day))")
+        for (kind,) in self._db.execute("SELECT DISTINCT kind FROM releases").fetchall():  # an earlier run saved a release that lists every day (FOMC, id 101)
+            if too_dense(self.days(kind)):
+                with self._db:
+                    self._db.execute("DELETE FROM releases WHERE kind = ?", (kind,))
 
     @property
     def configured(self) -> bool:
@@ -100,8 +112,8 @@ class Releases:
             except FetchError as e:
                 problems.append(f"release {release_id} ({kind}): {e}")
                 continue
-            if days and len(days) / max(days[-1].year - days[0].year + 1, 1) > MAX_PER_YEAR:
-                problems.append(f"release {release_id} ({kind}) lists {len(days)} dates, about {len(days) // max(days[-1].year - days[0].year + 1, 1)} a year: not a calendar of events, not saved")
+            if too_dense(days):
+                problems.append(f"release {release_id} ({kind}) lists over {MAX_PER_YEAR} dates in a year: not a calendar of events, not saved")
                 continue
             if expected not in name.lower():
                 problems.append(f"release {release_id} is called {name!r}, not the {kind} release: not saved (fix RELEASES)")

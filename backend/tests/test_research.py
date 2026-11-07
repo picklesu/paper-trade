@@ -151,3 +151,19 @@ def test_a_release_that_lists_every_day_is_not_saved_as_an_event_calendar() -> N
     releases = Releases(Store(":memory:"), "k", lambda i, k: ({50: "Employment", 10: "Consumer Price", 53: "Gross Domestic", 54: "Personal Income", 9: "Retail"}[i], every_day))
     problems = releases.update(lambda m: None)
     assert len(problems) == 5 and "not a calendar" in problems[0] and releases.days("jobs") == []
+
+
+def test_density_check_uses_the_busiest_year_and_old_bad_rows_are_removed() -> None:
+    from datetime import timedelta
+
+    from paper_trade.research import too_dense
+
+    monthly = [date(1995, 1, 1) + timedelta(days=30 * i) for i in range(360)]  # 12 a year for 30 years, in any order
+    assert not too_dense(monthly) and not too_dense(list(reversed(monthly)))
+    assert too_dense([date(2020, 1, 1) + timedelta(days=i) for i in range(70)])  # one dense year is enough
+    store = Store(":memory:")
+    store.connection.execute("CREATE TABLE releases (kind TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (kind, day))")
+    store.connection.executemany("INSERT INTO releases VALUES ('fomc', ?)", [((date(2020, 1, 1) + timedelta(days=i)).isoformat(),) for i in range(300)])
+    store.connection.execute("INSERT INTO releases VALUES ('jobs', '2020-01-10')")
+    releases = Releases(store, "k", lambda i, k: ("x", []))
+    assert releases.days("fomc") == [] and releases.days("jobs") == [date(2020, 1, 10)]  # the every-day FOMC rows an earlier run saved are gone

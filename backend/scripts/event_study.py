@@ -23,15 +23,18 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import sys
 from datetime import date
 from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from paper_trade.research import too_dense  # noqa: E402
+
 KINDS = ("jobs", "cpi", "gdp", "pce", "retail", "fomc")
 PERIODS = (("1993-2009", date(1993, 1, 1), date(2009, 12, 31)), ("2010-2026", date(2010, 1, 1), date(2026, 12, 31)), ("all", date(1993, 1, 1), date(2026, 12, 31)))
 BASE = 60
-MAX_PER_YEAR = 60  # a release with more dates than this is not a calendar of events (FRED's FOMC press release lists every day)
 
 
 def load(db: str):
@@ -44,22 +47,35 @@ def load(db: str):
     releases = {}
     for kind in KINDS:
         ds = [date.fromisoformat(d) for (d,) in con.execute("SELECT day FROM releases WHERE kind=? ORDER BY day", (kind,))]
-        if ds and len(ds) / max(1, (ds[-1].year - ds[0].year + 1)) > MAX_PER_YEAR:
-            print(f"skipping {kind}: {len(ds)} dates is more than {MAX_PER_YEAR} a year")
+        if too_dense(ds):
+            print(f"skipping {kind}: it lists a date for nearly every day, not events")
             continue
         releases[kind] = ds
     return days, o, c, v, vix, macro, releases
 
 
 def boot(x: np.ndarray, n: int = 2000, seed: int = 1) -> tuple[float, float, float]:
+    if len(x) == 0:
+        return float("nan"), float("nan"), float("nan")
     rng = np.random.default_rng(seed)
     means = np.array([x[rng.integers(0, len(x), len(x))].mean() for _ in range(n)])
     return float(x.mean()), float(np.percentile(means, 5)), float(np.percentile(means, 95))
 
 
+def ranks(x: np.ndarray) -> np.ndarray:
+    """Ranks with ties given their average rank (many months leave the unemployment rate unchanged)."""
+    order = np.argsort(x, kind="stable")
+    r = np.empty(len(x))
+    r[order] = np.arange(len(x))
+    for value in np.unique(x):
+        tied = x == value
+        if tied.sum() > 1:
+            r[tied] = r[tied].mean()
+    return r
+
+
 def spearman(a: np.ndarray, b: np.ndarray) -> float:
-    ra, rb = np.argsort(np.argsort(a)), np.argsort(np.argsort(b))
-    return float(np.corrcoef(ra, rb)[0, 1])
+    return float(np.corrcoef(ranks(a), ranks(b))[0, 1])
 
 
 def main() -> None:
@@ -72,12 +88,14 @@ def main() -> None:
     ret = np.r_[np.nan, np.diff(np.log(c))]
     gap = np.r_[np.nan, np.log(o[1:] / c[:-1])]
     intra = np.log(c / o)
-    vol_ratio = np.full(len(days), np.nan)
-    for i in range(BASE, len(days)):
-        vol_ratio[i] = v[i] / np.median(v[i - BASE : i])
-    vix_change = np.array([np.log(vix[d] / vix[days[i - 1]]) if d in vix and i and days[i - 1] in vix else np.nan for i, d in enumerate(days)])
     busy = {d for ds in releases.values() for d in ds}
     ordinary = np.array([d not in busy for d in days])
+    vol_ratio = np.full(len(days), np.nan)
+    for i in range(BASE, len(days)):
+        window = v[i - BASE : i][ordinary[i - BASE : i]]  # the same baseline as the moves: ordinary sessions
+        if len(window) >= 20:
+            vol_ratio[i] = v[i] / np.median(window)
+    vix_change = np.array([np.log(vix[d] / vix[days[i - 1]]) if d in vix and i and days[i - 1] in vix else np.nan for i, d in enumerate(days)])
 
     def multiple(series: np.ndarray, i: int) -> float:
         window = np.arange(i - BASE, i)
@@ -108,16 +126,23 @@ def main() -> None:
     out += ["\n## Does the day's direction follow a crude surprise proxy?\n"]
 
     def proxy_rows(kind: str, series: str, make) -> None:
-        pts = []
+        pts, dropped = [], 0
         for d in releases.get(kind, []):
             if d not in index or index[d] <= BASE:
                 continue
             x = make(d)
-            if x is not None and not np.isnan(ret[index[d]]):
-                pts.append((x, ret[index[d]]))
+            if x is None or np.isnan(x) or np.isnan(ret[index[d]]):
+                dropped += 1  # a missing observation: left out, counted
+                continue
+            pts.append((x, ret[index[d]]))
         if len(pts) >= 30:
             xs, ys = np.array(pts).T
-            out.append(f"* {kind} (proxy: {series}): {len(pts)} events, rank correlation of the proxy with the day's return {spearman(xs, ys):+.2f}; the day rose {np.mean(ys[xs > 0] > 0):.0%} of the {int((xs > 0).sum())} times the proxy was positive and {np.mean(ys[xs < 0] > 0):.0%} of the {int((xs < 0).sum())} times it was negative.")
+            up, down = xs > 0, xs < 0
+            rate = lambda m: f"{np.mean(ys[m] > 0):.0%}" if m.any() else "n/a"  # noqa: E731
+            out.append(
+                f"* {kind} (proxy: {series}): {len(pts)} events ({dropped} left out for a missing value), rank correlation of the proxy with the day's return {spearman(xs, ys):+.2f}; "
+                f"the day rose {rate(up)} of the {int(up.sum())} times the proxy was positive, {rate(down)} of the {int(down.sum())} times it was negative, and the {int((xs == 0).sum())} unchanged months are in the correlation only."
+            )
 
     def month_value(s: dict, d: date, back: int):
         y, m = d.year, d.month - back
@@ -133,8 +158,8 @@ def main() -> None:
         v0, v1, v2 = (month_value(macro["CPIAUCSL"], d, k) for k in (1, 2, 3))
         return None if None in (v0, v1, v2) else (v0 / v1 - v1 / v2)
 
-    proxy_rows("jobs", "change in the unemployment rate (a rise is bad news)", lambda d: -(unrate_change(d) or np.nan) if unrate_change(d) is not None else None)
-    proxy_rows("cpi", "acceleration of month-on-month inflation (a rise is bad news)", lambda d: -cpi_accel(d) if cpi_accel(d) is not None else None)
+    proxy_rows("jobs", "change in the unemployment rate (a rise is bad news)", lambda d: None if unrate_change(d) is None else -unrate_change(d))
+    proxy_rows("cpi", "acceleration of month-on-month inflation (a rise is bad news)", lambda d: None if cpi_accel(d) is None else -cpi_accel(d))
     a.report.write_text("\n".join(out) + "\n")
     print("\n".join(out))
 

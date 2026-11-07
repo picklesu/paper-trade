@@ -4,7 +4,7 @@
 
 `--db` is a scratch copy of the `daily`, `macro` and `releases` tables (filled by
 `./server.sh update history` and `update events`). For each release kind (jobs, CPI, GDP, PCE,
-retail sales; FOMC once its dates are fixed) and period it reports, against the 60 sessions
+retail sales, and FOMC decision days from `market/fomc_dates.json`) and period it reports, against the 60 sessions
 before, never counting another release day:
 
 * the size of the day's close-to-close move, the opening gap and the move after the open
@@ -22,6 +22,7 @@ future should treat as busy, and by how much.
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from datetime import date
@@ -45,7 +46,11 @@ def load(db: str):
     vix = {date.fromisoformat(d): x for d, x in con.execute("SELECT day, value FROM macro WHERE series='VIXCLS'")}
     macro = {s: {date.fromisoformat(d): x for d, x in con.execute("SELECT day, value FROM macro WHERE series=?", (s,))} for s in ("UNRATE", "CPIAUCSL")}
     releases = {}
+    fomc = json.loads((Path(__file__).parent.parent / "src" / "paper_trade" / "market" / "fomc_dates.json").read_text())  # the Fed's own calendar (fetch_fomc_dates.py)
+    releases["fomc"] = [date.fromisoformat(d) for d in fomc["meetings"]]
     for kind in KINDS:
+        if kind == "fomc":
+            continue
         ds = [date.fromisoformat(d) for (d,) in con.execute("SELECT day FROM releases WHERE kind=? ORDER BY day", (kind,))]
         if too_dense(ds):
             print(f"skipping {kind}: it lists a date for nearly every day, not events")

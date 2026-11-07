@@ -58,6 +58,7 @@ _Last updated: 2026-11-06. Everything through #79 is merged (`MODEL_VERSION` 17)
 | Volume dispersion (the user's report: simulated volume looked uniform): bursty persistent minute volume, busy and quiet days, heavy days, expiration, month-end and Russell days (`MODEL_VERSION` 15) | Merged | #77 |
 | Volume flow (the user's report: weeks of near-identical daily volume): persistent day-to-day volume state (`MODEL_VERSION` 16) | Merged | #78 |
 | Order flow first (the user's point: volume moves price, not the reverse): activity state, signed imbalance, minute-level links (`MODEL_VERSION` 17) | Merged | #79 |
+| Big moves trade big volume (the user's report: SPY +$72 in a calm market on 49M to 67M shares): funds have no company-news jumps, news and selloffs trade in proportion to their size (`MODEL_VERSION` 18) | In review | |
 | A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.
@@ -78,6 +79,10 @@ _Last updated: 2026-11-06. Everything through #79 is merged (`MODEL_VERSION` 17)
 4. Optional: label intraday candles on replayed days as simulated (the user has not asked for it yet).
 
 **Caveats to tell the user:** fitted shapes are per symbol and per state; crisis rests on one episode; the sim cannot reproduce a specific real 5-minute candle, only its distribution.
+
+### Big moves trade big volume (the user's report, 2026-11-07: a future day with SPY up about $100 on average volume; `MODEL_VERSION` 18)
+
+**Cause (found by reproducing it: seed 9, 2027-12-02, calm state):** SPY got company-style "news" jumps like a stock (two a year, 2.5 daily volatilities, fat-tailed t(4)); one was +9.7% in a single minute at 3:45 PM (714 to 786), with a volume burst of only a few minutes (day volume 67M against a 40-50M norm). Funds can't have company news, and a real move that size trades 3-6x normal volume. **Real data** (SPY since 1993, volume against the previous 60-day median): moves of 3-5% median 1.7x, 5-8% 1.9x, 8%+ 3.2x; March 2020's biggest days 4.6-6x; no 8%+ day on a normal-volume day except 2008 when volume was already at records. Before the fix, simulated 5%+ days: median 1.39x, 29% under 1.2x (real 1.96x and 16%). **Built:** (1) funds (`earnings_move == 0`: SPY, QQQ...) have no news jumps (`_news_sd` zero; their moves come through the market factor); (2) a news burst scales with the jump's size (`NEWS_VOLUME_BURST` 10 per standard deviation, decay 30 minutes); (3) a selloff or shock onset multiplies the day's volume by `1 + JUMP_VOLUME (25) * size * beta`. **Result** (12 seeds x 3 years, from the real start): 5%+ days median 1.91x, 14% under 1.2x. `scripts` not changed; the checks were ad hoc (scratchpad). Prices change for a seed (funds lose their news draws); `check_volume.py`'s other statistics were not rerun (the scratch db has no `intraday`). **Left:** buy/sell volume on real days is not in the data (trade-level Lee-Ready classification from Alpaca trades/quotes would give it; one day to test first); stocks' news jumps are still t(4) with 2.5 daily volatilities; the user's other points (event-driven crashes, long moving averages, prediction markets) are proposed in the conversation, not built.
 
 ### Order flow first (the user's point, 2026-11-06: real volume is not moved by price; buy volume moves it up and sell volume down; `MODEL_VERSION` 17)
 

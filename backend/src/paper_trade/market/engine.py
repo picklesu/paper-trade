@@ -191,7 +191,8 @@ VOLUME_DOW = (-0.037, -0.017, -0.007, 0.016, 0.042)  # Monday to Friday, log
 VOLUME_SPIKE = 0.012  # chance a symbol has a heavy day of its own (news, a block trade, a rebalance)
 VOLUME_SPIKE_SIZE = 0.7  # which adds this many times the day's usual volume on average
 # News brings a burst of volume, NEWS_VOLUME_BURST times more, fading over NEWS_VOLUME_DECAY minutes.
-NEWS_VOLUME_BURST, NEWS_VOLUME_DECAY = 4.0, 5.0
+NEWS_VOLUME_BURST, NEWS_VOLUME_DECAY = 10.0, 30.0  # per standard deviation of the jump: a 4-sigma jump trades about four times a normal day
+JUMP_VOLUME = 25.0  # a market-wide jump (selloff, shock onset) adds this times its log size times the symbol's beta to the day's volume multiple
 
 # Spreads widen with volatility (relative to a normal midday minute), up to this.
 MAX_SPREAD_FACTOR = 5.0
@@ -206,7 +207,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 17  # 17: order flow first: a persistent activity state and a signed imbalance drive the day's volume, volatility and direction, and the market's and each symbol's minute volume drive the minute variance (volume no longer follows the price); 16: daily volume clumps over days the way the market's does (persistent market and own factors, the size of the day's move, weekdays; minute noise no longer changes the day's total); 15: volume as uneven as the market's (persistent, bursty minute volume; busy and quiet days; heavy days; expiration, month-end and Russell days; VOLUME_ELASTICITY 0.25); 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 18  # 18: funds have no company-news jumps (SPY once jumped 10% in a minute on "news"), news and selloffs trade in proportion to their size; 17: order flow first: a persistent activity state and a signed imbalance drive the day's volume, volatility and direction, and the market's and each symbol's minute volume drive the minute variance (volume no longer follows the price); 16: daily volume clumps over days the way the market's does (persistent market and own factors, the size of the day's move, weekdays; minute noise no longer changes the day's total); 15: volume as uneven as the market's (persistent, bursty minute volume; busy and quiet days; heavy days; expiration, month-end and Russell days; VOLUME_ELASTICITY 0.25); 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -385,7 +386,7 @@ class MarketEngine:
         self._beta = self._rho * vol / MARKET_VOL
         self._daily_volume = np.array([s.daily_volume for s in specs], dtype=float)
         self._earnings_move = np.array([s.earnings_move for s in specs])
-        self._news_sd = NEWS_SIZE * vol / math.sqrt(TRADING_DAYS_PER_YEAR)
+        self._news_sd = NEWS_SIZE * vol / math.sqrt(TRADING_DAYS_PER_YEAR) * (self._earnings_move > 0)  # funds (SPY, QQQ...) have no company news; their moves come through the market
         self.sectors = sorted({s.sector for s in specs if s.sector})
         self._spy = next((i for i, sp in enumerate(specs) if sp.symbol == "SPY"), None)
         self._sector_of = np.array([self.sectors.index(s.sector) if s.sector else 0 for s in specs])
@@ -1223,7 +1224,7 @@ class MarketEngine:
         sector_load = own_sd * self._sector_corr
         own_load = own_sd * np.sqrt(1 - self._sector_corr**2)
         earnings_on = self._earnings_on(day) & ~replayed
-        news = np.flatnonzero((draws.news_minute >= 0) & ~replayed)  # real days carry their own news
+        news = np.flatnonzero((draws.news_minute >= 0) & ~replayed & (self._news_sd > 0))  # real days carry their own news
         # Activity and order flow come first: they set how much trades, how far the price moves and which way.
         # The day's activity (persistent, shared with volume) scales the day's volatility; a signed imbalance
         # (buyers against sellers) moves the price through the day in proportion to the volume that trades,
@@ -1251,11 +1252,18 @@ class MarketEngine:
         market_flow, own_flow = draws.volume_market[3], np.where(replayed, 0.0, draws.volume_day[:, 5])
         spread = np.sqrt(market_load**2 + own_load**2)
         flow = np.divide(market_load * market_flow + own_load * own_flow, spread, out=np.zeros(n), where=spread > 0)  # unit variance
+        # A selloff or a shock's onset is a burst of selling: it trades in proportion to its size.
+        crash = 0.0
+        if draws.crash_u < CRASHES_PER_YEAR * self._state_crash[state] / TRADING_DAYS_PER_YEAR and real_day is None:
+            crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
+        if began:
+            crash += SHOCK_DROP * onset
+        level = level * np.where(replayed, 1.0, 1.0 + JUMP_VOLUME * crash * self._beta)
         level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day) * volume_events(day))
         news_burst = np.ones((_M, n))
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
-            news_burst[:, i] *= 1 + NEWS_VOLUME_BURST * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
+            news_burst[:, i] *= 1 + NEWS_VOLUME_BURST * max(abs(draws.news_size[i]), 0.5) * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
         volume_raw = level / _M * shape * news_burst * noise
         volume_raw[m_day:] = 0
         # Variance moves with the minute's volume: a burst of trading is a burst of price movement (the day's
@@ -1314,11 +1322,6 @@ class MarketEngine:
         )
         em = np.where(earnings_on, self._earnings_move, 0.0)
         own_jump = draws.earnings * em - 0.5 * em**2
-        crash = 0.0
-        if draws.crash_u < CRASHES_PER_YEAR * self._state_crash[state] / TRADING_DAYS_PER_YEAR and real_day is None:
-            crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
-        if began:
-            crash += SHOCK_DROP * onset
         log += own_jump - crash * self._beta
         log += np.where(self._dividend_on(day) & ~replayed, np.log1p(-self._div_fraction), 0.0)
         for i in news:

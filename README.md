@@ -71,7 +71,7 @@ cd frontend && npm test
 | 8f | A regime-switching future model (calm / choppy / crisis) fitted to the real history | Done |
 | 8f+ | Intraday volume that follows real minute patterns by regime | Done |
 | 8g | Walk-forward checks of the future model against what really happened (`backend/scripts/walk_forward.py`, report in `walk_forward_report.md`) | Checked at the regime and engine levels (`walk_forward*.py`); crisis volatility retuned (the walk-forward still shows it milder than history) |
-| 8h | A more realistic future: volume and order flow that drive price, per-symbol volume persistence, busier days around jobs, CPI, GDP, PCE and FOMC releases; research data steps (`./server.sh update events\|earnings\|flow`) | In progress |
+| 8h | A more realistic future: volume and order flow that drive price, per-symbol volume persistence, busier days around jobs, CPI, GDP, PCE and FOMC releases, a catalog of the large shocks since 1993 by cause; research data steps (`./server.sh update events\|earnings\|flow`) | In progress |
 | 9 | Multi-leg strategies and risk graph | |
 | 10 | Bracket, OCO, trailing stop orders and alerts | |
 | 11 | Analysis tools: screener, portfolio analytics, journal | |

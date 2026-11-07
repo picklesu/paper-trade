@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-11-07. Everything through #87 is merged (`MODEL_VERSION` 20). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
+_Last updated: 2026-11-07. Everything through #89 is merged (`MODEL_VERSION` 20). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
 
 ## Where things stand
 
@@ -64,6 +64,7 @@ _Last updated: 2026-11-07. Everything through #87 is merged (`MODEL_VERSION` 20)
 | Event study of scheduled releases (`scripts/event_study.py`); FOMC release id 101 refused (lists every day) | Merged | #85 |
 | FOMC meeting dates from the Fed's calendar pages (`fomc_dates.json`, `fetch_fomc_dates.py`) added to the event study | Merged | #86 |
 | Release calendar: jobs, CPI, GDP, PCE and FOMC days busier and wider on simulated days (`MODEL_VERSION` 20) | Merged | #87 |
+| Unscheduled event catalog (`event_catalog.py`: 41 labelled shocks, measured by cause) | Merged | #89 |
 | A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.
@@ -84,6 +85,10 @@ _Last updated: 2026-11-07. Everything through #87 is merged (`MODEL_VERSION` 20)
 4. Optional: label intraday candles on replayed days as simulated (the user has not asked for it yet).
 
 **Caveats to tell the user:** fitted shapes are per symbol and per state; crisis rests on one episode; the sim cannot reproduce a specific real 5-minute candle, only its distribution.
+
+### Unscheduled event catalog (the user's request, 2026-11-07; `scripts/event_catalog.py`, report `scripts/event_catalog_report.md`)
+
+41 shocks since 1993 labelled by hand from general knowledge (categories: pandemic, credit, policy, trade, geopolitical, political, data, technical, bubble, other; each `clear`, `probable` or `ambiguous`; a wrong label is possible, the user should check any that matter), each measured on SPY and the VIX: the day's move, the week after, the worst close in the next 60 sessions, the VIX change and 20-session peak, volume against the 60-day median, and sessions (from the 10th) until 10-day volatility is back within 25% of the 250-session level before the event. A measure that needs sessions the data does not have is "not yet" (2026-11-05 has only its day's own numbers). **Coverage:** the detector (4+ standard deviations of the previous 60 sessions, or 4.5%) finds 91 sessions; 60 lie within 3 sessions of an entry (46 of a `clear` one); the rest sit inside crises (late 2008, March 2020) where every day is large, or have no single cause. **By category, falls only** (mean fall / volume / median VIX change / median sessions to calm): pandemic 8.9% / 4.3x / +42% / 34; credit 7.6% / 2.3x / +30% / 36; data 6.3% / 2.7x / +24% / 10; bubble 5.9% / 3.2x / +14% / 16; other 4.1% / 4.5x / +55% / 20; geopolitical 3.7% / 2.7x / +29% / 11; technical (flash crash, Volmageddon, carry trade) 3.5% / 3.5x / **+65%** / 14; trade 3.3% / 2.4x / +36% / 13; political 3.3% / 3.1x / +49% / 10; policy 2.8% / 4.0x / +44% / 10 (3 falls of 10 entries; most policy entries are rallies). Persistence is the least certain column (a crisis's own baseline is high, and a shock inside a crisis settles trivially). The hand-picked entries are about 0.9 falls a year in all (credit 0.18, pandemic 0.12, trade 0.12, the rest under 0.1): a count of remembered events, **not comparable with the engine's rate of all -3% days** (3.2 a year, history 3.1), so no conclusion about the engine's shock frequency follows. **The user's own example is in the data:** 2026-11-05, the day after the midterms, SPY -4.5% (766.81 to 733.00), VIX 16.61 to 28.18 (+70%), volume 126M (3.2x); the 2026-11-06 rebound is not in the saved data yet (update history). **Not built:** typed shocks in the engine (a simulated shock drawing a cause and applying its VIX jump, volume burst and persistence; a label such as "tariff announcement" for the chart).
 
 **Earnings history progress (user's runs, 2026-11-07):** 17 stocks saved (AAPL, MSFT, NVDA, AMD, AVGO, ORCL, GOOGL, DIS, AMZN, TSLA, HD, COST, KO, PG, JPM, BAC, XOM; 66-123 reports each); META, NFLX, NKE, WMT, GS and V returned no `quarterlyEarnings` (not marked fetched, retried next run: unsupported or Alpha Vantage's quiet throttle); the daily limit stopped the run. Alpha Vantage's limit message repeats the API key: `parse_earnings_history` masks the known key by value and the common wordings (it still should not be relied on as the only guard). **The key was printed once in the user's terminal and pasted into a session transcript: it should be rotated** (Alpha Vantage account page, then `ALPHAVANTAGE_API_KEY` in `backend/.env`). A symbol with no answer is tried 3 times, then left alone (`earnings_misses`).
 

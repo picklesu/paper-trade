@@ -4,7 +4,7 @@
 
 `--db` is a scratch copy of the `daily`, `macro` and `releases` tables (filled by
 `./server.sh update history` and `update events`). For each release kind (jobs, CPI, GDP, PCE,
-retail sales; FOMC once its dates are fixed) and period it reports, against the 60 sessions
+retail sales, and FOMC decision days from `market/fomc_dates.json`) and period it reports, against the 60 sessions
 before, never counting another release day:
 
 * the size of the day's close-to-close move, the opening gap and the move after the open
@@ -22,6 +22,7 @@ future should treat as busy, and by how much.
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from datetime import date
@@ -45,7 +46,15 @@ def load(db: str):
     vix = {date.fromisoformat(d): x for d, x in con.execute("SELECT day, value FROM macro WHERE series='VIXCLS'")}
     macro = {s: {date.fromisoformat(d): x for d, x in con.execute("SELECT day, value FROM macro WHERE series=?", (s,))} for s in ("UNRATE", "CPIAUCSL")}
     releases = {}
+    fomc_file = Path(__file__).parent.parent / "src" / "paper_trade" / "market" / "fomc_dates.json"  # the Fed's own calendar (fetch_fomc_dates.py)
+    if not fomc_file.exists():
+        raise SystemExit(f"{fomc_file} is missing: run scripts/fetch_fomc_dates.py")
+    fomc = json.loads(fomc_file.read_text())
+    releases["fomc"] = [date.fromisoformat(d) for d in fomc["meetings"]]
+    releases["_calls"] = [date.fromisoformat(d) for d in fomc["calls"]]  # unscheduled calls: busy days, kept out of every baseline, not reported
     for kind in KINDS:
+        if kind == "fomc":
+            continue
         ds = [date.fromisoformat(d) for (d,) in con.execute("SELECT day FROM releases WHERE kind=? ORDER BY day", (kind,))]
         if too_dense(ds):
             print(f"skipping {kind}: it lists a date for nearly every day, not events")
@@ -102,8 +111,10 @@ def main() -> None:
         window = window[ordinary[window] & ~np.isnan(series[window])]
         return abs(series[i]) / np.abs(series[window]).mean() if len(window) >= 20 and not np.isnan(series[i]) else np.nan
 
-    out = ["# Scheduled releases: SPY on release days\n", f"Event days are the release dates that fall on a session (1993 on); baseline: the 60 sessions before, without any release day. Multiples are of an ordinary day's size; the interval is a 90% bootstrap over events.\n"]
+    out = ["# Scheduled releases: SPY on release days\n", f"Event days are the release dates that fall on a session (1993 on); baseline: the 60 sessions before, without any release day or unscheduled FOMC call. A day with two releases (an FOMC decision and a CPI) is counted in both tables. Multiples are of an ordinary day's size; the interval is a 90% bootstrap over events.\n"]
     for kind, ds in releases.items():
+        if kind.startswith("_"):
+            continue
         out += [f"\n## {kind}\n", "| period | events | close-to-close | opening gap | after the open | volume vs 60d median | VIX change (points of log %) |", "|---|---|---|---|---|---|---|"]
         for name, lo, hi in PERIODS:
             idx = [index[d] for d in ds if d in index and lo <= d <= hi and index[d] > BASE]

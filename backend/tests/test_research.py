@@ -22,7 +22,7 @@ def test_release_dates_parse_and_save() -> None:
         calls.append(release_id)
         if release_id == 10:
             raise FetchError("boom")
-        return "Name", [date(2024, 1, 5)]
+        return {50: "Employment Situation", 10: "Consumer Price Index", 101: "FOMC Press Release", 53: "Gross Domestic Product", 54: "Personal Income and Outlays", 9: "Advance Retail Sales"}[release_id], [date(2024, 1, 5)]
 
     releases = Releases(store, "key", fetch)
     problems = releases.update(lambda m: None)
@@ -73,7 +73,7 @@ def test_flow_saves_each_day_and_keeps_what_came_before_a_limit() -> None:
     store = Store(":memory:")
     day1, day2, day3 = date(2020, 3, 9), date(2020, 3, 12), date(2020, 3, 16)
 
-    def fetch(symbol, day, creds, now):
+    def fetch(symbol, day, creds, now, partial=None, checkpoint=None):
         if day == day3:
             raise FetchStop("rate limit")
         buy, sell = [0] * SLOTS, [0] * SLOTS
@@ -85,3 +85,38 @@ def test_flow_saves_each_day_and_keeps_what_came_before_a_limit() -> None:
     assert len(problems) == 1 and flow.saved("SPY") == {day1, day2}
     assert flow.day("SPY", day1)[0][0] == 7 and flow.day("SPY", day1)[1][0] == 3
     assert flow.update("SPY", (day1, day2), datetime(2026, 1, 1, tzinfo=UTC), lambda m: None) == []  # nothing left to fetch
+
+
+def test_a_wrong_release_id_is_refused_and_conditions_are_skipped_and_a_stopped_day_resumes() -> None:
+    store = Store(":memory:")
+    releases = Releases(store, "k", lambda i, k: ("Something Else Entirely", [date(2024, 1, 5)]))
+    problems = releases.update(lambda m: None)
+    assert len(problems) == 6 and releases.days("jobs") == []  # nothing saved under a wrong label
+
+    # an odd lot, an out-of-sequence print and a closing cross neither count nor set the direction
+    trades = [
+        {"t": "2020-03-16T13:31:00Z", "p": 100.0, "s": 5, "c": ["@"]},
+        {"t": "2020-03-16T13:31:01Z", "p": 101.0, "s": 9, "c": ["@"]},
+        {"t": "2020-03-16T13:31:02Z", "p": 90.0, "s": 400, "c": ["Z"]},
+        {"t": "2020-03-16T13:31:03Z", "p": 100.5, "s": 7, "c": ["I"]},
+        {"t": "2020-03-16T13:31:04Z", "p": 100.5, "s": 6, "c": ["@"]},  # below 101: a sell
+    ]
+    days, _, _ = classify(trades)
+    buy, sell = days[date(2020, 3, 16)]
+    assert buy[1] == 9 and sell[1] == 6
+
+    store2 = Store(":memory:")
+    seen = []
+
+    def fetch(symbol, day, creds, now, partial=None, checkpoint=None):
+        seen.append(partial)
+        if partial is None:
+            checkpoint(("t2", 100.0, 1, [1] + [0] * (SLOTS - 1), [0] * SLOTS))
+            raise FetchError("dropped")
+        return [partial[3][0] + 5] + [0] * (SLOTS - 1), [0] * SLOTS
+
+    flow = Flow(store2, CREDS, fetch)
+    day = date(2020, 3, 16)
+    assert flow.update("SPY", (day,), datetime(2026, 1, 1, tzinfo=UTC), lambda m: None)
+    assert flow.update("SPY", (day,), datetime(2026, 1, 1, tzinfo=UTC), lambda m: None) == []
+    assert seen[1][0] == "t2" and flow.day("SPY", day)[0][0] == 6  # the second run resumed from the page it had reached

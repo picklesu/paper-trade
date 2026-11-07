@@ -29,8 +29,8 @@ from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.market.symbols import SYMBOLS
 from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
 from paper_trade.pricehistory import PriceHistory
-from paper_trade.research import FLOW_DAYS, FLOW_SYMBOL, EarningsHistory, Flow, Releases
 from paper_trade.realprices import FetchError, FetchStop, RealPrices
+from paper_trade.research import FLOW_DAYS, FLOW_SYMBOL, EarningsHistory, Flow, Releases
 from paper_trade.store import DEFAULT_DB, Store
 
 PRICE_HISTORY_PAUSE_SECONDS = 2  # between Tiingo requests

@@ -10,14 +10,14 @@ scripts in `backend/scripts`:
 * `Flow`: buyer- and seller-initiated volume per minute for chosen days, from Alpaca's trades
   (SIP). A trade is classified by the tick test: above the last different price a buy, below
   a sell, at it the same side as before. No quotes are fetched (they are ten times the size),
-  so it is less exact than Lee-Ready (about 75-80% of trades right); it shows the day's
+  so it is less exact than Lee-Ready (the tick test is usually right on roughly 75-80% of trades in studies; not measured here); it shows the day's
   imbalance, not who caused what.
 """
 
+import json
 import struct
 import urllib.parse
 from collections.abc import Callable
-from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
 from paper_trade.intraday import OPEN_MINUTE, SLOTS
@@ -32,13 +32,13 @@ TRADES_URL = "https://data.alpaca.markets/v2/stocks/trades"
 
 # FRED release id -> our label. The update prints each release's name from FRED, so a wrong id shows.
 RELEASES = {
-    50: "jobs",  # Employment Situation
-    10: "cpi",  # Consumer Price Index
-    101: "fomc",  # FOMC Press Release
-    53: "gdp",  # Gross Domestic Product
-    54: "pce",  # Personal Income and Outlays
-    9: "retail",  # Advance Monthly Sales for Retail and Food Services
-}
+    50: ("jobs", "employment"),  # Employment Situation
+    10: ("cpi", "consumer price"),  # Consumer Price Index
+    101: ("fomc", "fomc"),  # FOMC Press Release
+    53: ("gdp", "gross domestic"),  # Gross Domestic Product
+    54: ("pce", "personal income"),  # Personal Income and Outlays
+    9: ("retail", "retail"),  # Advance Monthly Sales for Retail and Food Services
+}  # (label, a word the release's name must contain: a wrong id is refused, not saved under the wrong label)
 
 # Days to classify trade by trade (about 1,000 requests each for SPY): the largest moves of the
 # last decade and a few ordinary sessions for comparison.
@@ -48,20 +48,6 @@ FLOW_DAYS = (
     date(2020, 3, 24), date(2022, 6, 13), date(2024, 8, 5), date(2025, 4, 3), date(2025, 4, 4), date(2025, 4, 9),
     date(2019, 6, 4), date(2021, 6, 8), date(2023, 7, 11), date(2024, 5, 14), date(2025, 9, 9),
 )  # fmt: skip
-
-
-def _transaction(db):
-    @contextmanager
-    def run():
-        db.execute("BEGIN")
-        try:
-            yield
-        except BaseException:
-            db.execute("ROLLBACK")
-            raise
-        db.execute("COMMIT")
-
-    return run()
 
 
 # --- scheduled releases (FRED) -------------------------------------------------------------
@@ -106,13 +92,16 @@ class Releases:
     def update(self, say: Callable[[str], None] = print) -> list[str]:
         assert self.key
         problems = []
-        for release_id, kind in RELEASES.items():
+        for release_id, (kind, expected) in RELEASES.items():
             try:
                 name, days = self._fetch(release_id, self.key)
             except FetchStop:
                 raise
             except FetchError as e:
                 problems.append(f"release {release_id} ({kind}): {e}")
+                continue
+            if expected not in name.lower():
+                problems.append(f"release {release_id} is called {name!r}, not the {kind} release: not saved (fix RELEASES)")
                 continue
             with self._db:
                 self._db.executemany("INSERT OR REPLACE INTO releases (kind, day) VALUES (?, ?)", [(kind, d.isoformat()) for d in days])
@@ -132,7 +121,7 @@ def parse_earnings_history(body: object) -> list[tuple[date, str, float | None, 
         raise FetchError("Alpha Vantage's earnings answer wasn't readable")
     note = body.get("Information") or body.get("Note")
     if note:  # the daily limit (25 requests on the free plan) or a bad key
-        raise FetchStop(f"Alpha Vantage: {str(note)[:160]}")
+        raise FetchStop(f"Alpha Vantage said: {str(note)[:300]} (the daily limit is 25 requests; a bad key looks the same)")
     rows = body.get("quarterlyEarnings")
     if not isinstance(rows, list):
         raise FetchError("Alpha Vantage had no quarterly earnings for this symbol")
@@ -207,11 +196,19 @@ class EarningsHistory:
 # --- buy and sell volume (Alpaca trades, tick test) -----------------------------------------
 
 
+# Trades that must not set the tick-test direction or count: out of sequence, extended hours, odd lots, derivatively or
+# average priced, bunched, contingent, prior reference price, and the opening/closing/reopening cross prints (their
+# volume is not counted either, so the closing cross is missing from the totals).
+SKIP_CONDITIONS = frozenset("ZUTI47BVWPMQO56")
+
+
 def classify(trades: list[dict], last_price: float | None = None, last_side: int = 0) -> tuple[dict[date, tuple[list[int], list[int]]], float | None, int]:
     """Buy and sell volume per regular-session minute slot by day, from trades in time order.
     Returns the days, and the last price and side so the next page continues the sequence."""
     days: dict[date, tuple[list[int], list[int]]] = {}
     for t in trades:
+        if SKIP_CONDITIONS.intersection(t.get("c") or ()):
+            continue
         price, size = float(t["p"]), int(t.get("s") or 0)
         if last_price is not None:
             if price > last_price:
@@ -228,15 +225,24 @@ def classify(trades: list[dict], last_price: float | None = None, last_side: int
     return days, last_price, last_side
 
 
-Trades = Callable[[str, date, Credentials, datetime], tuple[list[int], list[int]]]
+# A day in progress: the next page's token, the tick test's last price and side, and the sums so far.
+Partial = tuple[str | None, float | None, int, list[int], list[int]]
+Trades = Callable[[str, date, Credentials, datetime, Partial | None, Callable[[Partial], None] | None], tuple[list[int], list[int]]]
 
 
-def fetch_flow_day(symbol: str, day: date, creds: Credentials, now: datetime, limit: RateLimit = LIMIT) -> tuple[list[int], list[int]]:
-    """One session's buy and sell volume by minute (pages of 10,000 trades: about a thousand requests for SPY)."""
-    start = datetime(day.year, day.month, day.day, 9, 30, tzinfo=MARKET_TZ).astimezone(UTC)
-    end = min(datetime(day.year, day.month, day.day, 16, 1, tzinfo=MARKET_TZ).astimezone(UTC), now - SIP_DELAY)
-    buy, sell = [0] * SLOTS, [0] * SLOTS
-    token, last_price, last_side = None, None, 0
+def fetch_flow_day(
+    symbol: str, day: date, creds: Credentials, now: datetime, partial: Partial | None = None,
+    checkpoint: Callable[[Partial], None] | None = None, limit: RateLimit = LIMIT,
+) -> tuple[list[int], list[int]]:  # fmt: skip
+    """One session's buy and sell volume by minute (pages of 10,000 trades: a thousand requests or more for SPY).
+    The window starts at 9:25 so the tick test has a price before the open. `checkpoint` is called after each page
+    so a dropped connection or a rate limit resumes from `partial` instead of page 1."""
+    start = datetime(day.year, day.month, day.day, 9, 25, tzinfo=MARKET_TZ).astimezone(UTC)
+    close = datetime(day.year, day.month, day.day, 16, 1, tzinfo=MARKET_TZ).astimezone(UTC)
+    if close > now - SIP_DELAY:
+        raise FetchError(f"{day} is not over yet (the feed runs about 20 minutes behind)")
+    end = close
+    token, last_price, last_side, buy, sell = partial or (None, None, 0, [0] * SLOTS, [0] * SLOTS)
     while True:
         query = {"symbols": symbol, "start": start.isoformat().replace("+00:00", "Z"), "end": end.isoformat().replace("+00:00", "Z"), "limit": 10000, "feed": "sip"}
         if token:
@@ -250,7 +256,10 @@ def fetch_flow_day(symbol: str, day: date, creds: Credentials, now: datetime, li
         b_day, s_day = days.get(day, ([0] * SLOTS, [0] * SLOTS))
         buy = [x + y for x, y in zip(buy, b_day, strict=True)]
         sell = [x + y for x, y in zip(sell, s_day, strict=True)]
-        if not (token := body.get("next_page_token")):
+        token = body.get("next_page_token")
+        if checkpoint and token:
+            checkpoint((token, last_price, last_side, buy, sell))
+        if not token:
             return buy, sell
 
 
@@ -262,6 +271,7 @@ class Flow:
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS flow (symbol TEXT NOT NULL, day TEXT NOT NULL, buy BLOB NOT NULL, sell BLOB NOT NULL, PRIMARY KEY (symbol, day))"
         )
+        self._db.execute("CREATE TABLE IF NOT EXISTS flow_partial (symbol TEXT NOT NULL, day TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (symbol, day))")
 
     @property
     def configured(self) -> bool:
@@ -276,8 +286,19 @@ class Flow:
         problems = []
         for day in sorted(set(days) - self.saved(symbol)):
             say(f"{symbol} {day} trades...")
+            row = self._db.execute("SELECT state FROM flow_partial WHERE symbol = ? AND day = ?", (symbol, day.isoformat())).fetchone()
+            partial = None
+            if row:
+                token, price, side, b, s = json.loads(row[0])
+                partial = (token, price, side, b, s)
+                say("  resuming after a stop")
+
+            def checkpoint(state: Partial, symbol=symbol, day=day) -> None:
+                with self._db:
+                    self._db.execute("INSERT OR REPLACE INTO flow_partial (symbol, day, state) VALUES (?, ?, ?)", (symbol, day.isoformat(), json.dumps(state)))
+
             try:
-                buy, sell = self._fetch(symbol, day, self.creds, now)
+                buy, sell = self._fetch(symbol, day, self.creds, now, partial, checkpoint)
             except FetchStop as e:
                 problems.append(f"{day}: {e}")
                 break
@@ -287,11 +308,12 @@ class Flow:
             if not any(buy) and not any(sell):
                 problems.append(f"{symbol} {day}: no trades returned")
                 continue
-            with _transaction(self._db):
+            with self._db:
                 self._db.execute(
                     "INSERT OR REPLACE INTO flow (symbol, day, buy, sell) VALUES (?, ?, ?, ?)",
                     (symbol, day.isoformat(), struct.pack(f"<{SLOTS}I", *[min(v, 2**32 - 1) for v in buy]), struct.pack(f"<{SLOTS}I", *[min(v, 2**32 - 1) for v in sell])),
                 )
+                self._db.execute("DELETE FROM flow_partial WHERE symbol = ? AND day = ?", (symbol, day.isoformat()))
             say(f"{symbol} {day}: buy {sum(buy):,} sell {sum(sell):,} ({sum(buy) / max(sum(buy) + sum(sell), 1):.1%} buys)")
         return problems
 

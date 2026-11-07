@@ -59,6 +59,7 @@ _Last updated: 2026-11-07. Everything through #82 is merged (`MODEL_VERSION` 18)
 | Volume flow (the user's report: weeks of near-identical daily volume): persistent day-to-day volume state (`MODEL_VERSION` 16) | Merged | #78 |
 | Order flow first (the user's point: volume moves price, not the reverse): activity state, signed imbalance, minute-level links (`MODEL_VERSION` 17) | Merged | #79 |
 | Big moves trade big volume (the user's report: SPY +$72 in a calm market on 49M to 67M shares): funds have no company-news jumps, news and selloffs trade in proportion to their size (`MODEL_VERSION` 18) | Merged | #82 |
+| Research data steps `update events\|earnings\|flow` (FRED release dates, Alpha Vantage earnings history, SPY buy/sell volume by tick test); not run yet | In review | |
 | A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.
@@ -79,6 +80,10 @@ _Last updated: 2026-11-07. Everything through #82 is merged (`MODEL_VERSION` 18)
 4. Optional: label intraday candles on replayed days as simulated (the user has not asked for it yet).
 
 **Caveats to tell the user:** fitted shapes are per symbol and per state; crisis rests on one episode; the sim cannot reproduce a specific real 5-minute candle, only its distribution.
+
+### Research data for a more realistic future (the user's request, 2026-11-07: "any data that is helpful needs to be gathered")
+
+Three new `./server.sh update` steps, none in the default run, all in `backend/src/paper_trade/research.py` (tables `releases`, `earnings_history`/`earnings_fetched`, `flow`; the app never reads them, scripts will): **`events`** FRED release dates (ids in `RELEASES`: 50 jobs, 10 CPI, 101 FOMC, 53 GDP, 54 PCE, 9 retail sales; the update prints each release's name from FRED so a wrong id shows; dates from 1990 including announced ones); **`earnings`** Alpha Vantage `EARNINGS` per stock (report day, pre/post-market, EPS, surprise %; 25 requests a day on the free plan, so it stops at the limit and resumes next day; funds skipped); **`flow`** SPY buyer- and seller-initiated volume per minute from Alpaca SIP trades on `FLOW_DAYS` (March 2020, April 2025, Feb 2018, Aug 2024... plus ordinary days; about 1,000 requests a day, each day saved before the next, resumes), classified by the **tick test** (no quotes: they are ten times the size; about 75-80% of trades right, so it shows the day's imbalance, not causes). **Not run yet**: the sandbox must not spend the keys; the user runs `./server.sh update events`, `earnings` (on several days) and `flow` on the Mac. The release ids, Alpha Vantage's `EARNINGS` field names and Alpaca's trades response were written from memory of their docs and tested only against fakes: check the first real run's output (names, counts) before building on it. **Next:** event study on the dates (move and volatility on jobs/CPI/FOMC days against ordinary days, surprise sign from the data when available), earnings-day inference replaced by real dates, the flow days used to calibrate `FLOW_SHARE` and the volume-to-imbalance link, per-symbol volume persistence fitted from the daily data (TSLA's lag-1 autocorrelation is .82 real against .39 simulated; SPY .69 against .41).
 
 ### Big moves trade big volume (the user's report, 2026-11-07: a future day with SPY up about $100 on average volume; `MODEL_VERSION` 18)
 

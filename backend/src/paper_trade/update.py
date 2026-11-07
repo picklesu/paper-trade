@@ -8,6 +8,9 @@ want newer data, then restart the server (it reads the data at startup).
     ./server.sh update history    Tiingo's daily bars and FRED's economic series
     ./server.sh update options    Alpaca's option chains (fitted), the interest rate
     ./server.sh update intraday   Alpaca's one-minute bars (volume profile fitting; not in the default run)
+    ./server.sh update events     FRED's release dates: jobs, CPI, FOMC, GDP, PCE, retail sales (research; not in the default run)
+    ./server.sh update earnings   past earnings dates and surprises from Alpha Vantage, 25 symbols a day (research; resumes)
+    ./server.sh update flow       buyer- and seller-initiated SPY volume on chosen days, from Alpaca's trades (about 1,000 requests a day)
 """
 
 import argparse
@@ -26,6 +29,7 @@ from paper_trade.market.calendar import MARKET_TZ
 from paper_trade.market.symbols import SYMBOLS
 from paper_trade.optiondata import Context, OptionData, fetch_bars, fetch_earnings, fetch_treasury_rate, summarize
 from paper_trade.pricehistory import PriceHistory
+from paper_trade.research import FLOW_DAYS, FLOW_SYMBOL, EarningsHistory, Flow, Releases
 from paper_trade.realprices import FetchError, FetchStop, RealPrices
 from paper_trade.store import DEFAULT_DB, Store
 
@@ -34,7 +38,8 @@ MACRO_PAUSE_SECONDS = 1  # between FRED requests (it allows 120 a minute)
 
 Say = Callable[[str], None]
 STEPS = ("prices", "history", "options")
-ALL_STEPS = (*STEPS, "intraday")  # intraday is large (about 2000 requests): only when asked for
+RESEARCH_STEPS = ("intraday", "events", "earnings", "flow")  # large or for study only: just when asked for
+ALL_STEPS = (*STEPS, *RESEARCH_STEPS)
 
 
 def update_prices(real: RealPrices, symbols: list[str], say: Say = print) -> list[str]:
@@ -234,6 +239,27 @@ def update_intraday(minutes: Intraday, say: Say = print) -> list[str]:
     return problems
 
 
+def update_research(step: str, store: Store, creds, say: Say = print) -> list[str]:
+    """The study data: release dates (FRED), earnings history (Alpha Vantage), buy/sell volume (Alpaca)."""
+    if step == "events":
+        releases = Releases(store, macro_mod.fred_key())
+        if not releases.configured:
+            return ["FRED_API_KEY missing: add it to backend/.env"]
+        try:
+            return releases.update(say)
+        except FetchStop as e:
+            return [str(e)]
+    if step == "earnings":
+        history = EarningsHistory(store, optiondata.av_key())
+        if not history.configured:
+            return ["ALPHAVANTAGE_API_KEY missing: add it to backend/.env"]
+        return history.update([s.symbol for s in SYMBOLS if s.earnings_move > 0], say)
+    flow = Flow(store, creds)
+    if not flow.configured:
+        return ["flow: no Alpaca keys (APCA_API_KEY_ID, APCA_API_SECRET_KEY in backend/.env)"]
+    return flow.update(FLOW_SYMBOL, FLOW_DAYS, datetime.now(UTC), say)
+
+
 def run(store: Store, steps: tuple[str, ...] = STEPS, say: Say = print) -> list[str]:
     """Run the chosen steps against the store; returns every problem found."""
     symbols = [s.symbol for s in SYMBOLS]
@@ -248,6 +274,9 @@ def run(store: Store, steps: tuple[str, ...] = STEPS, say: Say = print) -> list[
         problems += update_options(OptionData(store, creds, optiondata.av_key()), symbols, say)
     if "intraday" in steps:
         problems += update_intraday(Intraday(store, creds), say)
+    for step in ("events", "earnings", "flow"):
+        if step in steps:
+            problems += update_research(step, store, creds, say)
     return problems
 
 

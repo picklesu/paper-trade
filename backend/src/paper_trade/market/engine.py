@@ -46,6 +46,7 @@ whole minute) come from a new seed, while everything before it is unchanged.
 Each market also gets years of history before its start (`backfill_iter`).
 """
 
+import functools
 import json
 import math
 import zlib
@@ -408,6 +409,9 @@ class _Persistence:
             if fit := fits.get(spec.symbol):
                 for k, a in arrays.items():
                     a[i] = fit.get(k, a[i])
+        over = arrays["fast_share"] + arrays["slow_share"]  # rounded shares can add to a hair over 1: the white rest must stay real
+        scale = np.where(over > 1.0, 1.0 / over, 1.0)
+        arrays["fast_share"], arrays["slow_share"] = arrays["fast_share"] * scale, arrays["slow_share"] * scale
         return cls(**arrays)
 
 
@@ -1525,13 +1529,13 @@ class MarketEngine:
         slow_rho = np.concatenate([[VOLUME_SLOW[0]], persist.slow_rho])
         fast_share = np.concatenate([[VOLUME_FAST[1]], persist.fast_share])
         slow_share = np.concatenate([[VOLUME_SLOW[1]], persist.slow_share])
-        white = 1 - fast_share - slow_share
+        white = np.maximum(1 - fast_share - slow_share, 0.0)
         eps_fast = np.concatenate([[draws.volume_market[0]], draws.volume_day[:, 3]])
         eps_slow = np.concatenate([[draws.volume_market[1]], draws.volume_day[:, 4]])
         eps_white = np.concatenate([[draws.volume_market[2]], draws.volume_day[:, 0]])
         new = np.stack([fast_rho * old[0] + np.sqrt(1 - fast_rho**2) * eps_fast, slow_rho * old[1] + np.sqrt(1 - slow_rho**2) * eps_slow])
         comps = np.sqrt(fast_share) * new[0] + np.sqrt(slow_share) * new[1] + np.sqrt(white) * eps_white
-        link = VOLUME_VOL_LINK
+        link = VOLUME_VOL_LINK  # (the volatility link keeps the global sizes, not the fitted ones: a symbol's volume persistence changes, its price statistics do not)
         market_mult = math.exp(link * VOLUME_MARKET_SD * comps[0] - (link * VOLUME_MARKET_SD) ** 2)
         own_mult = np.exp(link * VOLUME_OWN_SD * comps[1:] - (link * VOLUME_OWN_SD) ** 2)
         return new, comps, market_mult, own_mult
@@ -1941,6 +1945,7 @@ def _unit_hash(x: np.ndarray) -> np.ndarray:
     return ((x >> np.uint64(11)).astype(float) + 0.5) / 2.0**53
 
 
+@functools.cache
 def _flow_mean(a: float = VOLUME_FLOW_SIZE) -> float:
     """E[exp(a|s| - b s)] for a unit normal s (the mean of the order-flow factor on volume)."""
     b = VOLUME_FLOW_SELL

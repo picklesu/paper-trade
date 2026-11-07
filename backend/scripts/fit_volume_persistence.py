@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from datetime import date
@@ -146,7 +147,7 @@ def write(path: Path, params: dict[str, np.ndarray]) -> None:
     path.write_text(json.dumps(out, indent=1) + "\n")
 
 
-def report(real: np.ndarray, sims: np.ndarray) -> None:
+def report(real: np.ndarray, sims: np.ndarray) -> float:
     c_real, c_sim = autocov(real), np.mean([autocov(s) for s in sims], axis=0)
     ac = lambda c: c[:, 1:] / c[:, :1]  # noqa: E731
     r, m = ac(c_real), ac(c_sim)
@@ -157,6 +158,7 @@ def report(real: np.ndarray, sims: np.ndarray) -> None:
     print(f"{'median':8s} {np.median(np.sqrt(c_real[:, 0])):.2f}/{np.median(np.sqrt(c_sim[:, 0])):.2f}    " + "  ".join(f"{np.median(r[:, k]):5.2f}/{np.median(m[:, k]):4.2f}" for k in range(len(LAGS))))
     err = np.abs(r - m)[:, :].mean(axis=0)
     print("mean absolute autocorrelation error over symbols, by lag: " + " ".join(f"{e:.3f}" for e in err))
+    return float(err.mean())
 
 
 def main() -> None:
@@ -166,7 +168,8 @@ def main() -> None:
     ap.add_argument("--seeds", type=int, default=8)
     ap.add_argument("--out", type=Path, default=engine_mod.PERSISTENCE_FILE)
     a = ap.parse_args()
-    engine_mod.PERSISTENCE_FILE = a.out  # the engine reads the file being fitted
+    work = a.out.with_name(a.out.name + ".fit")  # rounds write here; the real file is replaced only by a fit that ended better
+    engine_mod.PERSISTENCE_FILE = work  # the engine reads the file being fitted
     we.init(a.db)
     full = RealBars(NAMES, we.G["bars"], we.G["vix"], we.G["series"])
     real = real_series(a.db)
@@ -175,14 +178,20 @@ def main() -> None:
         "market_sd": np.full(n, VOLUME_MARKET_SD), "own_sd": np.full(n, VOLUME_OWN_SD), "fast_share": np.full(n, VOLUME_FAST[1]),
         "slow_share": np.full(n, VOLUME_SLOW[1]), "slow_rho": np.full(n, VOLUME_SLOW[0]), "flow_size": np.full(n, VOLUME_FLOW_SIZE),
     }  # fmt: skip
+    errors = []
     for it in range(a.iterations + 1):
-        write(a.out, cur)  # the engine reads the file when it is built
+        write(work, cur)  # the engine reads the file when it is built
         sims = simulate(full, a.seeds)
-        print(f"\nround {it} (params written to {a.out.name})")
-        report(real, sims)
+        print(f"\nround {it} (params in {work.name})")
+        errors.append(report(real, sims))
         if it < a.iterations:
             cur = fit_round(real, sims, cur)
-
+    if errors[-1] < errors[0]:
+        os.replace(work, a.out)
+        print(f"\nfit better than the start ({errors[0]:.3f} -> {errors[-1]:.3f}); written to {a.out}")
+    else:
+        work.unlink()
+        print(f"\nno better than the start ({errors[0]:.3f} -> {errors[-1]:.3f}); {a.out} left as it was")
 
 if __name__ == "__main__":
     main()

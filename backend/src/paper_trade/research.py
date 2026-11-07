@@ -183,7 +183,9 @@ class EarningsHistory:
         """Each symbol not yet fetched; stops at the daily limit (run it again tomorrow)."""
         assert self.key
         problems = []
-        for symbol in self.due(symbols):
+        for n, symbol in enumerate(self.due(symbols)):
+            if n:
+                self._sleep(EARNINGS_PAUSE_SECONDS)  # before every request but the first, whatever the last one did
             rows = None
             try:
                 for attempt in range(EARNINGS_RETRIES):
@@ -210,7 +212,6 @@ class EarningsHistory:
                 )
                 self._db.execute("INSERT OR REPLACE INTO earnings_fetched (symbol, at) VALUES (?, ?)", (symbol, datetime.now(UTC).isoformat()))
             say(f"{symbol}: {len(rows)} reports")
-            self._sleep(EARNINGS_PAUSE_SECONDS)
         return problems
 
     def days(self, symbol: str) -> list[date]:

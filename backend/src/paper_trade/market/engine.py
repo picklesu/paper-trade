@@ -63,6 +63,7 @@ from paper_trade.market.calendar import (
     SESSION_SECONDS,
     add_trading_days,
     day_effects,
+    release_effects,
     is_trading_day,
     market_day,
     next_trading_day,
@@ -211,7 +212,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 19  # 19: each symbol's day-level volume persists as its own fit says (TSLA's for months, KO's for days); 18: funds have no company-news jumps (SPY once jumped 10% in a minute on "news"), news and selloffs trade in proportion to their size; 17: order flow first: a persistent activity state and a signed imbalance drive the day's volume, volatility and direction, and the market's and each symbol's minute volume drive the minute variance (volume no longer follows the price); 16: daily volume clumps over days the way the market's does (persistent market and own factors, the size of the day's move, weekdays; minute noise no longer changes the day's total); 15: volume as uneven as the market's (persistent, bursty minute volume; busy and quiet days; heavy days; expiration, month-end and Russell days; VOLUME_ELASTICITY 0.25); 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 20  # 20: scheduled releases (jobs, CPI, GDP, PCE, FOMC) make a simulated session busier and wider, ordinary ones a little quieter; 19: each symbol's day-level volume persists as its own fit says (TSLA's for months, KO's for days); 18: funds have no company-news jumps (SPY once jumped 10% in a minute on "news"), news and selloffs trade in proportion to their size; 17: order flow first: a persistent activity state and a signed imbalance drive the day's volume, volatility and direction, and the market's and each symbol's minute volume drive the minute variance (volume no longer follows the price); 16: daily volume clumps over days the way the market's does (persistent market and own factors, the size of the day's move, weekdays; minute noise no longer changes the day's total); 15: volume as uneven as the market's (persistent, bursty minute volume; busy and quiet days; heavy days; expiration, month-end and Russell days; VOLUME_ELASTICITY 0.25); 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -1267,6 +1268,9 @@ class MarketEngine:
         # Each symbol's loadings on them, today.
         h_own = np.ones(n) if start.own_variance is None else start.own_variance
         holiday_volume, holiday_sd = (1.0, 1.0) if real_day is not None else day_effects(day)  # real days carry their own
+        if real_day is None:  # scheduled releases (jobs, CPI, FOMC...) make a simulated day busier and wider; every session is divided by the average
+            release_volume, release_sd = release_effects(day, volume_events(day))  # (which also holds the expiration / month-end volume)
+            holiday_volume, holiday_sd = holiday_volume * release_volume, holiday_sd * release_sd
         market_load = self._rho * self._day_sd * math.sqrt(h) * scale * holiday_sd
         own_sd = np.sqrt(1 - self._rho**2) * self._day_sd * np.sqrt(h_own) * scale * holiday_sd
         sector_load = own_sd * self._sector_corr
@@ -1307,7 +1311,7 @@ class MarketEngine:
         if began:
             crash += SHOCK_DROP * onset
         level = level * np.where(replayed, 1.0, 1.0 + JUMP_VOLUME * crash * np.abs(self._beta))  # a selloff trades more in every symbol, hedges included
-        level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day, self._persist) * volume_events(day))
+        level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day, self._persist) * (volume_events(day) if real_day is not None else 1.0))
         news_burst = np.ones((_M, n))
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)

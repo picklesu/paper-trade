@@ -35,7 +35,6 @@ TRADES_URL = "https://data.alpaca.markets/v2/stocks/trades"
 RELEASES = {
     50: ("jobs", "employment"),  # Employment Situation
     10: ("cpi", "consumer price"),  # Consumer Price Index
-    101: ("fomc", "fomc"),  # FOMC Press Release
     53: ("gdp", "gross domestic"),  # Gross Domestic Product
     54: ("pce", "personal income"),  # Personal Income and Outlays
     9: ("retail", "retail"),  # Advance Monthly Sales for Retail and Food Services
@@ -52,6 +51,14 @@ FLOW_DAYS = (
 
 
 # --- scheduled releases (FRED) -------------------------------------------------------------
+
+
+def too_dense(days: list[date]) -> bool:
+    """More than MAX_PER_YEAR dates in some calendar year: a list of every day, not of events."""
+    per_year: dict[int, int] = {}
+    for d in set(days):
+        per_year[d.year] = per_year.get(d.year, 0) + 1
+    return max(per_year.values(), default=0) > MAX_PER_YEAR
 
 
 def parse_release_dates(body: object) -> list[date]:
@@ -85,6 +92,10 @@ class Releases:
         self._fetch = fetch
         self._db = store.connection
         self._db.execute("CREATE TABLE IF NOT EXISTS releases (kind TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (kind, day))")
+        for (kind,) in self._db.execute("SELECT DISTINCT kind FROM releases").fetchall():  # an earlier run saved a release that lists every day (FOMC, id 101)
+            if too_dense(self.days(kind)):
+                with self._db:
+                    self._db.execute("DELETE FROM releases WHERE kind = ?", (kind,))
 
     @property
     def configured(self) -> bool:
@@ -100,6 +111,9 @@ class Releases:
                 raise
             except FetchError as e:
                 problems.append(f"release {release_id} ({kind}): {e}")
+                continue
+            if too_dense(days):
+                problems.append(f"release {release_id} ({kind}) lists over {MAX_PER_YEAR} dates in a year: not a calendar of events, not saved")
                 continue
             if expected not in name.lower():
                 problems.append(f"release {release_id} is called {name!r}, not the {kind} release: not saved (fix RELEASES)")
@@ -120,6 +134,7 @@ class Burst(FetchError):
     """Alpha Vantage's per-second limit (1 request a second on the free plan): wait a moment and ask again."""
 
 
+MAX_PER_YEAR = 60  # more dates a year than this is not a calendar of events (FRED's FOMC press release, id 101, lists every calendar day)
 EARNINGS_PAUSE_SECONDS = 1.5  # between Alpha Vantage requests
 EARNINGS_RETRIES = 3
 

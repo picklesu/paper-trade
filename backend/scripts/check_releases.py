@@ -50,7 +50,7 @@ def main() -> None:
             kinds = cal.release_days(days[i + 1]) or (["none"] if ordinary[i + 1] else [])
             if len(kinds) != 1:
                 continue  # days with two releases belong to neither
-            moves[kinds[0]].append(float(float((ret[i] / ret[window - 1].mean(axis=0))[0])))
+            moves[kinds[0]].append(float((ret[i] / ret[window - 1].mean(axis=0))[0]))
             volumes[kinds[0]].append(float((volume[i + 1] / np.median(volume[window], axis=0))[0]))
     base_move, base_volume = np.mean(moves["none"]), np.mean(volumes["none"])  # (a ratio to a trailing mean is above 1 even for ordinary days)
     print(f"{'':8s} {'days':>6s} {'move x':>8s} {'model':>7s} {'volume x':>9s} {'model':>7s}   (against ordinary days)")

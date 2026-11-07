@@ -308,10 +308,11 @@ def _fomc(d: date) -> bool:
         return True
     if d.year <= max(x.year for x in _fomc_known()):
         return False
-    # beyond the published years: the Wednesday nearest each of the last published year's dates
+    # beyond the published years: the Wednesday nearest each of the last published year's dates (the session before when that is closed)
     for month, day in _fomc_pattern():
         target = date(d.year, month, min(day, 28))
-        if d == target + timedelta(days=(2 - target.weekday() + 3) % 7 - 3):
+        wednesday = target + timedelta(days=(2 - target.weekday() + 3) % 7 - 3)
+        if d == (wednesday if is_trading_day(wednesday) else previous_trading_day(wednesday)):
             return True
     return False
 
@@ -349,16 +350,28 @@ def release_days(d: date) -> list[str]:
     return kinds
 
 
-def _normalisers() -> tuple[float, float]:
-    """(volume, volatility) of the average session against an ordinary one, from the releases a year, so that the
-    average session over a year stays what the model was calibrated to (those days are in its history)."""
-    volume = 1 + sum(n * (v - 1) for v, _, n in RELEASES.values()) / TRADING_DAYS_A_YEAR
-    variance = 1 + sum(n * (m**2 - 1) for _, m, n in RELEASES.values()) / TRADING_DAYS_A_YEAR
-    return volume, math.sqrt(variance)
+NORM_YEARS = range(2030, 2042)  # twelve typical years (no Fed table, no real closures): the average is taken over these
 
 
-TRADING_DAYS_A_YEAR = 252
-RELEASE_NORM_VOLUME, RELEASE_NORM_SD = _normalisers()
+@lru_cache(maxsize=1)
+def release_norm() -> tuple[float, float]:
+    """(volume, volatility) of the average session before dividing, measured over `NORM_YEARS` with the same rules
+    and the same combination as `release_effects` (several releases on a day, the busier of release and event
+    volume), so that the average session over a year stays what the model was calibrated to (those days are in its history)."""
+    volume = variance = n = 0.0
+    for year in NORM_YEARS:
+        d = date(year, 1, 1)
+        while d.year == year:
+            if is_trading_day(d):
+                v, sd = _release_raw(d, volume_events(d))
+                volume, variance, n = volume + v, variance + sd**2, n + 1
+            d += timedelta(days=1)
+    return volume / n, math.sqrt(variance / n)
+
+
+def _release_raw(d: date, event_volume: float) -> tuple[float, float]:
+    kinds = release_days(d)
+    return max(1 + sum(RELEASES[k][0] - 1 for k in kinds), event_volume), 1 + sum(RELEASES[k][1] - 1 for k in kinds)
 
 
 def release_effects(d: date, event_volume: float = 1.0) -> tuple[float, float]:
@@ -366,10 +379,9 @@ def release_effects(d: date, event_volume: float = 1.0) -> tuple[float, float]:
     day add their excess; every session is divided by the average, so a year's mean volume and variance are unchanged.
     `event_volume` is the day's expiration / month-end / Russell multiple: the busier of the two counts, not both
     (the measured release multiples already include the month-end and Russell days they fall on)."""
-    kinds = release_days(d)
-    volume = max(1 + sum(RELEASES[k][0] - 1 for k in kinds), event_volume)
-    sd = 1 + sum(RELEASES[k][1] - 1 for k in kinds)
-    return volume / RELEASE_NORM_VOLUME, sd / RELEASE_NORM_SD
+    volume, sd = _release_raw(d, event_volume)
+    norm_volume, norm_sd = release_norm()
+    return volume / norm_volume, sd / norm_sd
 
 
 def trading_days_between(a: date, b: date) -> int:

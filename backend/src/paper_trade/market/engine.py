@@ -63,11 +63,11 @@ from paper_trade.market.calendar import (
     SESSION_SECONDS,
     add_trading_days,
     day_effects,
-    release_effects,
     is_trading_day,
     market_day,
     next_trading_day,
     previous_trading_day,
+    release_effects,
     session_close,
     session_minutes,
     session_open,
@@ -1267,9 +1267,10 @@ class MarketEngine:
 
         # Each symbol's loadings on them, today.
         h_own = np.ones(n) if start.own_variance is None else start.own_variance
+        event_volume = volume_events(day)  # expiration, month end, Russell
         holiday_volume, holiday_sd = (1.0, 1.0) if real_day is not None else day_effects(day)  # real days carry their own
         if real_day is None:  # scheduled releases (jobs, CPI, FOMC...) make a simulated day busier and wider; every session is divided by the average
-            release_volume, release_sd = release_effects(day, volume_events(day))  # (which also holds the expiration / month-end volume)
+            release_volume, release_sd = release_effects(day, event_volume)  # (which also holds the expiration / month-end volume)
             holiday_volume, holiday_sd = holiday_volume * release_volume, holiday_sd * release_sd
         market_load = self._rho * self._day_sd * math.sqrt(h) * scale * holiday_sd
         own_sd = np.sqrt(1 - self._rho**2) * self._day_sd * np.sqrt(h_own) * scale * holiday_sd
@@ -1311,7 +1312,7 @@ class MarketEngine:
         if began:
             crash += SHOCK_DROP * onset
         level = level * np.where(replayed, 1.0, 1.0 + JUMP_VOLUME * crash * np.abs(self._beta))  # a selloff trades more in every symbol, hedges included
-        level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day, self._persist) * (volume_events(day) if real_day is not None else 1.0))
+        level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day, self._persist) * (event_volume if real_day is not None else 1.0))
         news_burst = np.ones((_M, n))
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)

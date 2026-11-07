@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-11-07. Everything through #82 is merged (`MODEL_VERSION` 18). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
+_Last updated: 2026-11-07. Everything through #83 is merged (`MODEL_VERSION` 18; 19 in review). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
 
 ## Where things stand
 
@@ -59,7 +59,8 @@ _Last updated: 2026-11-07. Everything through #82 is merged (`MODEL_VERSION` 18)
 | Volume flow (the user's report: weeks of near-identical daily volume): persistent day-to-day volume state (`MODEL_VERSION` 16) | Merged | #78 |
 | Order flow first (the user's point: volume moves price, not the reverse): activity state, signed imbalance, minute-level links (`MODEL_VERSION` 17) | Merged | #79 |
 | Big moves trade big volume (the user's report: SPY +$72 in a calm market on 49M to 67M shares): funds have no company-news jumps, news and selloffs trade in proportion to their size (`MODEL_VERSION` 18) | Merged | #82 |
-| Research data steps `update events\|earnings\|flow` (FRED release dates, Alpha Vantage earnings history, SPY buy/sell volume by tick test); not run yet | In review | |
+| Research data steps `update events\|earnings\|flow` (FRED release dates, Alpha Vantage earnings history, SPY buy/sell volume by tick test); the user is running them | Merged | #83 |
+| Per-symbol volume persistence (`volume_persistence.json`, `fit_volume_persistence.py`; `MODEL_VERSION` 19) | In review | |
 | A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.
@@ -80,6 +81,10 @@ _Last updated: 2026-11-07. Everything through #82 is merged (`MODEL_VERSION` 18)
 4. Optional: label intraday candles on replayed days as simulated (the user has not asked for it yet).
 
 **Caveats to tell the user:** fitted shapes are per symbol and per state; crisis rests on one episode; the sim cannot reproduce a specific real 5-minute candle, only its distribution.
+
+### Per-symbol volume persistence (the user's yes, 2026-11-07; `MODEL_VERSION` 19)
+
+**Why:** real daily volume stays high or low for different spells by symbol (detrended log volume, lag-1 / lag-20 autocorrelation: TSLA .82 / .56, SPY .69 / .36, KO .46 / .11) while the engine gave every symbol the same state (median lag 1: .39 against .57). **Built:** `scripts/fit_volume_persistence.py --db PATH [--iterations 5] [--seeds 8]` fits `market/volume_persistence.json` against the engine itself (each round simulates 8 futures, takes what the engine has besides its day-level activity, and fits the activity to the rest of the real autocovariance at lags 1-40; damped 0.7; the scratch db needs `daily` and `macro`; no scipy, a two-column NNLS). Per symbol: `market_sd`, `own_sd`, `fast_share`, `slow_share`, `slow_rho` (the day-level activity) and `flow_size` (the order-flow imbalance's white part on volume: a stickier symbol gives some up; TSLA .08, median .24, global .30). Prices keep their stats: the volatility link (`VOLUME_VOL_LINK` times the global sizes) is untouched, and only the symbols' own persistence changes. `_Persistence` in `engine.py` loads the file at engine start (a symbol or file missing takes the old global values). **Result** (check_volume, real / simulated): median lag-1 autocorrelation .57 / .50 (was .39), TSLA .82 / .61, SPY .69 / .49, daily-volume structure lags 1/2/3/5/10/20: .57/.40/.30/.22/.12/.04 against .53/.45/.38/.26/.13/.07; sd of detrended log volume .35 / .35; the mean absolute autocorrelation error over symbols fell from .165 to .059 at lag 1 and is .03-.04 at lags 3-40 (about the sampling noise of 8 seeds); 5%+ SPY days still 1.81x normal volume (real 1.96x, 18% under 1.2x against 16%). **Cost:** the median skew of daily volume fell from .43 to .29 (real .67; the white imbalance and heavy-day parts shrank); the lag-20 autocorrelation is still low for TSLA (.20 / .56 in `check_volume`, whose sd is not detrended). The paired variance test's tolerance went to 0.80-1.20 (24 seeds, with and without the fit: 0.95-1.04). Refit after any change to the volume terms.
 
 ### Research data for a more realistic future (the user's request, 2026-11-07: "any data that is helpful needs to be gathered")
 

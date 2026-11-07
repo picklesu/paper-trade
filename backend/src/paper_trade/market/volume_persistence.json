@@ -1,0 +1,324 @@
+{
+ "symbols": {
+  "SPY": {
+   "market_sd": 0.12025,
+   "own_sd": 0.17711,
+   "fast_share": 0.96797,
+   "slow_share": 0.03196,
+   "slow_rho": 0.96306,
+   "flow_size": 0.23284
+  },
+  "QQQ": {
+   "market_sd": 0.11739,
+   "own_sd": 0.18273,
+   "fast_share": 0.92089,
+   "slow_share": 0.07904,
+   "slow_rho": 0.94017,
+   "flow_size": 0.21671
+  },
+  "IWM": {
+   "market_sd": 0.14841,
+   "own_sd": 0.21909,
+   "fast_share": 0.90625,
+   "slow_share": 0.09368,
+   "slow_rho": 0.98358,
+   "flow_size": 0.20852
+  },
+  "XLF": {
+   "market_sd": 0.15685,
+   "own_sd": 0.2215,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.25478
+  },
+  "XLE": {
+   "market_sd": 0.08027,
+   "own_sd": 0.22782,
+   "fast_share": 0.81158,
+   "slow_share": 0.18835,
+   "slow_rho": 0.99487,
+   "flow_size": 0.21758
+  },
+  "XLV": {
+   "market_sd": 0.08682,
+   "own_sd": 0.21306,
+   "fast_share": 0.99846,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.2242
+  },
+  "GLD": {
+   "market_sd": 0.16166,
+   "own_sd": 0.34533,
+   "fast_share": 0.17257,
+   "slow_share": 0.72558,
+   "slow_rho": 0.94,
+   "flow_size": 0.3
+  },
+  "TLT": {
+   "market_sd": 0.10787,
+   "own_sd": 0.24854,
+   "fast_share": 0.51368,
+   "slow_share": 0.23433,
+   "slow_rho": 0.99487,
+   "flow_size": 0.3
+  },
+  "AAPL": {
+   "market_sd": 0.08427,
+   "own_sd": 0.16283,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.21063
+  },
+  "MSFT": {
+   "market_sd": 0.15885,
+   "own_sd": 0.12512,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.21288
+  },
+  "NVDA": {
+   "market_sd": 0.05058,
+   "own_sd": 0.22451,
+   "fast_share": 0.95517,
+   "slow_share": 0.04475,
+   "slow_rho": 0.99487,
+   "flow_size": 0.08053
+  },
+  "AMD": {
+   "market_sd": 0.03,
+   "own_sd": 0.29675,
+   "fast_share": 0.70266,
+   "slow_share": 0.29727,
+   "slow_rho": 0.9001,
+   "flow_size": 0.08053
+  },
+  "AVGO": {
+   "market_sd": 0.11271,
+   "own_sd": 0.31625,
+   "fast_share": 0.93919,
+   "slow_share": 0.06074,
+   "slow_rho": 0.92908,
+   "flow_size": 0.23146
+  },
+  "ORCL": {
+   "market_sd": 0.08182,
+   "own_sd": 0.35201,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.23597
+  },
+  "GOOGL": {
+   "market_sd": 0.08941,
+   "own_sd": 0.2163,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.25606
+  },
+  "META": {
+   "market_sd": 0.10596,
+   "own_sd": 0.32754,
+   "fast_share": 0.97536,
+   "slow_share": 0.02456,
+   "slow_rho": 0.96289,
+   "flow_size": 0.22416
+  },
+  "NFLX": {
+   "market_sd": 0.0802,
+   "own_sd": 0.39922,
+   "fast_share": 0.98239,
+   "slow_share": 0.01754,
+   "slow_rho": 0.98553,
+   "flow_size": 0.20235
+  },
+  "DIS": {
+   "market_sd": 0.03335,
+   "own_sd": 0.28977,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.27257
+  },
+  "AMZN": {
+   "market_sd": 0.09819,
+   "own_sd": 0.18113,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.2291
+  },
+  "TSLA": {
+   "market_sd": 0.03,
+   "own_sd": 0.20639,
+   "fast_share": 0.3723,
+   "slow_share": 0.62763,
+   "slow_rho": 0.94,
+   "flow_size": 0.08053
+  },
+  "HD": {
+   "market_sd": 0.08915,
+   "own_sd": 0.19329,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.26524
+  },
+  "NKE": {
+   "market_sd": 0.05889,
+   "own_sd": 0.32118,
+   "fast_share": 0.58538,
+   "slow_share": 0.37559,
+   "slow_rho": 0.90032,
+   "flow_size": 0.29711
+  },
+  "WMT": {
+   "market_sd": 0.06401,
+   "own_sd": 0.2561,
+   "fast_share": 0.99369,
+   "slow_share": 0.00623,
+   "slow_rho": 0.99253,
+   "flow_size": 0.26927
+  },
+  "COST": {
+   "market_sd": 0.10135,
+   "own_sd": 0.15917,
+   "fast_share": 0.99406,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.27739
+  },
+  "KO": {
+   "market_sd": 0.18789,
+   "own_sd": 0.10809,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.21414
+  },
+  "PG": {
+   "market_sd": 0.12265,
+   "own_sd": 0.09453,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.28171
+  },
+  "JPM": {
+   "market_sd": 0.14808,
+   "own_sd": 0.18717,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.22477
+  },
+  "BAC": {
+   "market_sd": 0.11575,
+   "own_sd": 0.19639,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.16128
+  },
+  "GS": {
+   "market_sd": 0.11229,
+   "own_sd": 0.21354,
+   "fast_share": 0.95373,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.3
+  },
+  "V": {
+   "market_sd": 0.09183,
+   "own_sd": 0.21153,
+   "fast_share": 0.97688,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.3
+  },
+  "XOM": {
+   "market_sd": 0.11972,
+   "own_sd": 0.16074,
+   "fast_share": 0.60099,
+   "slow_share": 0.39894,
+   "slow_rho": 0.99487,
+   "flow_size": 0.20691
+  },
+  "CVX": {
+   "market_sd": 0.12521,
+   "own_sd": 0.19791,
+   "fast_share": 0.84657,
+   "slow_share": 0.15336,
+   "slow_rho": 0.99487,
+   "flow_size": 0.24674
+  },
+  "COP": {
+   "market_sd": 0.12177,
+   "own_sd": 0.19366,
+   "fast_share": 0.99964,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.2774
+  },
+  "UNH": {
+   "market_sd": 0.07303,
+   "own_sd": 0.36697,
+   "fast_share": 0.74949,
+   "slow_share": 0.2472,
+   "slow_rho": 0.98043,
+   "flow_size": 0.2802
+  },
+  "JNJ": {
+   "market_sd": 0.05925,
+   "own_sd": 0.33557,
+   "fast_share": 0.00382,
+   "slow_share": 0.9961,
+   "slow_rho": 0.9001,
+   "flow_size": 0.18501
+  },
+  "LLY": {
+   "market_sd": 0.07142,
+   "own_sd": 0.26971,
+   "fast_share": 0.8617,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.3
+  },
+  "PFE": {
+   "market_sd": 0.07824,
+   "own_sd": 0.26999,
+   "fast_share": 0.95582,
+   "slow_share": 0.04411,
+   "slow_rho": 0.99487,
+   "flow_size": 0.26386
+  },
+  "CAT": {
+   "market_sd": 0.10768,
+   "own_sd": 0.21412,
+   "fast_share": 0.79458,
+   "slow_share": 0.00029,
+   "slow_rho": 0.9001,
+   "flow_size": 0.3
+  },
+  "BA": {
+   "market_sd": 0.03984,
+   "own_sd": 0.32754,
+   "fast_share": 0.73779,
+   "slow_share": 0.05746,
+   "slow_rho": 0.99487,
+   "flow_size": 0.3
+  },
+  "GE": {
+   "market_sd": 0.06603,
+   "own_sd": 0.27731,
+   "fast_share": 0.90544,
+   "slow_share": 0.09371,
+   "slow_rho": 0.99487,
+   "flow_size": 0.24677
+  }
+ }
+}

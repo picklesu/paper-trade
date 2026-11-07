@@ -31,3 +31,19 @@ def test_generated_days_keep_volume_finite_and_funds_free_of_news_jumps() -> Non
         day, days = next_trading_day(day), days + 1
     assert days > 200
     assert worst < 0.04  # no single-minute jump like the company news SPY once got (9.7%)
+
+
+def test_persistence_file_gives_each_symbol_its_own_volume_state() -> None:
+    import json
+
+    from paper_trade.market import engine as engine_mod
+    from paper_trade.market.symbols import SYMBOLS
+
+    fits = json.loads(engine_mod.PERSISTENCE_FILE.read_text())["symbols"]
+    assert set(fits) == {s.symbol for s in SYMBOLS}  # a refit covers every symbol
+    p = engine_mod._Persistence.load(SYMBOLS)
+    tsla, ko = [s.symbol for s in SYMBOLS].index("TSLA"), [s.symbol for s in SYMBOLS].index("KO")
+    assert p.slow_share[tsla] > 0.4 > p.slow_share[ko]  # TSLA's volume stays high or low for months, KO's does not
+    assert (p.fast_share + p.slow_share <= 1 + 1e-9).all() and (p.flow_size > 0).all()
+    d = engine_mod._Persistence.default(len(SYMBOLS))  # without a fit the old global values apply
+    assert d.own_sd[0] == engine_mod.VOLUME_OWN_SD and d.flow_size[0] == engine_mod.VOLUME_FLOW_SIZE

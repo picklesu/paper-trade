@@ -33,8 +33,10 @@ def test_measure_reads_a_synthetic_shock() -> None:
     vix[days[100]] = 30.0
     m = ec.measure(100, days, close, volume, vix, ret)
     assert abs(m["ret"] + 0.06) < 1e-9 and m["volume"] == 4.0 and abs(m["vix_jump"] - 1.0) < 1e-9 and m["drawdown"] < -0.05
-    assert 5 <= m["persist"] < 40  # the loud days pass, the 10-day volatility settles
+    assert 10 <= m["persist"] < 60  # the loud days pass, the 10-day volatility settles
     ret[n - 19 :] = rng.normal(0, 0.05, 19)  # still loud when the data ends
     close = 100 * np.exp(np.cumsum(ret))
     tail = ec.measure(n - 20, days, close, volume, vix, ret)
-    assert tail["persist"] is None  # too near the end of the data to know
+    assert tail["persist"] is None and tail["week"] is not None  # persistence is not known yet; the week after is
+    last = ec.measure(n - 3, days, close, volume, vix, ret)
+    assert last["week"] is None and last["drawdown"] is None and last["vix_peak"] is None  # not yet, not a one-day value

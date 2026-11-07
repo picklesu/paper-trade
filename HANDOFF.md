@@ -1,6 +1,35 @@
 # Handoff
 
-_Last updated: 2026-11-07. Everything through #89 is merged (`MODEL_VERSION` 20). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
+_Last updated: 2026-11-07 (end of a long session). Everything through #89 is merged (`MODEL_VERSION` 20); `main` is clean. Read "Start here" first._
+
+## Start here (for the next session)
+
+**The goal the user keeps returning to:** a *realistic* future market and an *accurate* past, so the simulator is useful for learning to trade. The user expects Claude to bring the quantitative and market knowledge itself and to act without being told each step ("you should be able to simulate the most realistic future market ever without me having to tell you what to do at every step"). Check a result against real data before claiming it; the user caught three things this session that Claude's own checks had missed (a 10% one-minute SPY "news" jump on near-normal volume; big moves on thin volume; halt markers on days the S&P never halted). Always test the tails, not only the middle.
+
+**What this session built (all merged):** halt markers only on the four real halts (#81); big moves trade big volume and funds have no company news (#82, `MODEL_VERSION` 18); research data steps `./server.sh update events|earnings|flow` (#83); per-symbol volume persistence fitted against the engine (#84, v19); event study of scheduled releases (#85) and the Fed's FOMC dates (#86); release calendar making jobs/CPI/GDP/PCE/FOMC days busier and wider on simulated days (#87, v20); API-key masking for Alpha Vantage (#88); hand-labelled catalog of 41 unscheduled shocks measured by cause (#89). Details are in the sections below, newest first.
+
+**Waiting on the user (not code):**
+1. **Rotate the Alpha Vantage key** (it was printed in the user's terminal and pasted into a session). The user said "updated" on 2026-11-07 after editing line 1 of `backend/.env`; nothing was confirmed beyond that.
+2. **Keep running `./server.sh update earnings`** (25 symbols a day; 17 stocks saved; META, NFLX, NKE, WMT, GS, V returned nothing and are retried up to 3 times, then left alone). Read the output before building on it.
+3. **`./server.sh update flow`** had 14 of 17 SPY days saved (the 2025-04-04, 2025-04-09 and 2025-09-09 days are left; it resumes). The tick-test data cannot calibrate the 0.7 `FLOW_SHARE` (the test uses price, so its correlation with returns is partly built in); more days are optional.
+4. **`./server.sh update history`** so the saved bars include 2026-11-06's rebound (the user's example: midterms, VIX +70% on 11-05, strong jobs report, rebound).
+5. **`./server.sh restart`** to load the new model (saved markets restart as new ones: `MODEL_VERSION` 20).
+
+**Proposed next steps, in the order Claude recommended** (none is built):
+1. **Typed shocks in the engine** (needs the user's approval of a written design first): a simulated shock draws a cause (credit, pandemic, trade, policy, political, technical, ...) and applies that cause's fall size, VIX jump, volume burst and persistence from `scripts/event_catalog_report.md`, with a label ("tariff announcement") for the chart; tie the draw to the regime (credit/pandemic mostly entering a crisis). The catalog counts remembered events (about 0.9 falls a year), not all large days, so rates need care.
+2. **Real earnings dates** from `earnings_history` replacing the volume-inferred ones (`engine.earnings_dates`), once the fetch has the other stocks.
+3. **Intraday timing of releases** (FOMC at 2:00 PM, jobs/CPI in the opening gap; the engine scales the whole day today).
+4. **Order-flow direction memory** (the imbalance's sign has no memory; lag-1 volume autocorrelation is .50 simulated against .57 real) and **skew of daily volume** (.29 against .67 after the persistence fit).
+5. **Label intraday candles on replayed days as simulated** (the user has not asked yet).
+6. **Still open from 8g:** drop or keep the macro inputs (mixed evidence; the user said keep them while fine-tuning), `STICKY` 80, re-scoring crisis odds with a label that does not depend on the model; the engine-level walk-forward has not been rerun since `MODEL_VERSION` 12-13 (about 40 minutes on 4 workers; rerun once the model stops changing).
+7. Long moving averages (EMA/SMA 737) and prediction-market odds (Kalshi/Polymarket) were proposed in conversation, not built; test any such signal out of sample against a shuffled baseline and over a grid of lengths, not a single number.
+
+**How to work here (hard-won this session):**
+- **Workflow:** one branch and PR per piece, `/code-review <PR>` (a background agent), fix findings on the branch, post a short review comment saying what was fixed and what was left and why, `gh pr merge N --merge --delete-branch`, then `git checkout main && git pull`. GitHub Actions has reported *no checks* on recent PRs, so they merged on local test runs (`cd backend && UV_PROJECT_ENVIRONMENT=$HOME/.venvs/paper-trade-backend uv run pytest -q`: 458 passed at last count, about 2 minutes). Say so when it happens. Review findings are often right but not always (a few were wrong; verify before changing).
+- **Scratch database for scripts:** the research scripts take `--db PATH`, a *copy* of tables from the user's `backend/paper_trade.db` (open it read-only with `mode=ro`; never write to it; it holds the real account). In the sandbox: copy `daily`, `macro`, `intraday` (about 0.5 GB) and `releases`, `earnings_history`, `flow` as needed into the scratchpad. The scratchpad does not survive a new session, so redo the copy.
+- **Check scripts that need no real data:** `check_releases.py`, `check_holidays.py`, `check_engine_states.py`; with the copied db: `check_volume.py`, `fit_volume_persistence.py` (rerun it after any change to the volume terms; it replaces `volume_persistence.json` only if the result is better), `event_study.py`, `event_catalog.py`, `walk_forward*.py`.
+- **Sandbox:** federalreserve.gov and other new hosts need the user's approval (`sbx policy approval ls`); the user cannot copy from the sandbox terminal any more (so give short typed commands or tell them to edit files with `open -e`); the Mac shell is zsh (`read -s "K?prompt: "`, not `read -p`).
+- **Never** run `./server.sh update` in the sandbox (live keys), print or paste an API key (Alpha Vantage's own limit message repeats it; it is masked now), or `npm install` in `frontend/`.
 
 ## Where things stand
 
@@ -59,6 +88,7 @@ _Last updated: 2026-11-07. Everything through #89 is merged (`MODEL_VERSION` 20)
 | Volume flow (the user's report: weeks of near-identical daily volume): persistent day-to-day volume state (`MODEL_VERSION` 16) | Merged | #78 |
 | Order flow first (the user's point: volume moves price, not the reverse): activity state, signed imbalance, minute-level links (`MODEL_VERSION` 17) | Merged | #79 |
 | Big moves trade big volume (the user's report: SPY +$72 in a calm market on 49M to 67M shares): funds have no company-news jumps, news and selloffs trade in proportion to their size (`MODEL_VERSION` 18) | Merged | #82 |
+| Mask the Alpha Vantage API key in its limit message; a symbol with no earnings is tried 3 times | Merged | #88 |
 | Research data steps `update events\|earnings\|flow` (FRED release dates, Alpha Vantage earnings history, SPY buy/sell volume by tick test); the user is running them | Merged | #83 |
 | Per-symbol volume persistence (`volume_persistence.json`, `fit_volume_persistence.py`; `MODEL_VERSION` 19) | Merged | #84 |
 | Event study of scheduled releases (`scripts/event_study.py`); FOMC release id 101 refused (lists every day) | Merged | #85 |

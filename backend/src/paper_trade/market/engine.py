@@ -192,6 +192,7 @@ VOLUME_SPIKE = 0.012  # chance a symbol has a heavy day of its own (news, a bloc
 VOLUME_SPIKE_SIZE = 0.7  # which adds this many times the day's usual volume on average
 # News brings a burst of volume, NEWS_VOLUME_BURST times more, fading over NEWS_VOLUME_DECAY minutes.
 NEWS_VOLUME_BURST, NEWS_VOLUME_DECAY = 10.0, 30.0  # per standard deviation of the jump: a 4-sigma jump trades about four times a normal day
+NEWS_BURST_CAP = 5.0  # the t-tailed jump sizes count at most this many standard deviations in the burst (at most 50x a minute, about 4 normal days)
 JUMP_VOLUME = 25.0  # a market-wide jump (selloff, shock onset) adds this times its log size times the symbol's beta to the day's volume multiple
 
 # Spreads widen with volatility (relative to a normal midday minute), up to this.
@@ -1258,12 +1259,12 @@ class MarketEngine:
             crash = CRASH_MIN + CRASH_EXTRA * draws.crash_size
         if began:
             crash += SHOCK_DROP * onset
-        level = level * np.where(replayed, 1.0, 1.0 + JUMP_VOLUME * crash * self._beta)
+        level = level * np.where(replayed, 1.0, 1.0 + JUMP_VOLUME * crash * np.abs(self._beta))  # a selloff trades more in every symbol, hedges included
         level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day) * volume_events(day))
         news_burst = np.ones((_M, n))
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
-            news_burst[:, i] *= 1 + NEWS_VOLUME_BURST * max(abs(draws.news_size[i]), 0.5) * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
+            news_burst[:, i] *= 1 + NEWS_VOLUME_BURST * min(max(abs(draws.news_size[i]), 0.5), NEWS_BURST_CAP) * np.where(after >= 0, np.exp(-after / NEWS_VOLUME_DECAY), 0)
         volume_raw = level / _M * shape * news_burst * noise
         volume_raw[m_day:] = 0
         # Variance moves with the minute's volume: a burst of trading is a burst of price movement (the day's

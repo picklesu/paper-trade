@@ -120,3 +120,25 @@ def test_a_wrong_release_id_is_refused_and_conditions_are_skipped_and_a_stopped_
     assert flow.update("SPY", (day,), datetime(2026, 1, 1, tzinfo=UTC), lambda m: None)
     assert flow.update("SPY", (day,), datetime(2026, 1, 1, tzinfo=UTC), lambda m: None) == []
     assert seen[1][0] == "t2" and flow.day("SPY", day)[0][0] == 6  # the second run resumed from the page it had reached
+
+
+def test_a_per_second_limit_waits_and_retries_but_the_daily_limit_stops() -> None:
+    from paper_trade.research import Burst
+
+    with pytest.raises(Burst):
+        parse_earnings_history({"Information": "Please spread out your requests more sparingly (1 request per second). The daily limit is 25."})
+    rows = [(date(2024, 5, 2), "post", 1.5, 4.0)]
+    calls, waits = [], []
+
+    def fetch(symbol, key):
+        calls.append(symbol)
+        if symbol == "AAPL" and calls.count("AAPL") < 3:
+            raise Burst("fast")
+        if symbol == "KO":
+            raise FetchStop("daily limit")
+        return rows
+
+    history = EarningsHistory(Store(":memory:"), "k", fetch, sleep=waits.append)
+    problems = history.update(["AAPL", "KO", "MSFT"], lambda m: None)
+    assert calls == ["AAPL", "AAPL", "AAPL", "KO"] and history.days("AAPL") == [date(2024, 5, 2)]  # two bursts retried, then saved
+    assert len(problems) == 1 and "MSFT" in history.due(["AAPL", "KO", "MSFT"]) and len(waits) >= 3  # the daily limit stopped the run; pauses between requests

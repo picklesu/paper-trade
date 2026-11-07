@@ -16,6 +16,7 @@ scripts in `backend/scripts`:
 
 import json
 import struct
+import time
 import urllib.parse
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -115,13 +116,23 @@ class Releases:
 # --- earnings history (Alpha Vantage) --------------------------------------------------------
 
 
+class Burst(FetchError):
+    """Alpha Vantage's per-second limit (1 request a second on the free plan): wait a moment and ask again."""
+
+
+EARNINGS_PAUSE_SECONDS = 1.5  # between Alpha Vantage requests
+EARNINGS_RETRIES = 3
+
+
 def parse_earnings_history(body: object) -> list[tuple[date, str, float | None, float | None]]:
     """(report day, "pre"/"post"/"", reported EPS, surprise %) rows, oldest first."""
     if not isinstance(body, dict):
         raise FetchError("Alpha Vantage's earnings answer wasn't readable")
     note = body.get("Information") or body.get("Note")
+    if note and ("per second" in str(note) or "sparingly" in str(note)):
+        raise Burst("Alpha Vantage: too many requests in a second")
     if note:  # the daily limit (25 requests on the free plan) or a bad key
-        raise FetchStop(f"Alpha Vantage said: {str(note)[:300]} (the daily limit is 25 requests; a bad key looks the same)")
+        raise FetchStop(f"Alpha Vantage said: {str(note)[:300]} (the free plan allows 25 requests a day; a bad key looks the same)")
     rows = body.get("quarterlyEarnings")
     if not isinstance(rows, list):
         raise FetchError("Alpha Vantage had no quarterly earnings for this symbol")
@@ -150,9 +161,10 @@ def fetch_earnings_history(symbol: str, key: str) -> list[tuple[date, str, float
 
 
 class EarningsHistory:
-    def __init__(self, store: Store, key: str | None, fetch: Callable[[str, str], list] = fetch_earnings_history) -> None:
+    def __init__(self, store: Store, key: str | None, fetch: Callable[[str, str], list] = fetch_earnings_history, sleep: Callable[[float], None] = time.sleep) -> None:
         self.key = key
         self._fetch = fetch
+        self._sleep = sleep
         self._db = store.connection
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS earnings_history (symbol TEXT NOT NULL, day TEXT NOT NULL, time TEXT NOT NULL, eps REAL, surprise REAL, PRIMARY KEY (symbol, day))"
@@ -171,9 +183,22 @@ class EarningsHistory:
         """Each symbol not yet fetched; stops at the daily limit (run it again tomorrow)."""
         assert self.key
         problems = []
-        for symbol in self.due(symbols):
+        for n, symbol in enumerate(self.due(symbols)):
+            if n:
+                self._sleep(EARNINGS_PAUSE_SECONDS)  # before every request but the first, whatever the last one did
+            rows = None
             try:
-                rows = self._fetch(symbol, self.key)
+                for attempt in range(EARNINGS_RETRIES):
+                    try:
+                        rows = self._fetch(symbol, self.key)
+                        break
+                    except Burst:
+                        if attempt == EARNINGS_RETRIES - 1:
+                            raise
+                        self._sleep(2.0 * (attempt + 1))
+            except Burst as e:
+                problems.append(f"{symbol}: {e} even after waiting; run it again in a minute")
+                break
             except FetchStop as e:
                 problems.append(f"{e} (what is saved is kept; run it again later)")
                 break

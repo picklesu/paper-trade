@@ -46,12 +46,15 @@ whole minute) come from a new seed, while everything before it is unchanged.
 Each market also gets years of history before its start (`backfill_iter`).
 """
 
+import functools
+import json
 import math
 import zlib
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 
@@ -208,7 +211,7 @@ FINE_CACHE_MINUTES = 64
 
 # Saved markets record the model that generated them; prices from another model
 # can't be regenerated (see `MarketEngine.continue_older`).
-MODEL_VERSION = 18  # 18: funds have no company-news jumps (SPY once jumped 10% in a minute on "news"), news and selloffs trade in proportion to their size; 17: order flow first: a persistent activity state and a signed imbalance drive the day's volume, volatility and direction, and the market's and each symbol's minute volume drive the minute variance (volume no longer follows the price); 16: daily volume clumps over days the way the market's does (persistent market and own factors, the size of the day's move, weekdays; minute noise no longer changes the day's total); 15: volume as uneven as the market's (persistent, bursty minute volume; busy and quiet days; heavy days; expiration, month-end and Russell days; VOLUME_ELASTICITY 0.25); 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
+MODEL_VERSION = 19  # 19: each symbol's day-level volume persists as its own fit says (TSLA's for months, KO's for days); 18: funds have no company-news jumps (SPY once jumped 10% in a minute on "news"), news and selloffs trade in proportion to their size; 17: order flow first: a persistent activity state and a signed imbalance drive the day's volume, volatility and direction, and the market's and each symbol's minute volume drive the minute variance (volume no longer follows the price); 16: daily volume clumps over days the way the market's does (persistent market and own factors, the size of the day's move, weekdays; minute noise no longer changes the day's total); 15: volume as uneven as the market's (persistent, bursty minute volume; busy and quiet days; heavy days; expiration, month-end and Russell days; VOLUME_ELASTICITY 0.25); 14: early closes (1:00 PM) and holiday volume and volatility; 13: a crisis runs at its fitted volatility (STATE_LEVEL_ADJ 2.4, was 1.8); 12: volume follows each symbol's fitted profile for the regime state, with a day-to-day close-heavy/open-heavy mode (was one U shape); 11: volume follows the variance more gently (it fell to a third in calm markets); 10: circuit breakers (market-wide halts) and a smaller shock multiple in a crisis; 9: the long-lived regime model (calm / choppy / crisis) sets the market's drift, volatility level and selloff odds; 8: a backfill leaves replayed real days unscaled; 7: variances follow the real VIX on replayed days; 6: replays the real past; 5: dividends (ex-dividend drops); 4: exchange holidays (the trading days changed)
 # Symbol order of saved arrays from before markets saved their symbols.
 LEGACY_SYMBOLS = ("SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "AMD")
 
@@ -369,6 +372,49 @@ class OptionInputs:
     opens: np.ndarray  # (M,) the price at each minute's first second
 
 
+PERSISTENCE_FILE = Path(__file__).with_name("volume_persistence.json")
+
+
+@dataclass(frozen=True)
+class _Persistence:
+    """Each symbol's day-level volume state: how big its busy and quiet spells are (the market's part and its own, in
+    log volume) and how they persist (the shares of its own activity that are fast, slow or white; the slow rate).
+    Fitted offline by `scripts/fit_volume_persistence.py` (TSLA's volume stays high or low for months, KO's does not);
+    a symbol with no fit takes the global values."""
+
+    market_sd: np.ndarray
+    own_sd: np.ndarray
+    fast_share: np.ndarray
+    slow_share: np.ndarray
+    slow_rho: np.ndarray
+    flow_size: np.ndarray  # how much of its volume follows the day's order-flow imbalance (a white part: stickier symbols have less)
+
+    @classmethod
+    def default(cls, n: int) -> "_Persistence":
+        return cls(np.full(n, VOLUME_MARKET_SD), np.full(n, VOLUME_OWN_SD), np.full(n, VOLUME_FAST[1]), np.full(n, VOLUME_SLOW[1]), np.full(n, VOLUME_SLOW[0]), np.full(n, VOLUME_FLOW_SIZE))
+
+    @property
+    def flow_mean(self) -> np.ndarray:
+        return np.array([_flow_mean(a) for a in self.flow_size])
+
+    @classmethod
+    def load(cls, specs, path: Path | None = None) -> "_Persistence":
+        path = path or PERSISTENCE_FILE  # (looked up now, so a fitting script can point it elsewhere)
+        out = cls.default(len(specs))
+        if not path.exists():
+            return out
+        fits = json.loads(path.read_text()).get("symbols", {})
+        arrays = {k: getattr(out, k).copy() for k in ("market_sd", "own_sd", "fast_share", "slow_share", "slow_rho", "flow_size")}
+        for i, spec in enumerate(specs):
+            if fit := fits.get(spec.symbol):
+                for k, a in arrays.items():
+                    a[i] = fit.get(k, a[i])
+        over = arrays["fast_share"] + arrays["slow_share"]  # rounded shares can add to a hair over 1: the white rest must stay real
+        scale = np.where(over > 1.0, 1.0 / over, 1.0)
+        arrays["fast_share"], arrays["slow_share"] = arrays["fast_share"] * scale, arrays["slow_share"] * scale
+        return cls(**arrays)
+
+
 class MarketEngine:
     def __init__(
         self,
@@ -386,6 +432,7 @@ class MarketEngine:
         self._rho = np.array([s.market_corr for s in specs])
         self._beta = self._rho * vol / MARKET_VOL
         self._daily_volume = np.array([s.daily_volume for s in specs], dtype=float)
+        self._persist = _Persistence.load(specs)
         self._earnings_move = np.array([s.earnings_move for s in specs])
         self._news_sd = NEWS_SIZE * vol / math.sqrt(TRADING_DAYS_PER_YEAR) * (self._earnings_move > 0)  # funds (SPY, QQQ...) have no company news; their moves come through the market
         self.sectors = sorted({s.sector for s in specs if s.sector})
@@ -1232,7 +1279,7 @@ class MarketEngine:
         # and a bigger or more one-sided imbalance trades more. Volume does not follow the price.
         volume_state = None  # real days leave the day-level state at zero
         garch_own_sd = own_sd
-        activity = self._volume_activity(draws, start.volume_state)
+        activity = self._volume_activity(draws, start.volume_state, self._persist)
         volume_state = None if real_day is not None else activity[0]
         market_load = market_load * activity[2]
         own_load = own_load * np.where(replayed, 1.0, activity[3])  # a symbol with a real bar is pinned to it; the sector's share stays what it was
@@ -1260,7 +1307,7 @@ class MarketEngine:
         if began:
             crash += SHOCK_DROP * onset
         level = level * np.where(replayed, 1.0, 1.0 + JUMP_VOLUME * crash * np.abs(self._beta))  # a selloff trades more in every symbol, hedges included
-        level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day) * volume_events(day))
+        level = level * np.where(replayed, 1.0, self._volume_factor(activity[1], flow, draws, day, self._persist) * volume_events(day))
         news_burst = np.ones((_M, n))
         for i in news:
             after = np.arange(_M) - (draws.news_minute[i] + 1)
@@ -1471,31 +1518,35 @@ class MarketEngine:
         return noise * burst / (1 + VOLUME_BURST * VOLUME_BURST_SIZE)
 
     @staticmethod
-    def _volume_activity(draws: _Draws, state: np.ndarray | None) -> tuple[np.ndarray, np.ndarray, float, np.ndarray]:
+    def _volume_activity(draws: _Draws, state: np.ndarray | None, persist: "_Persistence | None" = None) -> tuple[np.ndarray, np.ndarray, float, np.ndarray]:
         """The day's activity: the market's and each symbol's busy or quiet day, persisting over days (a fast
         and a slow AR(1) plus a white part). Returns the state to carry to tomorrow, the unit-variance activity of
         the market (first) and of each symbol, and the multiples of volatility they bring (mean square 1)."""
         n = len(draws.volume_day)
         old = state if state is not None and state.shape == (2, 1 + n) else np.zeros((2, 1 + n))  # a state saved for other symbols starts again
-        fast_rho, fast_share = VOLUME_FAST
-        slow_rho, slow_share = VOLUME_SLOW
-        white = 1 - fast_share - slow_share
+        persist = persist or _Persistence.default(n)
+        fast_rho = np.full(1 + n, VOLUME_FAST[0])  # the market and every symbol share the fast part; the slow rate and the shares are each symbol's own
+        slow_rho = np.concatenate([[VOLUME_SLOW[0]], persist.slow_rho])
+        fast_share = np.concatenate([[VOLUME_FAST[1]], persist.fast_share])
+        slow_share = np.concatenate([[VOLUME_SLOW[1]], persist.slow_share])
+        white = np.maximum(1 - fast_share - slow_share, 0.0)
         eps_fast = np.concatenate([[draws.volume_market[0]], draws.volume_day[:, 3]])
         eps_slow = np.concatenate([[draws.volume_market[1]], draws.volume_day[:, 4]])
         eps_white = np.concatenate([[draws.volume_market[2]], draws.volume_day[:, 0]])
-        new = np.stack([fast_rho * old[0] + math.sqrt(1 - fast_rho**2) * eps_fast, slow_rho * old[1] + math.sqrt(1 - slow_rho**2) * eps_slow])
-        comps = math.sqrt(fast_share) * new[0] + math.sqrt(slow_share) * new[1] + math.sqrt(white) * eps_white
-        link = VOLUME_VOL_LINK
+        new = np.stack([fast_rho * old[0] + np.sqrt(1 - fast_rho**2) * eps_fast, slow_rho * old[1] + np.sqrt(1 - slow_rho**2) * eps_slow])
+        comps = np.sqrt(fast_share) * new[0] + np.sqrt(slow_share) * new[1] + np.sqrt(white) * eps_white
+        link = VOLUME_VOL_LINK  # (the volatility link keeps the global sizes, not the fitted ones: a symbol's volume persistence changes, its price statistics do not)
         market_mult = math.exp(link * VOLUME_MARKET_SD * comps[0] - (link * VOLUME_MARKET_SD) ** 2)
         own_mult = np.exp(link * VOLUME_OWN_SD * comps[1:] - (link * VOLUME_OWN_SD) ** 2)
         return new, comps, market_mult, own_mult
 
     @staticmethod
-    def _volume_factor(comps: np.ndarray, flow: np.ndarray, draws: _Draws, day: date) -> np.ndarray:
+    def _volume_factor(comps: np.ndarray, flow: np.ndarray, draws: _Draws, day: date, persist: "_Persistence | None" = None) -> np.ndarray:
         """(N,) the day's volume against the usual (mean 1): its activity, the size and side of its order-flow
         imbalance `flow` (unit variance; negative: sellers), the day of the week, and now and then a heavy day."""
-        log_activity = VOLUME_MARKET_SD * comps[0] + VOLUME_OWN_SD * comps[1:] - (VOLUME_MARKET_SD**2 + VOLUME_OWN_SD**2) / 2
-        imbalance = np.exp(VOLUME_FLOW_SIZE * np.abs(flow) - VOLUME_FLOW_SELL * flow) / _FLOW_MEAN
+        persist = persist or _Persistence.default(len(comps) - 1)
+        log_activity = persist.market_sd * comps[0] + persist.own_sd * comps[1:] - (persist.market_sd**2 + persist.own_sd**2) / 2
+        imbalance = np.exp(persist.flow_size * np.abs(flow) - VOLUME_FLOW_SELL * flow) / persist.flow_mean
         spike = np.where(draws.volume_day[:, 1] < VOLUME_SPIKE, 1 + VOLUME_SPIKE_SIZE * draws.volume_day[:, 2], 1.0) / (1 + VOLUME_SPIKE * VOLUME_SPIKE_SIZE)
         weekday = math.exp(VOLUME_DOW[day.weekday()] - _DOW_MEAN) if day.weekday() < 5 else 1.0
         return np.exp(log_activity) * imbalance * spike * weekday
@@ -1894,14 +1945,14 @@ def _unit_hash(x: np.ndarray) -> np.ndarray:
     return ((x >> np.uint64(11)).astype(float) + 0.5) / 2.0**53
 
 
-def _flow_mean() -> float:
+@functools.cache
+def _flow_mean(a: float = VOLUME_FLOW_SIZE) -> float:
     """E[exp(a|s| - b s)] for a unit normal s (the mean of the order-flow factor on volume)."""
-    a, b = VOLUME_FLOW_SIZE, VOLUME_FLOW_SELL
+    b = VOLUME_FLOW_SELL
     cdf = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))  # noqa: E731
     return math.exp((a - b) ** 2 / 2) * cdf(a - b) + math.exp((a + b) ** 2 / 2) * cdf(a + b)
 
 
-_FLOW_MEAN = _flow_mean()
 _DOW_MEAN = math.log(sum(math.exp(x) for x in VOLUME_DOW) / len(VOLUME_DOW))
 
 

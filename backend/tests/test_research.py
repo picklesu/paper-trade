@@ -167,3 +167,10 @@ def test_density_check_uses_the_busiest_year_and_old_bad_rows_are_removed() -> N
     store.connection.execute("INSERT INTO releases VALUES ('jobs', '2020-01-10')")
     releases = Releases(store, "k", lambda i, k: ("x", []))
     assert releases.days("fomc") == [] and releases.days("jobs") == [date(2020, 1, 10)]  # the every-day FOMC rows an earlier run saved are gone
+
+
+def test_alpha_vantages_message_never_carries_the_api_key() -> None:
+    note = "We have detected your API key as ABCD1234SECRET and our standard API rate limit is 25 requests per day."
+    with pytest.raises(FetchStop) as e:
+        parse_earnings_history({"Information": note})
+    assert "ABCD1234SECRET" not in str(e.value) and "25 requests" in str(e.value)

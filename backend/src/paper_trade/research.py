@@ -15,6 +15,7 @@ scripts in `backend/scripts`:
 """
 
 import json
+import re
 import struct
 import time
 import urllib.parse
@@ -147,10 +148,11 @@ def parse_earnings_history(body: object) -> list[tuple[date, str, float | None, 
     if note and ("per second" in str(note) or "sparingly" in str(note)):
         raise Burst("Alpha Vantage: too many requests in a second")
     if note:  # the daily limit (25 requests on the free plan) or a bad key
-        raise FetchStop(f"Alpha Vantage said: {str(note)[:300]} (the free plan allows 25 requests a day; a bad key looks the same)")
+        text = re.sub(r"(API key as )\S+", r"\1***", str(note))  # Alpha Vantage's own message repeats the key
+        raise FetchStop(f"Alpha Vantage said: {text[:300]} (the free plan allows 25 requests a day; a bad key looks the same)")
     rows = body.get("quarterlyEarnings")
     if not isinstance(rows, list):
-        raise FetchError("Alpha Vantage had no quarterly earnings for this symbol")
+        raise FetchError("Alpha Vantage sent no quarterly earnings for this symbol (an unsupported symbol, or its quiet throttling): it is tried again next run")
 
     def number(x: object) -> float | None:
         try:

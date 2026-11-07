@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-11-07. Everything through #85 is merged (`MODEL_VERSION` 19). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
+_Last updated: 2026-11-07. Everything through #87 is merged (`MODEL_VERSION` 20). 8g walk-forward validation, the crisis retune, holidays, volume dispersion, volume flow and order flow are all merged. The user restarts and tests merged work._
 
 ## Where things stand
 
@@ -62,7 +62,8 @@ _Last updated: 2026-11-07. Everything through #85 is merged (`MODEL_VERSION` 19)
 | Research data steps `update events\|earnings\|flow` (FRED release dates, Alpha Vantage earnings history, SPY buy/sell volume by tick test); the user is running them | Merged | #83 |
 | Per-symbol volume persistence (`volume_persistence.json`, `fit_volume_persistence.py`; `MODEL_VERSION` 19) | Merged | #84 |
 | Event study of scheduled releases (`scripts/event_study.py`); FOMC release id 101 refused (lists every day) | Merged | #85 |
-| FOMC meeting dates from the Fed's calendar pages (`fomc_dates.json`, `fetch_fomc_dates.py`) added to the event study | In review | |
+| FOMC meeting dates from the Fed's calendar pages (`fomc_dates.json`, `fetch_fomc_dates.py`) added to the event study | Merged | #86 |
+| Release calendar: jobs, CPI, GDP, PCE and FOMC days busier and wider on simulated days (`MODEL_VERSION` 20) | Merged | #87 |
 | A saved market takes in real days fetched after it began (`MarketEngine.extend_real`, called by `main._extend_real` at startup; skipped if an order was placed, filled or closed on the days it would replace; stored bars after the old cutoff are rebuilt; no `MODEL_VERSION` change) | Merged | #71 |
 
 `main` is clean and up to date with GitHub.
@@ -83,6 +84,10 @@ _Last updated: 2026-11-07. Everything through #85 is merged (`MODEL_VERSION` 19)
 4. Optional: label intraday candles on replayed days as simulated (the user has not asked for it yet).
 
 **Caveats to tell the user:** fitted shapes are per symbol and per state; crisis rests on one episode; the sim cannot reproduce a specific real 5-minute candle, only its distribution.
+
+### Release calendar (the user's yes, 2026-11-07; `MODEL_VERSION` 20)
+
+`calendar.RELEASES` (volume, move, releases a year): FOMC 1.37 / 1.15 / 8, jobs 1.30 / 1.25 / 12, CPI 1.26 / 1.12 / 12, GDP 1.22 / 1.10 / 12, PCE 1.20 / 1.09 / 12 (retail sales left out: its effect on moves is gone since 2010) from the event study. `release_days(d)` by rule: jobs the first Friday (the second if the first is the 1st or 2nd), CPI the 12th (next session if closed), GDP the last Thursday and PCE the last Friday of a month (in December by the 23rd: the offices publish before Christmas week), FOMC from `fomc_dates.json` and, beyond its last published year, the Wednesday nearest each date of the last full year. `release_effects(d, event_volume)` gives the volume and volatility multiples (several releases on a day add their excess; the busier of the release and the day's expiration/month-end/Russell volume counts, not both; everything divided by the average, `release_norm()` measured over twelve typical years with the same combination, so a year's mean volume and variance stay what the model was calibrated to: ordinary sessions run about 5% lower in volume, 3% in volatility; a FOMC date beyond the Fed's table that falls on a closed Wednesday moves to the session before). The engine applies them to **simulated days only** (real days carry their own) through the holiday multiples; the expiration/month-end volume now comes through `release_effects` on simulated days. **Check** (`scripts/check_releases.py`, no real data, SPY, 8 seeds x 20 years, against ordinary days; model in brackets): FOMC move 1.14x (1.15), volume 1.37x (1.37); jobs 1.24x (1.25), 1.35x (1.30); CPI 1.12x (1.12), 1.25x (1.26); GDP 1.06x (1.10), 1.25x (1.22); PCE 1.04x (1.09), 1.22x (1.20) (the GDP/PCE moves are about 1.5 standard errors low; the jumps, which a volatility multiple does not scale, dilute them); event days (check_volume): quarterly expiration 1.61x (real 1.62), Russell 1.25x (1.25), month end 1.05x (1.10), monthly expiration 1.10x (1.09). **Left:** timing inside the day (FOMC lands at 2:00 PM, jobs/CPI in the opening gap: the engine scales the whole day); retail sales; the direction of the move (no surprise data); unscheduled events (credit, geopolitics, elections) still need a labelled catalog; past years' simulated dates follow the rule, not the real calendar (real past sessions are replayed anyway).
 
 ### Event study of scheduled releases (the user's request, 2026-11-07; `scripts/event_study.py`, report `scripts/event_study_report.md`)
 

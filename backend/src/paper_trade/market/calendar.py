@@ -9,7 +9,11 @@ Thanksgiving, Christmas Eve and July 3 when they are weekdays that trade) are se
 of 210 minutes; today's rules apply to every year, as with holidays.
 """
 
+import json
+import math
 from datetime import UTC, date, datetime, time, timedelta
+from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -270,6 +274,114 @@ _EVENT_VOLUME = {
 def volume_events(d: date) -> float:
     """Volume multiple of a simulated session on an expiration, month end or reconstitution day."""
     return _EVENT_VOLUME.get(volume_event(d), 1.0)
+
+
+# Scheduled economic releases (the event study, `scripts/event_study.py`): the size of the day's move and its
+# volume against an ordinary session, 1993-2026 (retail sales left out: its effect on moves is gone since 2010).
+# kind -> (volume multiple, volatility multiple, releases a year)
+RELEASES = {
+    "fomc": (1.37, 1.15, 8),
+    "jobs": (1.30, 1.25, 12),
+    "cpi": (1.26, 1.12, 12),
+    "gdp": (1.22, 1.10, 12),
+    "pce": (1.20, 1.09, 12),
+}
+FOMC_FILE = Path(__file__).with_name("fomc_dates.json")
+
+
+@lru_cache(maxsize=1)
+def _fomc_known() -> frozenset[date]:
+    """The Fed's meeting decision days (`scripts/fetch_fomc_dates.py`), 1993 to its published horizon."""
+    return frozenset(date.fromisoformat(d) for d in json.loads(FOMC_FILE.read_text())["meetings"])
+
+
+@lru_cache(maxsize=1)
+def _fomc_pattern() -> tuple[tuple[int, int], ...]:
+    """(month, day) of the last published year's meetings: later years keep the pattern."""
+    known = _fomc_known()
+    last = max(d.year for d in known if sum(1 for e in known if e.year == d.year) >= 6)
+    return tuple(sorted((d.month, d.day) for d in known if d.year == last))
+
+
+def _fomc(d: date) -> bool:
+    if d in _fomc_known():
+        return True
+    if d.year <= max(x.year for x in _fomc_known()):
+        return False
+    # beyond the published years: the Wednesday nearest each of the last published year's dates (the session before when that is closed)
+    for month, day in _fomc_pattern():
+        target = date(d.year, month, min(day, 28))
+        wednesday = target + timedelta(days=(2 - target.weekday() + 3) % 7 - 3)
+        if d == (wednesday if is_trading_day(wednesday) else previous_trading_day(wednesday)):
+            return True
+    return False
+
+
+def _on_trading_day(rule: date, earlier: bool) -> date:
+    return rule if is_trading_day(rule) else (previous_trading_day(rule) if earlier else next_trading_day(rule))
+
+
+def _month_end_weekday(year: int, month: int, weekday: int) -> date:
+    """The last `weekday` of the month; in December the last one by the 23rd (the statistics offices publish before Christmas week)."""
+    if month == 12:
+        day = date(year, 12, 23)
+        return day - timedelta(days=(day.weekday() - weekday) % 7)
+    return nth_weekday(year, month, weekday, -1)
+
+
+def release_days(d: date) -> list[str]:
+    """Which scheduled releases fall on session `d`, by rule: jobs on the first Friday (the second when the first
+    is the 1st or 2nd), CPI on the 12th (the next session if closed), GDP on the last Thursday and PCE on the last
+    Friday of a month, FOMC decisions from the Fed's calendar (then its last year's pattern). Dates of past
+    years are the rule's, not the real days (real past sessions carry their own moves)."""
+    kinds = []
+    if _fomc(d):
+        kinds.append("fomc")
+    first_friday = nth_weekday(d.year, d.month, 4, 1)
+    jobs = first_friday if first_friday.day >= 3 else first_friday + timedelta(days=7)
+    if d == _on_trading_day(jobs, True):
+        kinds.append("jobs")
+    if d == _on_trading_day(date(d.year, d.month, 12), False):
+        kinds.append("cpi")
+    if d == _on_trading_day(_month_end_weekday(d.year, d.month, 3), True):
+        kinds.append("gdp")
+    if d == _on_trading_day(_month_end_weekday(d.year, d.month, 4), True):
+        kinds.append("pce")
+    return kinds
+
+
+NORM_YEARS = range(2030, 2042)  # twelve typical years (no Fed table, no real closures): the average is taken over these
+
+
+@lru_cache(maxsize=1)
+def release_norm() -> tuple[float, float]:
+    """(volume, volatility) of the average session before dividing, measured over `NORM_YEARS` with the same rules
+    and the same combination as `release_effects` (several releases on a day, the busier of release and event
+    volume), so that the average session over a year stays what the model was calibrated to (those days are in its history)."""
+    volume = variance = n = 0.0
+    for year in NORM_YEARS:
+        d = date(year, 1, 1)
+        while d.year == year:
+            if is_trading_day(d):
+                v, sd = _release_raw(d, volume_events(d))
+                volume, variance, n = volume + v, variance + sd**2, n + 1
+            d += timedelta(days=1)
+    return volume / n, math.sqrt(variance / n)
+
+
+def _release_raw(d: date, event_volume: float) -> tuple[float, float]:
+    kinds = release_days(d)
+    return max(1 + sum(RELEASES[k][0] - 1 for k in kinds), event_volume), 1 + sum(RELEASES[k][1] - 1 for k in kinds)
+
+
+def release_effects(d: date, event_volume: float = 1.0) -> tuple[float, float]:
+    """(volume multiple, volatility multiple) of a simulated session for its scheduled releases. Several on one
+    day add their excess; every session is divided by the average, so a year's mean volume and variance are unchanged.
+    `event_volume` is the day's expiration / month-end / Russell multiple: the busier of the two counts, not both
+    (the measured release multiples already include the month-end and Russell days they fall on)."""
+    volume, sd = _release_raw(d, event_volume)
+    norm_volume, norm_sd = release_norm()
+    return volume / norm_volume, sd / norm_sd
 
 
 def trading_days_between(a: date, b: date) -> int:

@@ -30,11 +30,21 @@ def test_calendar_page_skips_release_dates_and_votes_and_keeps_meetings_ahead() 
     assert date(2023, 2, 22) not in meetings and date(2023, 8, 22) not in meetings and calls == []
 
 
+def test_meetings_within_three_days_are_one_decision_and_a_bad_parse_is_refused() -> None:
+    import pytest
+
+    kept, calls = fd.settle({date(2003, 9, 15), date(2003, 9, 16), date(2003, 10, 28)}, set())
+    assert kept == [date(2003, 9, 16), date(2003, 10, 28)] and calls == [date(2003, 9, 15)]
+    with pytest.raises(SystemExit):
+        fd.check([date(2020, 1, 4)])  # a Saturday
+
+
 def test_the_committed_file_is_a_plausible_calendar() -> None:
     path = Path(fd.__file__).resolve().parents[1] / "src" / "paper_trade" / "market" / "fomc_dates.json"
     meetings = [date.fromisoformat(d) for d in json.loads(path.read_text())["meetings"]]
     per_year: dict[int, int] = {}
     for d in meetings:
         per_year[d.year] = per_year.get(d.year, 0) + 1
-    assert all(6 <= n <= 9 for n in per_year.values()), per_year  # about eight a year (seven in 2020: one cancelled, two emergencies are calls)
-    assert min(per_year) == 1993 and max(per_year) >= 2027 and date(2020, 4, 29) in meetings and date(2008, 12, 16) in meetings
+    assert {y: n for y, n in per_year.items() if y <= 2026 and n != 8} == {2020: 7}, per_year  # eight a year; 2020 had one cancelled and two emergencies (calls)
+    assert all(d.weekday() < 5 for d in meetings) and all((b - a).days > 20 for a, b in zip(meetings, meetings[1:], strict=False))
+    assert min(per_year) == 1993 and max(per_year) >= 2026 and date(2020, 4, 29) in meetings and date(2008, 12, 16) in meetings and date(2003, 9, 15) not in meetings

@@ -28,7 +28,7 @@ CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 HISTORICAL_URL = "https://www.federalreserve.gov/monetarypolicy/fomchistorical{year}.htm"
 FIRST_YEAR, LAST_HISTORICAL = 1993, 2020
 # a date as the pages write it: "January 28-29", "March 15", "April 30-May 1", "January 29/30", "Jan/Feb 31-1"
-WHEN = rf"(?:({MONTH})/({MONTH}) (\d{{1,2}})-(\d{{1,2}})|({MONTH}) (\d{{1,2}})(?:\s*[-/–]\s*(?:({MONTH}) )?(\d{{1,2}}))?)"
+WHEN = rf"(?<![A-Za-z])(?:({MONTH})/({MONTH}) (\d{{1,2}})-(\d{{1,2}})|({MONTH}) (\d{{1,2}})(?:\s*[-/–]\s*(?:({MONTH}) )?(\d{{1,2}}))?)"
 QUALIFIER = r"(?: \((unscheduled|cancelled)\))?"
 # "January 28-29 Meeting - 2020", "March 15 (unscheduled) Meeting - 2020", "March 15 Conference Call - 2020"
 ENTRY = re.compile(rf"{WHEN}{QUALIFIER} (Meeting|Conference Call) - (\d{{4}})")
@@ -76,6 +76,29 @@ def parse_calendar(txt: str) -> tuple[list[date], list[date]]:
     return sorted(meetings), sorted(calls)
 
 
+def settle(meetings: set[date], calls: set[date]) -> tuple[list[date], list[date]]:
+    """Two "meetings" within 3 days of each other are one decision: keep the later day (the statement day), and
+    file the earlier one with the unscheduled meetings (the Fed's 2003 page lists a 15 September beside the 16th)."""
+    kept: list[date] = []
+    for d in sorted(meetings):
+        if kept and (d - kept[-1]).days <= 3:
+            calls.add(kept.pop())
+        kept.append(d)
+    return kept, sorted(calls)
+
+
+def check(meetings: list[date]) -> None:
+    """Refuse a parse that cannot be right, before it overwrites the committed file."""
+    per_year: dict[int, int] = {}
+    for d in meetings:
+        per_year[d.year] = per_year.get(d.year, 0) + 1
+        if d.weekday() >= 5:
+            raise SystemExit(f"{d} is a weekend: the pages changed? Nothing written.")
+    bad = {y: n for y, n in per_year.items() if y <= LAST_HISTORICAL and not 6 <= n <= 9}
+    if bad or any(y not in per_year for y in range(FIRST_YEAR, LAST_HISTORICAL + 1)):
+        raise SystemExit(f"meetings a year look wrong ({bad or 'a year is missing'}): the pages changed? Nothing written.")
+
+
 def fetch(url: str, path: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "paper-trade FOMC calendar script"})
     with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
@@ -103,12 +126,17 @@ def main() -> None:
     m, c = parse_calendar(text_of(a.dir / "calendar.html"))
     meetings.update(d for d in m if d.year > LAST_HISTORICAL)
     calls.update(d for d in c if d.year > LAST_HISTORICAL)
-    out = {"meetings": [d.isoformat() for d in sorted(meetings)], "calls": [d.isoformat() for d in sorted(calls)]}
-    a.out.write_text(json.dumps(out, indent=0) + "\n")
+    kept, calls_sorted = settle(meetings, calls)
+    check(kept)
+    out = {"meetings": [d.isoformat() for d in kept], "calls": [d.isoformat() for d in calls_sorted]}
+    temp = a.out.with_name(a.out.name + ".tmp")
+    temp.write_text(json.dumps(out, indent=0) + "\n")
+    temp.replace(a.out)  # (the committed file is replaced only by a parse that passed the check)
+    meetings = set(kept)
     per_year = {}
     for d in sorted(meetings):
         per_year[d.year] = per_year.get(d.year, 0) + 1
-    print(f"{len(meetings)} meetings, {len(calls)} conference calls; meetings a year: {per_year}")
+    print(f"{len(meetings)} meetings, {len(calls_sorted)} conference calls; meetings a year: {per_year}")
 
 
 if __name__ == "__main__":
